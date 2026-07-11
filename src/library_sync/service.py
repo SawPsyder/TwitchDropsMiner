@@ -205,15 +205,25 @@ class LibrarySyncService:
             "providers": providers,
         }
 
-    def get_auto_watch_games(self, campaign_game_names: Iterable[str]) -> list[str]:
+    # games played within this window are ranked by recency; everything else
+    # is ranked by campaign deadline instead, so stale libraries don't bury
+    # games at risk of missing their drops
+    RECENTLY_PLAYED_WINDOW = timedelta(days=180)
+
+    def get_auto_watch_games(
+        self, campaign_games: Iterable[tuple[str, datetime]]
+    ) -> list[str]:
         """
         Determine which campaign games should be watched automatically.
 
         A campaign game qualifies when it's owned on an enabled platform and
         passes the active blacklist/whitelist filter. Returned names are the
-        Twitch game names (so they match campaigns exactly), ordered by the
-        platform's last-played time, most recently played first. Games never
-        played (or without last-played data) go last, alphabetically.
+        Twitch game names (so they match campaigns exactly), ordered in two
+        tiers:
+        1. Games played within the last 6 months, most recently played first.
+        2. Everything else (played longer ago, or never played), ordered by
+           campaign end date, soonest first, to minimize the chance of
+           missing drops before they expire.
         """
         if not self.enabled:
             return []
@@ -240,20 +250,32 @@ class LibrarySyncService:
             }
             list_filter = lambda name: name not in blacklist  # noqa: E731
 
+        # soonest campaign deadline per normalized name; a game can have
+        # several active campaigns, so the most urgent one wins
+        ends_at_map: dict[str, datetime] = {}
         auto_games: list[str] = []
         seen: set[str] = set()
-        for game_name in campaign_game_names:
+        for game_name, ends_at in campaign_games:
             normalized = normalize_game_name(game_name)
+            if normalized not in ends_at_map or ends_at < ends_at_map[normalized]:
+                ends_at_map[normalized] = ends_at
             if normalized in seen:
                 continue
             if normalized in last_played_map and list_filter(normalized):
                 seen.add(normalized)
                 auto_games.append(game_name)
-        # recently played first; ties and never-played games alphabetically
-        auto_games.sort(key=str.casefold)
-        auto_games.sort(
-            key=lambda name: last_played_map[normalize_game_name(name)], reverse=True
-        )
+
+        recent_cutoff = datetime.now(timezone.utc) - self.RECENTLY_PLAYED_WINDOW
+        recent_cutoff_ts = recent_cutoff.timestamp()
+
+        def sort_key(name: str) -> tuple[int, float, str]:
+            normalized = normalize_game_name(name)
+            last_played = last_played_map[normalized]
+            if last_played >= recent_cutoff_ts:
+                return (0, -last_played, name.casefold())
+            return (1, ends_at_map[normalized].timestamp(), name.casefold())
+
+        auto_games.sort(key=sort_key)
         return auto_games
 
     @staticmethod

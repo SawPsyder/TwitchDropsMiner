@@ -636,9 +636,10 @@ class Twitch:
     async def sync_game_libraries(self, *, force: bool = False) -> list[str]:
         """
         Sync external game libraries (Steam, ...) and refresh the auto watch
-        list: owned games with active campaigns, most recently played first.
-        The auto list ranks below the user's games_to_watch and never modifies
-        it (see get_effective_watch_list).
+        list: owned games with active campaigns, ranked recently-played
+        (within 6 months) first, then by soonest campaign deadline. The auto
+        list ranks below the user's games_to_watch and never modifies it
+        (see get_effective_watch_list).
 
         Failures are logged but never interrupt the mining loop.
 
@@ -653,7 +654,7 @@ class Twitch:
         try:
             await self.library_sync.sync(force=force)
             auto_games = self.library_sync.get_auto_watch_games(
-                campaign.game.name for campaign in self.inventory
+                (campaign.game.name, campaign.ends_at) for campaign in self.inventory
             )
         except Exception:
             logger.exception("Library sync failed")

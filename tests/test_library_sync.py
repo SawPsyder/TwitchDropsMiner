@@ -301,18 +301,37 @@ class TestLibrarySyncService(unittest.TestCase):
             for i, (name, last_played) in enumerate(entries)
         ]
 
+    @staticmethod
+    def campaigns(
+        names: list[str], ends_at: dict[str, datetime] | datetime | None = None
+    ) -> list[tuple[str, datetime]]:
+        """
+        Pair game names with a campaign end date for get_auto_watch_games.
+
+        Defaults to a far-future end date (irrelevant to the comparison)
+        unless a single shared datetime or a per-name mapping is given.
+        """
+        default_end = datetime(2100, 1, 1, tzinfo=timezone.utc)
+        if ends_at is None:
+            return [(name, default_end) for name in names]
+        if isinstance(ends_at, dict):
+            return [(name, ends_at.get(name, default_end)) for name in names]
+        return [(name, ends_at) for name in names]
+
     def test_disabled_returns_nothing(self):
         settings = FakeSettings(make_library_settings(enabled=False))
         service = self.make_service(settings)
         self.seed_owned_games(service, ["Rust"])
-        self.assertEqual(service.get_auto_watch_games(["Rust"]), [])
+        self.assertEqual(service.get_auto_watch_games(self.campaigns(["Rust"])), [])
 
     def test_blacklist_mode(self):
         settings = FakeSettings(make_library_settings(blacklist=["Rust"]))
         service = self.make_service(settings)
         self.seed_owned_games(service, ["Rust", "Dota 2"])
         # owns both, Rust blacklisted, "Apex Legends" not owned
-        result = service.get_auto_watch_games(["Rust", "Dota 2", "Apex Legends"])
+        result = service.get_auto_watch_games(
+            self.campaigns(["Rust", "Dota 2", "Apex Legends"])
+        )
         self.assertEqual(result, ["Dota 2"])
 
     def test_whitelist_mode(self):
@@ -321,46 +340,110 @@ class TestLibrarySyncService(unittest.TestCase):
         )
         service = self.make_service(settings)
         self.seed_owned_games(service, ["Rust", "Dota 2"])
-        result = service.get_auto_watch_games(["Rust", "Dota 2"])
+        result = service.get_auto_watch_games(self.campaigns(["Rust", "Dota 2"]))
         self.assertEqual(result, ["Dota 2"])
 
     def test_name_matching_is_normalized(self):
         settings = FakeSettings()
         service = self.make_service(settings)
         self.seed_owned_games(service, ["Tom Clancy's Rainbow Six® Siege"])
-        result = service.get_auto_watch_games(["Tom Clancy's Rainbow Six Siege"])
+        result = service.get_auto_watch_games(
+            self.campaigns(["Tom Clancy's Rainbow Six Siege"])
+        )
         self.assertEqual(result, ["Tom Clancy's Rainbow Six Siege"])
 
-    def test_auto_watch_sorted_by_last_played(self):
+    def test_auto_watch_sorted_by_last_played_within_six_months(self):
         settings = FakeSettings()
         service = self.make_service(settings)
+        now = datetime.now(timezone.utc)
         self.seed_owned_games(
             service,
             {
-                "Old Favorite": 1_600_000_000,
-                "Never Played B": 0,
-                "Fresh Hit": 1_750_000_000,
-                "Never Played A": 0,
-                "Middle Game": 1_700_000_000,
+                "Old Favorite": int((now - timedelta(days=150)).timestamp()),
+                "Fresh Hit": int((now - timedelta(days=10)).timestamp()),
+                "Middle Game": int((now - timedelta(days=60)).timestamp()),
             },
         )
 
         result = service.get_auto_watch_games(
-            ["Never Played B", "Middle Game", "Old Favorite", "Fresh Hit", "Never Played A"]
+            self.campaigns(["Middle Game", "Old Favorite", "Fresh Hit"])
         )
 
-        # recently played first, never-played last in alphabetical order
-        self.assertEqual(
-            result,
-            ["Fresh Hit", "Middle Game", "Old Favorite", "Never Played A", "Never Played B"],
+        # all played within the last 6 months: most recently played first
+        self.assertEqual(result, ["Fresh Hit", "Middle Game", "Old Favorite"])
+
+    def test_auto_watch_stale_games_ranked_below_recently_played(self):
+        settings = FakeSettings()
+        service = self.make_service(settings)
+        now = datetime.now(timezone.utc)
+        self.seed_owned_games(
+            service,
+            {
+                # played 200 days ago: outside the 6 month window
+                "Stale Game": int((now - timedelta(days=200)).timestamp()),
+                "Recent Game": int((now - timedelta(days=5)).timestamp()),
+                "Never Played": 0,
+            },
         )
+
+        result = service.get_auto_watch_games(
+            self.campaigns(["Stale Game", "Recent Game", "Never Played"])
+        )
+
+        # recently-played tier always ranks above the stale/never-played tier,
+        # even though "Stale Game" has a more recent last-played time than
+        # "Never Played"
+        self.assertEqual(result[0], "Recent Game")
+        self.assertIn(result[1:], (["Never Played", "Stale Game"], ["Stale Game", "Never Played"]))
+
+    def test_auto_watch_stale_games_sorted_by_campaign_end_date(self):
+        settings = FakeSettings()
+        service = self.make_service(settings)
+        # none of these were played recently (or ever), so ranking falls back
+        # to campaign urgency: soonest-ending campaign first, to minimize the
+        # chance of missing drops
+        self.seed_owned_games(service, {"Ending Later": 0, "Ending Soon": 0, "Ending Middle": 0})
+        now = datetime.now(timezone.utc)
+
+        result = service.get_auto_watch_games(
+            self.campaigns(
+                ["Ending Later", "Ending Soon", "Ending Middle"],
+                ends_at={
+                    "Ending Later": now + timedelta(days=30),
+                    "Ending Soon": now + timedelta(days=1),
+                    "Ending Middle": now + timedelta(days=10),
+                },
+            )
+        )
+
+        self.assertEqual(result, ["Ending Soon", "Ending Middle", "Ending Later"])
 
     def test_auto_watch_deduplicates_campaign_games(self):
         settings = FakeSettings()
         service = self.make_service(settings)
         self.seed_owned_games(service, {"Rust": 100})
         # multiple campaigns for the same game produce one entry
-        self.assertEqual(service.get_auto_watch_games(["Rust", "Rust", "RUST"]), ["Rust"])
+        self.assertEqual(
+            service.get_auto_watch_games(self.campaigns(["Rust", "Rust", "RUST"])), ["Rust"]
+        )
+
+    def test_auto_watch_deduplicate_keeps_earliest_campaign_end_date(self):
+        settings = FakeSettings()
+        service = self.make_service(settings)
+        self.seed_owned_games(service, {"Rust": 0, "Dota 2": 0})
+        now = datetime.now(timezone.utc)
+
+        # "Rust" has two active campaigns; the sooner-ending one should be
+        # used for ranking against "Dota 2"
+        result = service.get_auto_watch_games(
+            [
+                ("Rust", now + timedelta(days=20)),
+                ("Dota 2", now + timedelta(days=10)),
+                ("Rust", now + timedelta(days=2)),
+            ]
+        )
+
+        self.assertEqual(result, ["Rust", "Dota 2"])
 
     def test_combine_watch_lists_user_tier_first(self):
         combined = LibrarySyncService.combine_watch_lists(
@@ -379,7 +462,7 @@ class TestLibrarySyncService(unittest.TestCase):
         service = self.make_service(settings)
         self.seed_owned_games(service, {"Rust": 100})
 
-        service.get_auto_watch_games(["Rust"])
+        service.get_auto_watch_games(self.campaigns(["Rust"]))
 
         self.assertEqual(settings.games_to_watch, ["Existing Game"])
         self.assertEqual(settings.save_count, 0)
