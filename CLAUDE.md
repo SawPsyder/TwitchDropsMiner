@@ -2,9 +2,17 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-> Note: `AGENTS.md` is this repo's canonical AI-agent instructions file. Its "Development Guidelines"
-> section (DRY/OOP requirements, refusal permission for large refactors, i18n rules, docs-update rules)
-> applies here too - read it if this file doesn't cover something.
+## Development Guidelines
+
+- **Testing**: always add unit tests for backend changes; frontend changes should have tests where practical.
+- **DRY / OOP**: the codebase follows DRY principles; backend code should be OOP.
+- **Refactoring**: you're authorized to refactor code to align with DRY/OOP, but ask for permission
+  before any significant refactor.
+- **User-facing text**: edit `lang/English.json` for any change to UI or console strings (see
+  Translations below - it's the only translation file left). Frontend translation rendering must use
+  safe DOM construction - never inject translated strings via non-clearing `innerHTML`; allowlist any
+  intentional links and build them as DOM nodes.
+- **Docs**: update `README.md` when a change affects setup, features, or scope described there.
 
 ## Project Overview
 
@@ -138,11 +146,11 @@ Drop Queue) with a single Link/Refresh Status button per game card - pushed via 
 
 ### Translations (`i18n/`)
 
-`lang/English.json` is the single source of truth/fallback; 18 other language files must stay
-structurally in sync with it (`Translation` TypedDict in `src/i18n/translator.py` enforces the schema).
-Language switching is live - no restart required - and persisted to `settings.json`. When changing any
-user-facing string, update `lang/English.json` and note translation-file drift; don't silently invent
-strings in other language files.
+Multi-language support was removed; `lang/English.json` is now the only translation file and the sole
+source of truth (`Translation` TypedDict in `src/i18n/translator.py` still enforces its schema). The
+`Translator` loader, `/api/languages` endpoint, and language dropdown in the web GUI still work
+mechanically but only ever offer English. When changing user-facing strings, edit `lang/English.json`
+directly - there are no other language files to keep in sync anymore.
 
 ### Docker / paths
 
