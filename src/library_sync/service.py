@@ -1,7 +1,7 @@
 """
 Library sync service.
 
-Aggregates game libraries from external platform providers (currently Steam),
+Aggregates game libraries from external platform providers (Steam, Ubisoft Connect),
 caches them in DATA_DIR, and determines which games with active drop campaigns
 should be added to the "Games to Watch" list automatically.
 
@@ -24,6 +24,7 @@ import aiohttp
 from src.config import LIBRARY_CACHE_PATH
 from src.library_sync.base import LibraryProvider, LibrarySyncError, OwnedGame, normalize_game_name
 from src.library_sync.steam import SteamProvider
+from src.library_sync.ubisoft import UbisoftProvider
 from src.utils import json_load, json_save
 
 
@@ -54,7 +55,10 @@ class LibrarySyncService:
     def __init__(self, settings: Settings, cache_path: Path = LIBRARY_CACHE_PATH) -> None:
         self._settings = settings
         self._cache_path = cache_path
-        self._providers: list[LibraryProvider] = [SteamProvider(settings)]
+        self._providers: list[LibraryProvider] = [
+            SteamProvider(settings),
+            UbisoftProvider(settings),
+        ]
         self._cache: dict[str, Any] = json_load(cache_path, {"providers": {}}, merge=False)
         self._last_errors: dict[str, str] = {}
         self._sync_lock = asyncio.Lock()

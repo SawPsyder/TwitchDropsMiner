@@ -40,6 +40,10 @@ class SteamProvider(LibraryProvider):
 
     name = "steam"
 
+    # SteamID64 resolved from a vanity name - tracked so it can be redacted
+    # from error messages just like the configured values
+    _resolved_steam_id: str = ""
+
     @property
     def api_key(self) -> str:
         return str(self.provider_settings.get("api_key", "")).strip()
@@ -51,6 +55,11 @@ class SteamProvider(LibraryProvider):
     @property
     def is_configured(self) -> bool:
         return bool(self.api_key) and bool(self.steam_id)
+
+    def _sensitive_values(self) -> tuple[str, ...]:
+        # the API key and Steam ID travel in URL query strings, which aiohttp
+        # exceptions embed in their messages
+        return (self.api_key, self.steam_id, self._resolved_steam_id)
 
     @staticmethod
     def parse_steam_id_input(value: str) -> tuple[str, bool]:
@@ -82,8 +91,10 @@ class SteamProvider(LibraryProvider):
         data = await self._api_get(session, RESOLVE_VANITY_URL, params, proxy)
         response: dict[str, Any] = data.get("response", {})
         if response.get("success") != 1 or not response.get("steamid"):
-            raise LibrarySyncError(f"Steam: could not resolve profile name '{value}'")
-        return str(response["steamid"])
+            # don't include the profile name - error messages end up in logs
+            raise LibrarySyncError("Steam: could not resolve the configured profile name")
+        self._resolved_steam_id = str(response["steamid"])
+        return self._resolved_steam_id
 
     async def _api_get(
         self,
@@ -103,7 +114,9 @@ class SteamProvider(LibraryProvider):
         except LibrarySyncError:
             raise
         except Exception as exc:
-            raise LibrarySyncError(f"Steam: connection error: {exc}") from exc
+            raise LibrarySyncError(
+                f"Steam: connection error: {self._redact(str(exc))}"
+            ) from exc
 
     @staticmethod
     def parse_owned_games(data: dict[str, Any]) -> list[OwnedGame]:

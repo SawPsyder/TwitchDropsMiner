@@ -1,4 +1,4 @@
-"""Game library synchronization (Steam, more platforms later)."""
+"""Game library synchronization (Steam, Ubisoft Connect, more platforms later)."""
 
 from __future__ import annotations
 
@@ -15,6 +15,7 @@ from src.library_sync.service import (
     LibrarySyncService,
 )
 from src.library_sync.steam import SteamProvider
+from src.library_sync.ubisoft import UbisoftProvider
 
 
 __all__ = [
@@ -26,5 +27,6 @@ __all__ = [
     "LibrarySyncService",
     "OwnedGame",
     "SteamProvider",
+    "UbisoftProvider",
     "normalize_game_name",
 ]

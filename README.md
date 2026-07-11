@@ -1,183 +1,73 @@
 # 🌟 Twitch Drops Miner (TDM)
 
-> 🎮 **Automate Twitch Drop Farming — Effortlessly, Headlessly, and Bandwidth-Free**
+## 🪞 This Is a Personal Fork
 
 <p align="center">
-  <a href="https://github.com/rangermix/TwitchDropsMiner/stargazers"><img src="https://img.shields.io/github/stars/rangermix/TwitchDropsMiner?style=for-the-badge&color=yellow" alt="Stars"></a>
-  <a href="https://github.com/rangermix/TwitchDropsMiner/releases"><img src="https://img.shields.io/github/v/release/rangermix/TwitchDropsMiner?style=for-the-badge&color=brightgreen" alt="Release"></a>
-  <a href="https://hub.docker.com/r/rangermix/twitch-drops-miner"><img src="https://img.shields.io/docker/pulls/rangermix/twitch-drops-miner?style=for-the-badge&color=blue" alt="Docker Pulls"></a>
-  <a href="https://github.com/rangermix/TwitchDropsMiner/blob/main/LICENSE"><img src="https://img.shields.io/github/license/rangermix/TwitchDropsMiner?style=for-the-badge&color=orange" alt="License"></a>
-  <a href="https://www.python.org/downloads/"><img src="https://img.shields.io/badge/Python-3.12+-blue?style=for-the-badge&logo=python" alt="Python"></a>
+  <a href="https://github.com/rangermix/TwitchDropsMiner"><img src="https://img.shields.io/badge/fork%20of-rangermix%2FTwitchDropsMiner-blueviolet?style=for-the-badge&logo=github" alt="Fork of rangermix/TwitchDropsMiner"></a>
+  <img src="https://img.shields.io/badge/status-private%20use%20only-critical?style=for-the-badge" alt="Private use only">
 </p>
 
-A modern, AI-assisted fork of [DevilXD/TwitchDropsMiner](https://github.com/DevilXD/TwitchDropsMiner) — rebuilt for reliability, simplicity, and automation.  
-**Twitch Drops Miner** lets you automatically farm Twitch drops without ever opening a stream.  
-No more tab juggling, channel switching, or missing rewards — just set it, forget it, and collect.
+> 🏠 **This repo is my private-use build, tuned to how I run it. Kept public only to honor
+> the fork chain it's built on.** There's no install guide, no support, and no roadmap here on
+> purpose.
+
+| | Repo | Role |
+|---|------|------|
+| 🌱 | [`DevilXD/TwitchDropsMiner`](https://github.com/DevilXD/TwitchDropsMiner) | The original project — where all of this started |
+| 🚀 | [`rangermix/TwitchDropsMiner`](https://github.com/rangermix/TwitchDropsMiner) | The AI-assisted rewrite this is built on — actively maintained, the one with docs, Docker images, and community support |
+| 📍 | [`SawPsyder/TwitchDropsMiner`](https://github.com/SawPsyder/TwitchDropsMiner) *(you are here)* | My personal fork — no guarantees, no support, may diverge or break at any time |
+
+**Looking to actually use TDM?** Go to **[`rangermix/TwitchDropsMiner`](https://github.com/rangermix/TwitchDropsMiner)** — it has the setup instructions, pre-built images, and an actual maintainer behind it.
 
 ---
 
-## ✨ Features
+## 🔧 Why This Fork Diverges
 
-- 🚀 **Streamless Mining** — Earn drops without streaming video by sending Twitch GraphQL watch events
-- 🔍 **Automatic Campaign Discovery** — Detects new drop events automatically
-- ⚙️ **Auto Channel Switching** — Always mines the best available stream
-- 💾 **Persistent Login** — OAuth login saved via cookies
-- 🕹️ **Simple Web UI** — Manage everything from your browser
-- 🎮 **Game Library Sync** — Connect your Steam library to auto-watch owned games with active campaigns: your manual picks always rank first, auto-detected games follow ordered by recently played (blacklist/whitelist control; more platforms planned)
-- 🛡️ **Safe Frontend Rendering** — Dynamic UI content is rendered with DOM APIs to avoid HTML injection
-- 🧩 **Docker-Ready** — One command to deploy anywhere
+Personal tweaks layered on top of upstream, built for my own setup rather than general use:
 
----
+- 🎮 **Game Library Sync**: Auto-watches owned games with active drop campaigns via Steam and Ubisoft libraries, so games dont have to be hand-picked.
+- 🐳 **Own Docker image**: Built and published from this repo (GHCR) for my own Portainer deployment, instead of pulling upstream's image.
 
-## 🧰 Quick Start (Docker Recommended)
-
-### 🐳 Using Pre-Built Image (Docker run)
-
-```bash
-docker pull rangermix/twitch-drops-miner:latest
-docker run -d -p 8080:8080 -v $(pwd)/data:/app/data rangermix/twitch-drops-miner:latest
-```
-
-### 📦 Using Docker Compose
-
-```yaml
-services:
-  twitch-drops-miner:
-    image: rangermix/twitch-drops-miner:latest
-    ports:
-      - "8080:8080"
-    volumes:
-      - ./data:/app/data
-      # optional, use if you want to persist logs
-      - ./logs:/app/logs
-    environment:
-      # Set timezone (optional, defaults to UTC)
-      - TZ=Australia/Sydney
-    restart: unless-stopped
-```
-
-### 🧑‍💻 From Source (for Developers)
-
-```bash
-uv sync
-uv run main.py
-```
-
-Visit 👉 **<http://localhost:8080>**
-
----
-
-## 🌈 Using the Web App
-
-1. Open `http://localhost:8080`
-2. Login with your Twitch account (OAuth device flow)
-3. The miner auto-fetches available campaigns
-4. Select games you want to farm, or type a custom game and click **Add Game** → click **Reload**
-5. TDM starts mining drops automatically 🎉
-
-**Optional — Game Library Sync (Steam):**
-
-1. In **Settings → Game Library Sync**, enable library sync and Steam
-2. Enter your [Steam Web API key](https://steamcommunity.com/dev/apikey) and your SteamID64 (or custom profile URL) — your profile's *game details* must be public
-3. Pick an automation mode:
-   - **Blacklist** — every owned game with an active campaign is watched automatically, except listed games
-   - **Whitelist** — only owned games on the list are watched automatically
-4. Click **Sync Now** (libraries also re-sync automatically every ~12 hours)
-
-The watch list is two-tier: your manually selected games always have priority, in the order you set.
-Auto-detected library games rank below them, ordered by how recently you played them on Steam
-(never-played games last). The auto tier never modifies your manual list — use the blacklist to
-exclude games from it.
-
-📝 **Tip:**  
-Make sure your Twitch account is linked to your game accounts →  
-👉 [https://www.twitch.tv/drops/campaigns](https://www.twitch.tv/drops/campaigns)
-
----
-
-## ⚠️ Notes & Warnings
-
-> ⚠️ **Avoid Watching on the Same Account**  
-> Watching Twitch manually while the miner runs can cause progress desync.  
-> Use a different account if you want to watch live streams while mining.
-
-> 💡 **Requirements**  
-> Python 3.12+  
-> Docker optional but recommended  
-> Persistent data stored in `/data`
-
----
-
-## 🖼️ Screenshot
-
-![screenshot](./screenshot.png)
-> A clean, modern web UI lets you control everything from your browser.
+> ⚠️ This fork (and the project it's built on) is heavily developed using AI-assisted coding
+> (Claude Code). Expect "vibe coding" patterns throughout. It's run for my own personal use as-is,
+> with no warranty and no support - direct use of this repo is not recommended. <br>
+> **Anything here can be half-finished, opinionated, or ripped out without notice.**
 
 ---
 
 ## 💖 Support the Project
 
-If TwitchDropsMiner saves you time or bandwidth, please consider supporting continued development:
+This fork isn't accepting support, sponsorships, or issues — all credit and all the real work
+lives upstream. Please direct any support there instead:
 
 <div align="center">
 
+### ✨ **Support the forkcurrent maintainer** — [@rangermix](https://github.com/rangermix)
+
 [![Buy Me a Coffee](https://i.imgur.com/cL95gzE.png)](https://buymeacoffee.com/rangermix)
 
-⭐ **Star this repo** → it really helps visibility!  
-💬 [Open an issue](../../issues) or [submit a PR](../../pulls) if you want to contribute.
+[⭐ Star](https://github.com/rangermix/TwitchDropsMiner) · [💬 Issues](https://github.com/rangermix/TwitchDropsMiner/issues) · [🔀 PRs](https://github.com/rangermix/TwitchDropsMiner/pulls)
+
+---
+
+### 🎯 **Support the original author** — [@DevilXD](https://github.com/DevilXD)
+
+[☕ Buy Me a Coffee](https://www.buymeacoffee.com/DevilXD) · [❤️ Patreon](https://www.patreon.com/bePatron?u=26937862)
 
 </div>
 
-You can also support the original author [@DevilXD](https://github.com/DevilXD):  
-👉 [buymeacoffee.com/DevilXD](https://www.buymeacoffee.com/DevilXD) or [Patreon](https://www.patreon.com/bePatron?u=26937862).
-
 ---
 
-## 🎯 Project Goals
+## 🙏 Acknowledgments & Credits
 
-| Goal | Description |
-|------|--------------|
-| 🎯 **Focus** | Twitch Drops automation |
-| 🧩 **Ease of Use** | Simple web UI |
-| 🛡️ **Reliability** | Designed for continuous operation |
-| ⚙️ **Efficiency** | Minimal API calls, Twitch-friendly |
-| 🐳 **Deployment** | Docker-first, headless operation |
+All credit for TwitchDropsMiner itself belongs upstream:
 
----
+- [@DevilXD](https://github.com/DevilXD) — original author of [TwitchDropsMiner](https://github.com/DevilXD/TwitchDropsMiner)
+- [@rangermix](https://github.com/rangermix) — author of the AI-assisted rewrite at [rangermix/TwitchDropsMiner](https://github.com/rangermix/TwitchDropsMiner) that this fork is based on
 
-## 🙏 Acknowledgments
+The translation and contribution credits below are carried over from upstream and reflect their
+work, not this fork's:
 
-This project is a fork of the brilliant [TwitchDropsMiner](https://github.com/DevilXD/TwitchDropsMiner) by [@DevilXD](https://github.com/DevilXD).  
-Huge thanks to DevilXD and all contributors who built the foundation.
-
-For detailed translation and contribution credits, see [Acknowledgments](#original-project-credits) below.
-
----
-
-## 🧾 Disclaimer
-
-> ⚙️ This fork is heavily maintained and developed using AI-assisted coding (Claude Code).  
-> While stable, the codebase reflects “vibe coding” patterns — always review changes before deployment.  
-> Use responsibly.
-
----
-
-## 🧑‍💻 Original Project Credits
-
-<!---
-Note: The translations credits are sorted alphabetically, based on their English language name.
-When adding a new entry, please ensure to insert it in the correct place in the second section.
-Non-translations related credits should be added to the first section instead.
-
-Note: When adding a new credits line below, please add two trailing spaces at the end
-of the previous line, if they aren't already there. Doing so ensures proper markdown
-rendering on Github. In short: Each credits line should end with two trailing spaces,
-placed past the period character at the end.
-
-• Last line can have the two trailing spaces omitted.
-• Please ensure your editor won't trim the trailing spaces upon saving the file.
-• Please ensure to leave a single empty new line at the end of the file.
--->
 
 @guihkx - For the CI script, CI maintenance, and everything related to Linux builds.  
 @kWAYTV - For the implementation of the dark mode theme.  

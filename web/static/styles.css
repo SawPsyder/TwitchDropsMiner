@@ -1172,6 +1172,11 @@ header h1 {
     flex-shrink: 0;
 }
 
+.provider-logo.ubisoft {
+    background: linear-gradient(135deg, #14141f 0%, #35354d 100%);
+    color: #f2f2f2;
+}
+
 .provider-status {
     font-size: 0.85em;
     color: var(--text-secondary);
@@ -1210,6 +1215,7 @@ header h1 {
 }
 
 .library-field input[type="text"],
+.library-field input[type="email"],
 .library-field input[type="password"] {
     width: 100%;
     max-width: 420px;
@@ -1238,6 +1244,11 @@ header h1 {
     margin: 0;
     flex: 1;
     min-width: 200px;
+}
+
+/* the sync footer sits below the provider cards and applies to all of them */
+.library-sync-footer {
+    margin-bottom: 20px;
 }
 
 /* Blocks */

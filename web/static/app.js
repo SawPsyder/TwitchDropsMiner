@@ -1456,7 +1456,13 @@ function updateLibrarySyncUI(librarySync) {
     const steamId = document.getElementById('steam-id');
     if (steamId && document.activeElement !== steamId) steamId.value = steam.steam_id || '';
 
-    // keep the provider status line in sync with the new configuration
+    const ubisoft = librarySync.ubisoft || {};
+    const ubisoftEnabled = document.getElementById('ubisoft-sync-enabled');
+    if (ubisoftEnabled) ubisoftEnabled.checked = ubisoft.enabled || false;
+    const ubisoftTicket = document.getElementById('ubisoft-ticket');
+    if (ubisoftTicket && document.activeElement !== ubisoftTicket) ubisoftTicket.value = ubisoft.remember_me_ticket || '';
+
+    // keep the provider status lines in sync with the new configuration
     fetchLibraryStatus();
 
     const isWhitelist = librarySync.list_mode === 'whitelist';
@@ -1486,6 +1492,10 @@ function getLibrarySyncFromUI() {
             enabled: document.getElementById('steam-sync-enabled')?.checked || false,
             api_key: document.getElementById('steam-api-key')?.value.trim() || '',
             steam_id: document.getElementById('steam-id')?.value.trim() || '',
+        },
+        ubisoft: {
+            enabled: document.getElementById('ubisoft-sync-enabled')?.checked || false,
+            remember_me_ticket: document.getElementById('ubisoft-ticket')?.value.trim() || '',
         },
     };
 }
@@ -1556,7 +1566,7 @@ function renderLibraryOwnedList() {
     const owned = state.ownedGames || [];
     if (owned.length === 0) {
         const emptyMsg = library.no_owned_games
-            || 'No games synced yet. Configure Steam above and click Sync Now.';
+            || 'No games synced yet. Configure a platform above and click Sync Now.';
         container.replaceChildren(makeElement('p', { class: 'empty-message' }, emptyMsg));
         return;
     }
@@ -1611,37 +1621,41 @@ async function fetchOwnedGames() {
 async function fetchLibraryStatus() {
     try {
         const response = await fetch('/api/library/status');
-        updateProviderStatusLine(await response.json());
+        updateProviderStatusLines(await response.json());
     } catch (error) {
         console.error('Failed to fetch library status:', error);
     }
 }
 
-function updateProviderStatusLine(status) {
-    const line = document.getElementById('steam-status-line');
-    if (!line) return;
-    const library = state.translations.gui?.settings?.library || {};
-    const steam = status?.providers?.steam;
+const LIBRARY_PROVIDERS = ['steam', 'ubisoft'];
 
-    line.classList.remove('status-ok', 'status-error');
-    if (!steam || !steam.configured) {
-        line.textContent = library.not_configured || 'Not configured';
-        return;
-    }
-    if (steam.last_error) {
-        line.classList.add('status-error');
-        line.textContent = steam.last_error;
-        return;
-    }
-    const parts = [`${steam.game_count} ${library.owned_games || 'owned games'}`];
-    if (steam.last_sync) {
-        const lastSyncLabel = library.last_sync || 'Last sync:';
-        parts.push(`${lastSyncLabel} ${new Date(steam.last_sync).toLocaleString()}`);
-    } else {
-        parts.push(library.never_synced || 'Never synced');
-    }
-    line.classList.add('status-ok');
-    line.textContent = parts.join(' • ');
+function updateProviderStatusLines(status) {
+    const library = state.translations.gui?.settings?.library || {};
+    LIBRARY_PROVIDERS.forEach(providerName => {
+        const line = document.getElementById(`${providerName}-status-line`);
+        if (!line) return;
+        const provider = status?.providers?.[providerName];
+
+        line.classList.remove('status-ok', 'status-error');
+        if (!provider || !provider.configured) {
+            line.textContent = library.not_configured || 'Not configured';
+            return;
+        }
+        if (provider.last_error) {
+            line.classList.add('status-error');
+            line.textContent = provider.last_error;
+            return;
+        }
+        const parts = [`${provider.game_count} ${library.owned_games || 'owned games'}`];
+        if (provider.last_sync) {
+            const lastSyncLabel = library.last_sync || 'Last sync:';
+            parts.push(`${lastSyncLabel} ${new Date(provider.last_sync).toLocaleString()}`);
+        } else {
+            parts.push(library.never_synced || 'Never synced');
+        }
+        line.classList.add('status-ok');
+        line.textContent = parts.join(' • ');
+    });
 }
 
 function renderAutoWatchList() {
@@ -1726,7 +1740,7 @@ async function syncLibraryNow() {
             renderChannels();
         }
         renderLibrarySyncStatus(data);
-        if (data.status) updateProviderStatusLine(data.status);
+        if (data.status) updateProviderStatusLines(data.status);
         // refresh the owned-games picker with the newly synced library
         fetchOwnedGames();
     } catch (error) {
@@ -2109,6 +2123,9 @@ function applyTranslations(t) {
             setLibraryText('library-steam-header', library.steam);
             setLibraryText('steam-api-key-label', library.steam_api_key);
             setLibraryText('steam-id-label', library.steam_id);
+            setLibraryText('library-ubisoft-header', library.ubisoft);
+            setLibraryText('ubisoft-ticket-label', library.ubisoft_ticket);
+            // ubisoft-hint stays untranslated HTML - it contains the login link
             setLibraryText('library-mode-header', library.mode);
             setLibraryText('library-mode-blacklist-label', library.mode_blacklist_name);
             setLibraryText('library-mode-whitelist-label', library.mode_whitelist_name);
@@ -2386,6 +2403,8 @@ document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('steam-sync-enabled').addEventListener('change', saveSettings);
     document.getElementById('steam-api-key').addEventListener('change', saveSettings);
     document.getElementById('steam-id').addEventListener('change', saveSettings);
+    document.getElementById('ubisoft-sync-enabled').addEventListener('change', saveSettings);
+    document.getElementById('ubisoft-ticket').addEventListener('change', saveSettings);
     document.getElementById('library-mode-blacklist').addEventListener('change', onLibraryModeChange);
     document.getElementById('library-mode-whitelist').addEventListener('change', onLibraryModeChange);
     document.getElementById('library-game-search').addEventListener('input', renderLibraryOwnedList);

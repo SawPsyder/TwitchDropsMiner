@@ -39,6 +39,7 @@ from .paths import (
     LANG_PATH,
     LIBRARY_CACHE_PATH,
     SETTINGS_PATH,
+    UBISOFT_AUTH_PATH,
     _merge_vars,
 )
 
@@ -76,6 +77,7 @@ __all__ = [
     "COOKIES_PATH",
     "SETTINGS_PATH",
     "LIBRARY_CACHE_PATH",
+    "UBISOFT_AUTH_PATH",
     "_merge_vars",
     # client_info.py
     "ClientInfo",

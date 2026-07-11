@@ -82,6 +82,23 @@ class LibraryProvider(ABC):
         """Whether the provider has all the configuration it needs to fetch."""
         raise NotImplementedError
 
+    def _sensitive_values(self) -> tuple[str, ...]:
+        """Credential values that must never appear in error messages/logs."""
+        return ()
+
+    def _redact(self, text: str) -> str:
+        """
+        Mask this provider's credentials in text destined for logs or the UI.
+
+        Exception messages can embed request details (aiohttp includes the full
+        URL, query string and all), so anything interpolating an exception into
+        a LibrarySyncError message must pass it through here first.
+        """
+        for secret in self._sensitive_values():
+            if secret:
+                text = text.replace(secret, "***")
+        return text
+
     @abstractmethod
     async def fetch_owned_games(self, session: aiohttp.ClientSession) -> list[OwnedGame]:
         """

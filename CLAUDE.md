@@ -71,8 +71,11 @@ docker-compose up -d   # http://localhost:8080, data persisted to ./data
 - `services/` — business logic consumed by the client: `ChannelService`, `InventoryService`,
   `WatchService`, `MaintenanceService`, `MessageHandlerService`
 - `library_sync/` — external game library sync: `LibraryProvider` ABC + `SteamProvider` (Steam Web
-  API), `LibrarySyncService` builds a runtime auto watch list of owned games with active campaigns
-  (blacklist/whitelist modes, ordered by last played, ~12h cache in `DATA_DIR/library_cache.json`)
+  API) + `UbisoftProvider` (unofficial ubiservices API + Uplay GraphQL; authenticates via a
+  browser-copied `rememberMeTicket` — Ubisoft disabled password Basic-auth logins ~April 2026 —
+  rotated tickets persist in `DATA_DIR/ubisoft_auth.json`; no last-played data), `LibrarySyncService`
+  builds a runtime auto watch list of owned games with active campaigns (blacklist/whitelist modes,
+  ordered by last played, ~12h cache in `DATA_DIR/library_cache.json`)
 - `web/` — FastAPI app (`app.py`) + `WebGUIManager` (`gui_manager.py`) composing per-concern managers
   under `web/managers/` (status, console, channels, campaigns, inventory, login, settings, cache,
   broadcaster). Real-time push via Socket.IO through `WebSocketBroadcaster`.
@@ -99,8 +102,10 @@ watch events are POSTed to the Spade endpoint instead).
 ### Library sync (`library_sync/`)
 
 `Twitch.sync_game_libraries()` runs during `GAMES_UPDATE` (and on `POST /api/library/sync`): it
-fetches owned games from enabled providers (currently Steam — needs a Steam Web API key and
-SteamID64/vanity name, game details set to public), matches them against campaign games by
+fetches owned games from enabled providers (Steam — needs a Steam Web API key and
+SteamID64/vanity name, game details set to public; Ubisoft Connect — needs a `rememberMeTicket`
+copied from the browser after logging in at connect.ubisoft.com, which also covers 2FA accounts),
+matches them against campaign games by
 normalized name, and filters through the blacklist/whitelist (`settings.library_sync.list_mode`).
 The result is the runtime `Twitch.auto_watch_games` list, ordered by the platform's last-played
 time (most recent first, never-played last alphabetically). The watch list is two-tier:

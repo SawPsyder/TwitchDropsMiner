@@ -15,12 +15,20 @@ class SteamLibrarySettings(TypedDict):
     steam_id: str
 
 
+class UbisoftLibrarySettings(TypedDict):
+    enabled: bool
+    # long-lived "remember me" ticket copied from the browser after logging in
+    # at connect.ubisoft.com (password logins were disabled by Ubisoft ~04/2026)
+    remember_me_ticket: str
+
+
 class LibrarySyncSettings(TypedDict):
     enabled: bool
     list_mode: str  # "blacklist" | "whitelist"
     blacklist: list[str]
     whitelist: list[str]
     steam: SteamLibrarySettings
+    ubisoft: UbisoftLibrarySettings
 
 
 class InventoryFilters(TypedDict):
@@ -62,6 +70,10 @@ default_settings = {
             "enabled": False,
             "api_key": "",
             "steam_id": "",
+        },
+        "ubisoft": {
+            "enabled": False,
+            "remember_me_ticket": "",
         },
     },
     "minimum_refresh_interval_minutes": 30,

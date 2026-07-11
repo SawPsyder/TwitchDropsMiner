@@ -56,7 +56,7 @@ src/
 ├── auth/            # Authentication (auth_state for OAuth and token management)
 ├── api/             # External API (HTTP client, GraphQL client)
 ├── websocket/       # Real-time updates (websocket connection, pool)
-├── library_sync/    # External game library sync (LibraryProvider base, SteamProvider, LibrarySyncService)
+├── library_sync/    # External game library sync (LibraryProvider base, SteamProvider, UbisoftProvider, LibrarySyncService)
 ├── web/             # Web GUI (app, gui_manager, api/)
 │   └── managers/    # Individual UI managers (status, console, channels, campaigns, inventory, login, settings, cache, broadcaster)
 ├── services/        # Business logic services (channel, inventory, watch, maintenance, message_handlers)
@@ -141,6 +141,7 @@ lang/                # Translation JSON files (19 languages)
 
 - `LibraryProvider` (base.py): abstract provider + `OwnedGame` (incl. last_played timestamp) + `normalize_game_name()` for cross-platform name matching
 - `SteamProvider` (steam.py): Steam Web API (GetOwnedGames incl. rtime_last_played, ResolveVanityURL); accepts SteamID64, vanity name, or profile URL
+- `UbisoftProvider` (ubisoft.py): unofficial ubiservices API (Uplay GraphQL owned-games query); authenticates with a browser-copied `rememberMeTicket` (localStorage `PRODrememberMe` on connect.ubisoft.com) since Ubisoft disabled password Basic-auth logins ~April 2026 - this also covers 2FA accounts; rotated remember-me tickets and the derived session persist in `DATA_DIR/ubisoft_auth.json`; last-played times are unavailable (always 0)
 - `LibrarySyncService` (service.py): caches owned games in `DATA_DIR/library_cache.json` (~12h refresh), computes the auto watch list of owned games with active campaigns (blacklist/whitelist filtered, ordered by last played descending)
 - Two-tier watch list: `Twitch.get_effective_watch_list()` = user's games_to_watch first (persisted), then the runtime `Twitch.auto_watch_games` (never written into settings)
 - Runs during GAMES_UPDATE via `Twitch.sync_game_libraries()`; provider failures never break the mining loop
@@ -156,7 +157,7 @@ lang/                # Translation JSON files (19 languages)
 
 - Games to watch list (auto-populated from available campaigns if empty)
 - Games can also be added manually from the web settings search box
-- Library sync configuration (enable flag, blacklist/whitelist mode and lists, per-provider settings such as Steam API key and Steam ID)
+- Library sync configuration (enable flag, blacklist/whitelist mode and lists, per-provider settings such as Steam API key/Steam ID and the Ubisoft remember-me ticket)
 - Connection quality multiplier
 - Language selection
 - Proxy support (including verification)
@@ -348,7 +349,7 @@ source env/bin/activate && python -m pytest tests/
 
 - `tests/test_proxy_settings.py` - Tests for proxy settings configuration
 - `tests/test_verify_proxy.py` - Tests for proxy verification functionality
-- `tests/test_library_sync.py` - Tests for game library sync (name matching, Steam provider, blacklist/whitelist filtering, settings sanitization)
+- `tests/test_library_sync.py` - Tests for game library sync (name matching, Steam and Ubisoft providers, blacklist/whitelist filtering, settings sanitization)
 
 
 ### Manual Testing

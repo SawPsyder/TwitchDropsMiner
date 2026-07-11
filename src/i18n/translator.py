@@ -188,6 +188,9 @@ class GUISettingsLibrary(TypedDict):
     steam_api_key: str
     steam_api_key_hint: str
     steam_id: str
+    ubisoft: str
+    ubisoft_ticket: str
+    ubisoft_hint: str
     sync_now: str
     syncing: str
     sync_disabled: str

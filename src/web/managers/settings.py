@@ -112,13 +112,17 @@ class SettingsManager:
         if settings_data.get("library_sync") is not None:
             sanitized_library_sync = self._sanitize_library_sync(settings_data["library_sync"])
             current_library_sync: dict[str, Any] = getattr(self._settings, "library_sync", {})
-            # credential-only edits (API key, Steam ID) are persisted but don't
+            # credential-only edits (API keys, account credentials) are persisted but don't
             # need to restart the mining loop - automation changes do
             requires_update = self._strip_library_credentials(
                 current_library_sync
             ) != self._strip_library_credentials(sanitized_library_sync)
             should_trigger_update |= self.check_and_update_setting(
-                "library_sync", sanitized_library_sync, requires_update
+                "library_sync",
+                sanitized_library_sync,
+                requires_update,
+                # never log provider credentials (API keys, account tokens)
+                log_value=self._strip_library_credentials(sanitized_library_sync),
             )
 
         self._settings.save()
@@ -133,11 +137,15 @@ class SettingsManager:
         new_value: Any,
         should_trigger_update: bool = False,
         action: Callable[[Any], None] = lambda x: None,
+        *,
+        log_value: Any = None,
     ):
+        """Apply a changed setting; log_value replaces new_value in the log line
+        when the value contains data that must not end up in logs (credentials)."""
         if new_value is None or getattr(self._settings, key, None) == new_value:
             return False
         setattr(self._settings, key, new_value)
-        self._log_change(f"Setting changed: {key} = {new_value}")
+        self._log_change(f"Setting changed: {key} = {log_value if log_value is not None else new_value}")
         action(new_value)
         return should_trigger_update
 
@@ -158,14 +166,20 @@ class SettingsManager:
             ]
         return sanitized
 
-    @staticmethod
-    def _strip_library_credentials(value: dict[str, Any]) -> dict[str, Any]:
+    # per-provider settings keys that hold credentials rather than automation config
+    _LIBRARY_CREDENTIAL_KEYS: dict[str, tuple[str, ...]] = {
+        "steam": ("api_key", "steam_id"),
+        "ubisoft": ("remember_me_ticket",),
+    }
+
+    @classmethod
+    def _strip_library_credentials(cls, value: dict[str, Any]) -> dict[str, Any]:
         """A copy of a library_sync settings object without provider credentials."""
         stripped = dict(value)
-        for provider_key in ("steam",):
+        for provider_key, credential_keys in cls._LIBRARY_CREDENTIAL_KEYS.items():
             provider = dict(stripped.get(provider_key, {}))
-            provider.pop("api_key", None)
-            provider.pop("steam_id", None)
+            for credential_key in credential_keys:
+                provider.pop(credential_key, None)
             stripped[provider_key] = provider
         return stripped
 

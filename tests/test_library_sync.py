@@ -9,6 +9,7 @@ from src.library_sync import (
     LibrarySyncService,
     OwnedGame,
     SteamProvider,
+    UbisoftProvider,
     normalize_game_name,
 )
 
@@ -23,6 +24,10 @@ def make_library_settings(**overrides):
             "enabled": True,
             "api_key": "test-key",
             "steam_id": "76561198000000000",
+        },
+        "ubisoft": {
+            "enabled": False,
+            "remember_me_ticket": "",
         },
     }
     settings.update(overrides)
@@ -110,6 +115,15 @@ class TestSteamProvider(unittest.TestCase):
         with self.assertRaises(LibrarySyncError):
             SteamProvider.parse_owned_games({"response": {}})
 
+    def test_redacts_credentials_in_error_text(self):
+        provider = SteamProvider(FakeSettings())
+        masked = provider._redact(
+            "GET https://api.steampowered.com/x?key=test-key&steamid=76561198000000000 failed"
+        )
+        self.assertNotIn("test-key", masked)
+        self.assertNotIn("76561198000000000", masked)
+        self.assertIn("***", masked)
+
     def test_is_configured(self):
         provider = SteamProvider(FakeSettings())
         self.assertTrue(provider.is_configured)
@@ -120,6 +134,151 @@ class TestSteamProvider(unittest.TestCase):
         )
         self.assertFalse(unconfigured.is_configured)
         self.assertFalse(unconfigured.enabled)
+
+
+class TestUbisoftProvider(unittest.TestCase):
+    def setUp(self):
+        self._tmp_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp_dir.cleanup)
+        self.auth_path = Path(self._tmp_dir.name) / "ubisoft_auth.json"
+
+    def make_provider(self, ticket="rm-ticket-from-browser", enabled=True):
+        return UbisoftProvider(
+            FakeSettings(
+                make_library_settings(
+                    ubisoft={"enabled": enabled, "remember_me_ticket": ticket}
+                )
+            ),
+            auth_path=self.auth_path,
+        )
+
+    def test_is_configured(self):
+        provider = self.make_provider()
+        self.assertTrue(provider.is_configured)
+        self.assertTrue(provider.enabled)
+
+        unconfigured = self.make_provider(ticket="")
+        self.assertFalse(unconfigured.is_configured)
+        self.assertFalse(unconfigured.enabled)
+
+    def test_redacts_tickets_in_error_text(self):
+        provider = self.make_provider(ticket="rm-secret")
+        provider._auth["ticket"] = "session-secret"
+        masked = provider._redact("request with rm-secret and session-secret failed")
+        self.assertNotIn("rm-secret", masked)
+        self.assertNotIn("session-secret", masked)
+        self.assertIn("***", masked)
+
+    def test_clean_ticket_input(self):
+        # localStorage values are often copied with surrounding JSON quotes
+        self.assertEqual(UbisoftProvider.clean_ticket_input('  "abc-ticket"  '), "abc-ticket")
+        # "null" is stored when "Remember me" was left unchecked at login
+        self.assertEqual(UbisoftProvider.clean_ticket_input('"null"'), "")
+        self.assertEqual(UbisoftProvider.clean_ticket_input("null"), "")
+
+    def test_parse_login_response(self):
+        ticket, session_id, rm_ticket = UbisoftProvider.parse_login_response(
+            {"ticket": "abc", "sessionId": "session-1", "rememberMeTicket": "rm-2"}
+        )
+        self.assertEqual(ticket, "abc")
+        self.assertEqual(session_id, "session-1")
+        self.assertEqual(rm_ticket, "rm-2")
+
+    def test_parse_login_response_without_rotation(self):
+        ticket, session_id, rm_ticket = UbisoftProvider.parse_login_response(
+            {"ticket": "abc", "sessionId": "session-1", "rememberMeTicket": None}
+        )
+        self.assertEqual(rm_ticket, "")
+
+    def test_parse_login_response_unexpected_2fa(self):
+        with self.assertRaisesRegex(LibrarySyncError, "2FA"):
+            UbisoftProvider.parse_login_response(
+                {"twoFactorAuthenticationTicket": "2fa-ticket"}
+            )
+
+    def test_parse_login_response_missing_ticket(self):
+        with self.assertRaises(LibrarySyncError):
+            UbisoftProvider.parse_login_response({"sessionId": "session-1"})
+
+    def test_session_state_persists_across_instances(self):
+        provider = self.make_provider()
+        provider._auth.update(
+            {
+                "source_ticket": provider.remember_me_ticket,
+                "remember_me_ticket": "rm-rotated",
+                "ticket": "session-ticket",
+                "session_id": "session-1",
+                "expires_at": datetime.now(timezone.utc) + timedelta(hours=1),
+            }
+        )
+        provider._save_auth()
+
+        reloaded = self.make_provider()
+        self.assertTrue(reloaded._session_valid())
+        self.assertEqual(reloaded._auth["remember_me_ticket"], "rm-rotated")
+
+    def test_session_invalid_when_user_pastes_new_token(self):
+        provider = self.make_provider()
+        provider._auth.update(
+            {
+                "source_ticket": "old-token",
+                "remember_me_ticket": "rm-rotated",
+                "ticket": "session-ticket",
+                "session_id": "session-1",
+                "expires_at": datetime.now(timezone.utc) + timedelta(hours=1),
+            }
+        )
+        # the settings token differs from the chain's source - must re-login
+        self.assertFalse(provider._session_valid())
+
+    def test_session_invalid_when_expired(self):
+        provider = self.make_provider()
+        provider._auth.update(
+            {
+                "source_ticket": provider.remember_me_ticket,
+                "ticket": "session-ticket",
+                "expires_at": datetime.now(timezone.utc) - timedelta(minutes=1),
+            }
+        )
+        self.assertFalse(provider._session_valid())
+
+    def test_parse_owned_games(self):
+        data = {
+            "data": {
+                "viewer": {
+                    "id": "user-1",
+                    "ownedGames": {
+                        "totalCount": 3,
+                        "nodes": [
+                            {"id": "g1", "spaceId": "space-1", "name": "Anno 1800"},
+                            {"id": "g2", "spaceId": None, "name": "Far Cry 6"},
+                            {"id": "g3", "spaceId": "space-3"},  # no name: skipped
+                        ],
+                    },
+                }
+            }
+        }
+        games = UbisoftProvider.parse_owned_games(data)
+        self.assertEqual(len(games), 2)
+        self.assertEqual(
+            games[0],
+            OwnedGame(name="Anno 1800", app_id="space-1", provider="ubisoft", last_played=0),
+        )
+        # falls back to the game id when there's no space id
+        self.assertEqual(games[1].app_id, "g2")
+
+    def test_parse_owned_games_graphql_error(self):
+        data = {"errors": [{"message": "Ticket is expired"}]}
+        with self.assertRaisesRegex(LibrarySyncError, "Ticket is expired"):
+            UbisoftProvider.parse_owned_games(data)
+
+    def test_parse_owned_games_no_viewer(self):
+        with self.assertRaises(LibrarySyncError):
+            UbisoftProvider.parse_owned_games({"data": {"viewer": None}})
+
+    def test_parse_owned_games_empty_library(self):
+        data = {"data": {"viewer": {"id": "user-1", "ownedGames": {"nodes": []}}}}
+        self.assertEqual(UbisoftProvider.parse_owned_games(data), [])
 
 
 class TestLibrarySyncService(unittest.TestCase):
@@ -407,6 +566,45 @@ class TestSettingsManagerLibrarySync(unittest.IsolatedAsyncioTestCase):
         # an automation change (mode) does trigger the update
         manager.update_settings({"library_sync": make_library_settings(list_mode="whitelist")})
         mock_callback.assert_called_once()
+
+    async def test_ubisoft_credential_only_change_saves_without_trigger(self):
+        manager, mock_settings, mock_callback = self.make_manager(make_library_settings())
+
+        new_value = make_library_settings(
+            ubisoft={"enabled": False, "remember_me_ticket": "rm-ticket"}
+        )
+        manager.update_settings({"library_sync": new_value})
+
+        # persisted, but no mining loop restart for a credential edit
+        mock_callback.assert_not_called()
+        self.assertEqual(mock_settings.library_sync["ubisoft"]["remember_me_ticket"], "rm-ticket")
+
+        # toggling the provider on is an automation change and does trigger
+        manager.update_settings(
+            {
+                "library_sync": make_library_settings(
+                    ubisoft={"enabled": True, "remember_me_ticket": "rm-ticket"}
+                )
+            }
+        )
+        mock_callback.assert_called_once()
+
+    async def test_setting_change_log_excludes_credentials(self):
+        manager, mock_settings, mock_callback = self.make_manager()
+
+        manager.update_settings(
+            {
+                "library_sync": make_library_settings(
+                    steam={"enabled": True, "api_key": "secret-key", "steam_id": "secret-id"},
+                    ubisoft={"enabled": True, "remember_me_ticket": "secret-ticket"},
+                )
+            }
+        )
+
+        logged = " ".join(str(call) for call in manager._console.print.call_args_list)
+        self.assertIn("library_sync", logged)  # the change itself is still logged
+        for secret in ("secret-key", "secret-id", "secret-ticket"):
+            self.assertNotIn(secret, logged)
 
     async def test_empty_or_unknown_language_is_ignored(self):
         manager, mock_settings, mock_callback = self.make_manager()
