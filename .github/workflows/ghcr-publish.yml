@@ -5,6 +5,8 @@ on:
     branches:
       - main
       - develop
+    tags:
+      - 'v*.*.*'
   workflow_dispatch:
 
 permissions:
@@ -38,13 +40,28 @@ jobs:
         run: |
           OWNER=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
           IMAGE="ghcr.io/$OWNER/twitchdropsminer"
-          BRANCH="${{ github.ref_name }}"
-          SHA_SHORT="${GITHUB_SHA::7}"
 
-          TAGS="$IMAGE:$BRANCH-$SHA_SHORT,$IMAGE:$BRANCH"
+          if [ "${{ github.ref_type }}" = "tag" ]; then
+            # Version tag push (v1.2.3 -> 1.2.3): publish semver tags
+            VERSION="${GITHUB_REF_NAME#v}"
+            MAJOR=$(echo "$VERSION" | cut -d. -f1)
+            MINOR=$(echo "$VERSION" | cut -d. -f2)
 
-          if [ "$BRANCH" = "main" ]; then
-            TAGS="$TAGS,$IMAGE:latest"
+            TAGS="$IMAGE:$VERSION"
+
+            if ! echo "$VERSION" | grep -q '-'; then
+              # Stable release: also tag major.minor, major, and latest
+              TAGS="$TAGS,$IMAGE:$MAJOR.$MINOR,$IMAGE:$MAJOR,$IMAGE:latest"
+            fi
+          else
+            BRANCH="${{ github.ref_name }}"
+            SHA_SHORT="${GITHUB_SHA::7}"
+
+            TAGS="$IMAGE:$BRANCH-$SHA_SHORT,$IMAGE:$BRANCH"
+
+            if [ "$BRANCH" = "main" ]; then
+              TAGS="$TAGS,$IMAGE:latest"
+            fi
           fi
 
           echo "tags=$TAGS" >> "$GITHUB_OUTPUT"
