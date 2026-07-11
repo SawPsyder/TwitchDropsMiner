@@ -103,11 +103,18 @@
         },
         "settings": {
             "general": {
-                "name": "General",
-                "dark_mode": "Dark Mode",
+                "name": "General"
+            },
+            "appearance": {
+                "name": "Appearance",
+                "dark_mode": {
+                    "name": "Dark Mode",
+                    "auto": "Auto",
+                    "on": "On",
+                    "off": "Off"
+                },
                 "animations": {
                     "name": "Animations",
-                    "help": "\"Auto\" follows your system's reduced motion preference; \"On\"/\"Off\" always override it.",
                     "auto": "Auto",
                     "on": "On",
                     "off": "Off"
@@ -130,8 +137,14 @@
             "no_games_match": "No games match your search.",
             "all_games_selected": "All games are selected or no games available.",
             "actions": "Actions",
-            "connection_quality": "Connection Quality:",
-            "minimum_refresh": "Minimum Refresh Interval (minutes):",
+            "connection_quality": "Connection Quality",
+            "minimum_refresh": "Minimum Refresh Interval (minutes)",
+            "proxy": {
+                "name": "Proxy",
+                "help": "Leave empty to disable. Supports HTTP/HTTPS/SOCKS.",
+                "set": "Set",
+                "verify": "Verify"
+            },
             "idle_behavior": {
                 "name": "Idle Behavior",
                 "help": "When the manual and automated tracklists are done or empty, mine drops for every active campaign instead of sitting idle."

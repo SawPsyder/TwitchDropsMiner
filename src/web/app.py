@@ -71,7 +71,7 @@ class SettingsUpdate(BaseModel):
     games_to_watch: list[str] | None = None
     idle_behavior: dict | None = None
     animations: str | None = None
-    dark_mode: bool | None = None
+    dark_mode: str | None = None
     language: str | None = None
     proxy: str | None = None
     connection_quality: int | None = None

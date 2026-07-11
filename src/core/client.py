@@ -611,7 +611,9 @@ class Twitch:
         await self._auth_state.validate()
         return self._auth_state
 
-    async def gql_request(self, ops: GQLRequest | list[GQLRequest]) -> JsonType | list[JsonType]:
+    async def gql_request(
+        self, ops: GQLRequest | abc.Sequence[GQLRequest]
+    ) -> JsonType | list[JsonType]:
         """
         Execute GraphQL request(s).
 

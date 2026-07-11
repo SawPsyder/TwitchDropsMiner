@@ -51,6 +51,56 @@ osReducedMotionQuery.addEventListener('change', () => {
 });
 applyAnimationsMode('auto');
 
+// ==================== Dark Mode ====================
+
+// "auto" mirrors this media query; "on"/"off" (Settings > Appearance > Dark Mode)
+// override it regardless of what the OS/browser reports.
+const osDarkModeQuery = window.matchMedia('(prefers-color-scheme: dark)');
+
+function applyDarkMode(mode) {
+    const effectiveDark = mode === 'on' ? true : mode === 'off' ? false : osDarkModeQuery.matches;
+    document.body.classList.toggle('dark-mode', effectiveDark);
+}
+
+function getDarkModeFromUI() {
+    if (document.getElementById('dark-mode-on')?.checked) return 'on';
+    if (document.getElementById('dark-mode-off')?.checked) return 'off';
+    return 'auto';
+}
+
+function setDarkModeUI(mode) {
+    const value = mode || 'auto';
+    const radio = document.getElementById(`dark-mode-${value}`);
+    if (radio) radio.checked = true;
+    applyDarkMode(value);
+}
+
+// Live-react to OS-level changes while left on "auto", and apply a sane
+// default immediately (before settings have loaded) to avoid a flash of the wrong theme.
+osDarkModeQuery.addEventListener('change', () => {
+    if ((state.settings.dark_mode || 'auto') === 'auto') {
+        applyDarkMode('auto');
+    }
+});
+applyDarkMode('auto');
+
+// ==================== Value Sliders ====================
+// Keeps the decorative fill/label of a .value-slider (Connection Quality,
+// Minimum Refresh Interval) in sync with its underlying <input type="range">.
+
+function updateSliderVisual(input) {
+    const wrapper = input.closest('.value-slider');
+    if (!wrapper) return;
+    const min = parseFloat(input.min);
+    const max = parseFloat(input.max);
+    const value = parseFloat(input.value);
+    const pct = max > min ? ((value - min) / (max - min)) * 100 : 0;
+    const fill = wrapper.querySelector('.value-slider-fill');
+    if (fill) fill.style.width = `${pct}%`;
+    const label = wrapper.querySelector('.value-slider-value');
+    if (label) label.textContent = input.value;
+}
+
 // ==================== Version Checking ====================
 
 async function fetchAndDisplayVersion() {
@@ -298,11 +348,7 @@ socket.on('games_available', (data) => {
 });
 
 socket.on('theme_change', (data) => {
-    if (data.dark_mode) {
-        document.body.classList.add('dark-mode');
-    } else {
-        document.body.classList.remove('dark-mode');
-    }
+    applyDarkMode(data.dark_mode);
 });
 
 socket.on('notification', (data) => {
@@ -1162,10 +1208,14 @@ function updateLoginStatus(data) {
 
 function updateSettingsUI(settings) {
     state.settings = settings;
-    document.getElementById('dark-mode').checked = settings.dark_mode || false;
+    setDarkModeUI(settings.dark_mode);
     setAnimationsModeUI(settings.animations);
-    document.getElementById('connection-quality').value = settings.connection_quality || 1;
-    document.getElementById('minimum-refresh-interval').value = settings.minimum_refresh_interval_minutes || 30;
+    const connectionQualityInput = document.getElementById('connection-quality');
+    connectionQualityInput.value = settings.connection_quality || 1;
+    updateSliderVisual(connectionQualityInput);
+    const refreshIntervalInput = document.getElementById('minimum-refresh-interval');
+    refreshIntervalInput.value = settings.minimum_refresh_interval_minutes || 30;
+    updateSliderVisual(refreshIntervalInput);
 
     // Update proxy settings and indicator
     const proxyUrl = settings.proxy || '';
@@ -1184,12 +1234,6 @@ function updateSettingsUI(settings) {
         if (languageSelect) {
             languageSelect.value = settings.language;
         }
-    }
-
-    if (settings.dark_mode) {
-        document.body.classList.add('dark-mode');
-    } else {
-        document.body.classList.remove('dark-mode');
     }
 
     // Update available games if provided in settings
@@ -2046,7 +2090,7 @@ async function verifyProxy() {
 
 async function saveSettings() {
     const settings = {
-        dark_mode: document.getElementById('dark-mode').checked,
+        dark_mode: getDarkModeFromUI(),
         animations: getAnimationsModeFromUI(),
         // the dropdown is empty until languages are fetched - never send ""
         language: document.getElementById('language')?.value || undefined,
@@ -2233,20 +2277,25 @@ function applyTranslations(t) {
         const actionsHeader = document.getElementById('settings-actions-header');
         if (actionsHeader) actionsHeader.textContent = t.gui.settings.actions;
 
-        const darkModeLabel = settingsTab.querySelector('label:has(#dark-mode)');
-        if (darkModeLabel) {
-            const checkbox = darkModeLabel.querySelector('input');
-            darkModeLabel.textContent = '';
-            darkModeLabel.appendChild(checkbox);
-            darkModeLabel.appendChild(document.createTextNode(' ' + t.gui.settings.general.dark_mode));
+        const appearanceHeader = document.getElementById('settings-appearance-header');
+        if (appearanceHeader && t.gui.settings.appearance) appearanceHeader.textContent = t.gui.settings.appearance.name;
+
+        const darkMode = t.gui.settings.appearance?.dark_mode;
+        if (darkMode) {
+            const darkModeHeader = document.getElementById('dark-mode-header');
+            if (darkModeHeader) darkModeHeader.textContent = darkMode.name;
+            const darkModeAutoLabel = document.getElementById('dark-mode-auto-label');
+            if (darkModeAutoLabel) darkModeAutoLabel.textContent = darkMode.auto;
+            const darkModeOnLabel = document.getElementById('dark-mode-on-label');
+            if (darkModeOnLabel) darkModeOnLabel.textContent = darkMode.on;
+            const darkModeOffLabel = document.getElementById('dark-mode-off-label');
+            if (darkModeOffLabel) darkModeOffLabel.textContent = darkMode.off;
         }
 
-        const animations = t.gui.settings.general.animations;
+        const animations = t.gui.settings.appearance?.animations;
         if (animations) {
             const animationsHeader = document.getElementById('animations-header');
             if (animationsHeader) animationsHeader.textContent = animations.name;
-            const animationsHelp = document.getElementById('animations-help');
-            if (animationsHelp) animationsHelp.textContent = animations.help;
             const autoLabel = document.getElementById('animations-auto-label');
             if (autoLabel) autoLabel.textContent = animations.auto;
             const onLabel = document.getElementById('animations-on-label');
@@ -2255,18 +2304,22 @@ function applyTranslations(t) {
             if (offLabel) offLabel.textContent = animations.off;
         }
 
-        const connQualityLabel = settingsTab.querySelector('label:has(#connection-quality)');
-        if (connQualityLabel) {
-            const input = connQualityLabel.querySelector('input');
-            connQualityLabel.textContent = t.gui.settings.connection_quality + ' ';
-            connQualityLabel.appendChild(input);
-        }
+        const connQualityLabelText = document.getElementById('connection-quality-label-text');
+        if (connQualityLabelText) connQualityLabelText.textContent = t.gui.settings.connection_quality;
 
-        const refreshLabel = settingsTab.querySelector('label:has(#minimum-refresh-interval)');
-        if (refreshLabel) {
-            const input = refreshLabel.querySelector('input');
-            refreshLabel.textContent = t.gui.settings.minimum_refresh + ' ';
-            refreshLabel.appendChild(input);
+        const refreshLabelText = document.getElementById('minimum-refresh-label-text');
+        if (refreshLabelText) refreshLabelText.textContent = t.gui.settings.minimum_refresh;
+
+        const proxy = t.gui.settings.proxy;
+        if (proxy) {
+            const proxyLabelText = document.getElementById('proxy-url-label-text');
+            if (proxyLabelText && proxy.name) proxyLabelText.textContent = proxy.name;
+            const proxyHelpText = document.getElementById('proxy-help-text');
+            if (proxyHelpText && proxy.help) proxyHelpText.textContent = proxy.help;
+            const setProxyBtn = document.getElementById('set-proxy-btn');
+            if (setProxyBtn && proxy.set) setProxyBtn.textContent = proxy.set;
+            const verifyProxyBtn = document.getElementById('verify-proxy-btn');
+            if (verifyProxyBtn && proxy.verify) verifyProxyBtn.textContent = proxy.verify;
         }
 
         const benefitsHelp = document.getElementById('settings-benefits-help');
@@ -2720,14 +2773,16 @@ document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('oauth-confirm').addEventListener('click', confirmOAuth);
 
     // Settings - auto-save on change
-    document.getElementById('dark-mode').addEventListener('change', (e) => {
-        // Apply dark mode immediately for instant feedback
-        if (e.target.checked) {
-            document.body.classList.add('dark-mode');
-        } else {
-            document.body.classList.remove('dark-mode');
-        }
-        // Then save settings
+    document.getElementById('dark-mode-auto').addEventListener('change', () => {
+        applyDarkMode('auto');
+        saveSettings();
+    });
+    document.getElementById('dark-mode-on').addEventListener('change', () => {
+        applyDarkMode('on');
+        saveSettings();
+    });
+    document.getElementById('dark-mode-off').addEventListener('change', () => {
+        applyDarkMode('off');
         saveSettings();
     });
     document.getElementById('language')?.addEventListener('change', saveSettings);
@@ -2743,8 +2798,14 @@ document.addEventListener('DOMContentLoaded', () => {
         applyAnimationsMode('off');
         saveSettings();
     });
-    document.getElementById('connection-quality').addEventListener('change', saveSettings);
-    document.getElementById('minimum-refresh-interval').addEventListener('change', saveSettings);
+    const connectionQualitySlider = document.getElementById('connection-quality');
+    connectionQualitySlider.addEventListener('input', (e) => updateSliderVisual(e.target));
+    connectionQualitySlider.addEventListener('change', saveSettings);
+    updateSliderVisual(connectionQualitySlider);
+    const refreshIntervalSlider = document.getElementById('minimum-refresh-interval');
+    refreshIntervalSlider.addEventListener('input', (e) => updateSliderVisual(e.target));
+    refreshIntervalSlider.addEventListener('change', saveSettings);
+    updateSliderVisual(refreshIntervalSlider);
     // Proxy uses a manual "Set Proxy" button instead of auto-save
     document.getElementById('set-proxy-btn').addEventListener('click', () => {
         const proxyInput = document.getElementById('proxy-url');

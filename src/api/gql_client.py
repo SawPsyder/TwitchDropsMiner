@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections import abc
 from itertools import chain
 from typing import TYPE_CHECKING, overload
 
@@ -66,16 +67,18 @@ class GQLClient:
     async def request(self, ops: GQLRequest) -> JsonType: ...
 
     @overload
-    async def request(self, ops: list[GQLRequest]) -> list[JsonType]: ...
+    async def request(self, ops: abc.Sequence[GQLRequest]) -> list[JsonType]: ...
 
-    async def request(self, ops: GQLRequest | list[GQLRequest]) -> JsonType | list[JsonType]:
+    async def request(
+        self, ops: GQLRequest | abc.Sequence[GQLRequest]
+    ) -> JsonType | list[JsonType]:
         """
         Execute one or more GraphQL operations.
 
         Parameters
         ----------
-        ops : GQLRequest | list[GQLRequest]
-            Single operation or list of operations to execute
+        ops : GQLRequest | abc.Sequence[GQLRequest]
+            Single operation or sequence of operations to execute
 
         Returns
         -------

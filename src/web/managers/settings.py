@@ -15,9 +15,10 @@ from src.utils import merge_json
 
 logger = logging.getLogger("TwitchDrops")
 
-# "auto" follows the browser/OS reduced-motion preference, "on"/"off" force animations
-# on or off regardless of that preference (see web/static/app.js and styles.css)
-ANIMATIONS_MODES = ("auto", "on", "off")
+# shared by the "animations" and "dark_mode" tri-state settings: "auto" follows the
+# browser/OS preference (reduced-motion / prefers-color-scheme), "on"/"off" force it
+# regardless of that preference (see web/static/app.js and styles.css)
+AUTO_ON_OFF_MODES = ("auto", "on", "off")
 
 
 if TYPE_CHECKING:
@@ -84,11 +85,13 @@ class SettingsManager:
         should_trigger_update |= self.check_and_update_setting(
             "games_to_watch", settings_data.get("games_to_watch"), True
         )
-        should_trigger_update |= self.check_and_update_setting(
-            "dark_mode", settings_data.get("dark_mode")
-        )
+        dark_mode = settings_data.get("dark_mode")
+        if dark_mode is not None and dark_mode not in AUTO_ON_OFF_MODES:
+            self._log_change(f"Ignoring unknown dark_mode mode: {dark_mode!r}")
+            dark_mode = None
+        should_trigger_update |= self.check_and_update_setting("dark_mode", dark_mode)
         animations = settings_data.get("animations")
-        if animations is not None and animations not in ANIMATIONS_MODES:
+        if animations is not None and animations not in AUTO_ON_OFF_MODES:
             self._log_change(f"Ignoring unknown animations mode: {animations!r}")
             animations = None
         should_trigger_update |= self.check_and_update_setting("animations", animations)

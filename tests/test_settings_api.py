@@ -76,6 +76,27 @@ class TestSettingsAPI(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(mock_settings.animations, "off")
         mock_console.print.assert_called_with("Ignoring unknown animations mode: 'bogus'")
 
+    async def test_dark_mode_setting_validation(self):
+        mock_broadcaster = AsyncMock()
+        mock_settings = MagicMock(spec=Settings)
+        mock_settings.dark_mode = "auto"
+        mock_console = MagicMock()
+        mock_callback = MagicMock()
+
+        manager = SettingsManager(
+            mock_broadcaster, mock_settings, mock_console, on_change=mock_callback
+        )
+
+        # Valid value is applied and does not require a mining-loop restart
+        manager.update_settings({"dark_mode": "on"})
+        self.assertEqual(mock_settings.dark_mode, "on")
+        mock_callback.assert_not_called()
+
+        # Invalid value is ignored, current setting is left untouched
+        manager.update_settings({"dark_mode": "bogus"})
+        self.assertEqual(mock_settings.dark_mode, "on")
+        mock_console.print.assert_called_with("Ignoring unknown dark_mode mode: 'bogus'")
+
 
 if __name__ == "__main__":
     unittest.main()

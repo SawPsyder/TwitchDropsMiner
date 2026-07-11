@@ -183,18 +183,32 @@ class GUIInventory(TypedDict):
     filters: GUIInvFilters
 
 
+# shared shape for the "auto"/"on"/"off" tri-state toggles (dark mode, animations)
 class GUISettingsAnimations(TypedDict):
     name: str
-    help: str
     auto: str
     on: str
     off: str
 
 
+GUISettingsDarkMode = GUISettingsAnimations
+
+
 class GUISettingsGeneral(TypedDict):
     name: str
-    dark_mode: str
+
+
+class GUISettingsAppearance(TypedDict):
+    name: str
+    dark_mode: GUISettingsDarkMode
     animations: GUISettingsAnimations
+
+
+class GUISettingsProxy(TypedDict):
+    name: str
+    help: str
+    set: str
+    verify: str
 
 
 class GUISettingsIdleBehavior(TypedDict):
@@ -236,6 +250,7 @@ class GUISettingsLibrary(TypedDict):
 
 class GUISettings(TypedDict):
     general: GUISettingsGeneral
+    appearance: GUISettingsAppearance
     mining_benefits: str
     mining_benefits_help: str
     reload: str
@@ -255,6 +270,7 @@ class GUISettings(TypedDict):
     actions: str
     connection_quality: str
     minimum_refresh: str
+    proxy: GUISettingsProxy
     idle_behavior: GUISettingsIdleBehavior
     library: GUISettingsLibrary
 

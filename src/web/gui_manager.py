@@ -140,11 +140,11 @@ class WebGUIManager:
         self._selected_channel_id = None  # Clear after reading
         return result
 
-    def apply_theme(self, dark_mode: bool):
+    def apply_theme(self, dark_mode: str):
         """Apply UI theme (handled client-side in web mode).
 
         Args:
-            dark_mode: Whether to use dark theme
+            dark_mode: "auto" | "on" | "off" dark theme preference
         """
         asyncio.create_task(self._broadcaster.emit("theme_change", {"dark_mode": dark_mode}))
 

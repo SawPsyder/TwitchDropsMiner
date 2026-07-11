@@ -53,7 +53,7 @@ class InventoryFilters(TypedDict):
 default_settings = {
     "animations": "auto",  # "auto" | "on" | "off" - UI motion/animation preference
     "connection_quality": 1,
-    "dark_mode": False,
+    "dark_mode": "auto",  # "auto" | "on" | "off" - UI light/dark theme preference
     "games_to_watch": [],
     "idle_behavior": {
         "mine_all_when_idle": True,
@@ -101,7 +101,7 @@ default_settings = {
 class Settings:
     animations: str
     connection_quality: int
-    dark_mode: bool
+    dark_mode: str
     games_to_watch: list[str]
     idle_behavior: IdleBehaviorSettings
     language: str

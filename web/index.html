@@ -190,13 +190,51 @@
             <div class="settings-container">
                 <section class="settings-section settings-section-half settings-general">
                     <h2 id="settings-general-header">General</h2>
-                    <label>
-                        <input type="checkbox" id="dark-mode"> Dark Mode
-                    </label>
+                    <div class="library-block">
+                        <h3 id="connection-quality-label-text">Connection Quality</h3>
+                        <div class="value-slider">
+                            <div class="value-slider-fill" aria-hidden="true"></div>
+                            <span id="connection-quality-value" class="value-slider-value">1</span>
+                            <input type="range" id="connection-quality" min="1" max="6" step="1" value="1">
+                        </div>
+                    </div>
+                    <div class="library-block">
+                        <h3 id="minimum-refresh-label-text">Minimum Refresh Interval (minutes)</h3>
+                        <div class="value-slider">
+                            <div class="value-slider-fill" aria-hidden="true"></div>
+                            <span id="minimum-refresh-interval-value" class="value-slider-value">30</span>
+                            <input type="range" id="minimum-refresh-interval" min="5" max="60" step="1" value="30">
+                        </div>
+                    </div>
+                    <div class="library-block">
+                        <h3 id="proxy-url-label-text">Proxy</h3>
+                        <div class="proxy-input-group">
+                            <input type="text" id="proxy-url" placeholder="http://user:pass@host:port">
+                            <button id="set-proxy-btn" class="secondary-btn" title="Set and verify proxy">Set</button>
+                            <button id="verify-proxy-btn" class="secondary-btn"
+                                title="Test proxy connection">Verify</button>
+                        </div>
+                        <small id="proxy-help-text" class="help-text-inline">Leave empty to disable. Supports
+                            HTTP/HTTPS/SOCKS.</small>
+                        <div id="proxy-verify-result" class="verify-result" style="display: none;"></div>
+                    </div>
+                </section>
+
+                <section class="settings-section settings-section-half settings-appearance">
+                    <h2 id="settings-appearance-header">Appearance</h2>
+                    <div class="library-block">
+                        <h3 id="dark-mode-header">Dark Mode</h3>
+                        <div class="segmented-control" id="dark-mode-control" role="radiogroup">
+                            <input type="radio" name="dark-mode-mode" id="dark-mode-auto" value="auto" checked>
+                            <label for="dark-mode-auto" id="dark-mode-auto-label">Auto</label>
+                            <input type="radio" name="dark-mode-mode" id="dark-mode-on" value="on">
+                            <label for="dark-mode-on" id="dark-mode-on-label">On</label>
+                            <input type="radio" name="dark-mode-mode" id="dark-mode-off" value="off">
+                            <label for="dark-mode-off" id="dark-mode-off-label">Off</label>
+                        </div>
+                    </div>
                     <div class="library-block">
                         <h3 id="animations-header">Animations</h3>
-                        <p id="animations-help" class="help-text">"Auto" follows your system's reduced motion
-                            preference; "On"/"Off" always override it.</p>
                         <div class="segmented-control" id="animations-control" role="radiogroup">
                             <input type="radio" name="animations-mode" id="animations-auto" value="auto" checked>
                             <label for="animations-auto" id="animations-auto-label">Auto</label>
@@ -206,25 +244,6 @@
                             <label for="animations-off" id="animations-off-label">Off</label>
                         </div>
                     </div>
-                    <label>
-                        Connection Quality:
-                        <input type="number" id="connection-quality" min="1" max="6" value="1">
-                    </label>
-                    <label>
-                        Minimum Refresh Interval (minutes):
-                        <input type="number" id="minimum-refresh-interval" min="1" max="1440" value="30">
-                    </label>
-                    <label>
-                        Proxy URL:
-                        <input type="text" id="proxy-url" placeholder="http://user:pass@host:port">
-                        <button id="set-proxy-btn" class="secondary-btn" title="Set and verify proxy">Set
-                            Proxy</button>
-                        <button id="verify-proxy-btn" class="secondary-btn"
-                            title="Test proxy connection">Verify</button>
-                    </label>
-                    <small class="help-text-inline" style="margin-top: 5px;">Leave empty to disable. Supports
-                        HTTP/HTTPS/SOCKS.</small>
-                    <div id="proxy-verify-result" class="verify-result" style="display: none;"></div>
                 </section>
 
                 <section class="settings-section settings-section-half settings-benefits">
@@ -331,7 +350,8 @@
                             <div class="provider-card-body">
                                 <div class="library-field">
                                     <label for="steam-api-key" id="steam-api-key-label">Steam Web API key</label>
-                                    <input type="password" id="steam-api-key" autocomplete="off"
+                                    <input type="password" id="steam-api-key" autocomplete="off" data-1p-ignore
+                                        data-lpignore="true" data-bwignore
                                         placeholder="XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX">
                                     <small id="steam-api-key-hint" class="help-text-inline">Get a free key at
                                         <a href="https://steamcommunity.com/dev/apikey" target="_blank"
@@ -369,7 +389,8 @@
                                 <div class="library-field">
                                     <label for="ubisoft-ticket" id="ubisoft-ticket-label">Login token
                                         (rememberMeTicket)</label>
-                                    <input type="password" id="ubisoft-ticket" autocomplete="off"
+                                    <input type="password" id="ubisoft-ticket" autocomplete="off" data-1p-ignore
+                                        data-lpignore="true" data-bwignore
                                         placeholder="ew0KICJ2ZXIiOiAiMSIsDQog…">
                                     <small id="ubisoft-hint" class="help-text-inline">Ubisoft disabled password logins
                                         for third-party apps, so log in once in your browser instead: open the

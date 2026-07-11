@@ -8,6 +8,7 @@
 :root {
     --bg-primary: #ffffff;
     --bg-secondary: #f5f5f5;
+    --bg-tertiary: #ececec;
     --bg-panel: #ffffff;
     --text-primary: #333333;
     --text-secondary: #666666;
@@ -26,6 +27,7 @@
 body.dark-mode {
     --bg-primary: #1a1a1a;
     --bg-secondary: #2a2a2a;
+    --bg-tertiary: #333333;
     --bg-panel: #2a2a2a;
     --text-primary: #e0e0e0;
     --text-secondary: #a0a0a0;
@@ -196,17 +198,21 @@ a {
 }
 
 .secondary-btn {
-    padding: 8px 12px;
-    background-color: var(--secondary-bg);
+    padding: 9px 16px;
+    background-color: var(--bg-secondary);
     border: 1px solid var(--border-color);
-    border-radius: 4px;
+    border-radius: 6px;
     color: var(--text-primary);
     cursor: pointer;
-    transition: background-color 0.2s;
+    font-size: 13px;
+    font-weight: 500;
+    transition: background-color 0.2s, border-color 0.2s, color 0.2s;
 }
 
 .secondary-btn:hover {
-    background-color: var(--hover-bg);
+    background-color: var(--accent-color);
+    border-color: var(--accent-color);
+    color: #ffffff;
 }
 
 .verify-result {
@@ -629,17 +635,78 @@ body.reduce-motion .progress-fill::after {
 }
 
 .filter-checkbox {
-    display: flex;
+    position: relative;
+    display: inline-flex;
     align-items: center;
-    gap: 6px;
+    gap: 8px;
+    padding: 6px 14px 6px 48px;
+    border-radius: 20px;
+    border: 1px solid var(--border-color);
+    background: var(--bg-tertiary);
     cursor: pointer;
     user-select: none;
+    transition: background-color 0.15s ease, border-color 0.15s ease;
+}
+
+.filter-checkbox:hover {
+    border-color: var(--accent-color);
 }
 
 .filter-checkbox input[type="checkbox"] {
+    position: absolute;
+    opacity: 0;
+    width: 0;
+    height: 0;
+    margin: 0;
     cursor: pointer;
-    width: 16px;
+}
+
+/* Mini toggle-switch track, drawn on the label itself (same visual language
+   as .toggle-switch/.toggle-slider, scaled down to fit inline in a filter row) */
+.filter-checkbox::before {
+    content: "";
+    position: absolute;
+    left: 10px;
+    top: 50%;
+    width: 30px;
     height: 16px;
+    border-radius: 999px;
+    background: var(--border-color);
+    transform: translateY(-50%);
+    transition: background-color 0.15s ease;
+}
+
+/* Toggle knob */
+.filter-checkbox::after {
+    content: "";
+    position: absolute;
+    left: 12px;
+    top: 50%;
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    background: #ffffff;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+    transform: translateY(-50%) translateX(0);
+    transition: transform 0.15s ease;
+}
+
+.filter-checkbox:has(input:checked) {
+    background: rgba(145, 70, 255, 0.12);
+    border-color: rgba(145, 70, 255, 0.4);
+}
+
+.filter-checkbox:has(input:checked)::before {
+    background: var(--accent-color);
+}
+
+.filter-checkbox:has(input:checked)::after {
+    transform: translateY(-50%) translateX(14px);
+}
+
+.filter-checkbox:has(input:focus-visible)::before {
+    outline: 2px solid var(--accent-color);
+    outline-offset: 2px;
 }
 
 .filter-checkbox span {
@@ -1055,7 +1122,7 @@ body.reduce-motion .progress-fill::after {
 
 .wanted-card-header {
     padding: 8px 12px;
-    background: var(--bg-tertiary, #262626);
+    background: var(--bg-tertiary);
     /* Slightly darker/different than panel */
     border-bottom: 1px solid var(--border-color);
 }
@@ -1209,14 +1276,15 @@ body.reduce-motion .progress-fill::after {
     grid-column: 1 / -1;
 }
 
-/* Visual order: General, Mining Benefits, Idle Behavior, Actions, spacer, then the two tracklists full-width */
+/* Visual order: General, Appearance, Mining Benefits, Idle Behavior, Actions, spacer, then the two tracklists full-width */
 .settings-general { order: 1; }
-.settings-benefits { order: 2; }
-.settings-idle { order: 3; }
-.settings-actions-section { order: 4; }
-.settings-spacer { order: 5; }
-.settings-games { order: 6; }
-.library-section { order: 7; }
+.settings-appearance { order: 2; }
+.settings-benefits { order: 3; }
+.settings-idle { order: 4; }
+.settings-actions-section { order: 5; }
+.settings-spacer { order: 6; }
+.settings-games { order: 7; }
+.library-section { order: 8; }
 
 .settings-spacer {
     grid-column: 1 / -1;
@@ -1239,14 +1307,104 @@ body.reduce-motion .progress-fill::after {
 }
 
 .settings-section select,
-.settings-section input[type="number"],
 .settings-section input[type="text"] {
-    padding: 8px;
+    padding: 9px 12px;
     border: 1px solid var(--border-color);
-    border-radius: 4px;
-    background: var(--bg-secondary);
+    border-radius: 6px;
+    background: var(--bg-panel);
     color: var(--text-primary);
-    margin-left: 10px;
+    font-size: 14px;
+    transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.settings-section select:focus,
+.settings-section input[type="text"]:focus {
+    outline: none;
+    border-color: var(--accent-color);
+    box-shadow: 0 0 0 3px rgba(145, 70, 255, 0.15);
+}
+
+/* Proxy URL + Set/Verify buttons */
+.proxy-input-group {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+}
+
+.proxy-input-group input[type="text"] {
+    flex: 1;
+    min-width: 220px;
+}
+
+/* Value sliders (Connection Quality, Minimum Refresh Interval) - styled like
+   the app's drop-progress bar: a draggable fill you can grab anywhere along
+   the track, with the current value printed on top. The native <input
+   type="range"> stays in the DOM (full drag/keyboard/touch support) but is
+   made fully transparent and stacked on top; the bar/fill/label beneath it
+   are purely decorative and kept in sync via JS (see updateSliderVisual). */
+.value-slider {
+    position: relative;
+    width: 100%;
+    max-width: 220px;
+    height: 30px;
+    background: var(--progress-bg);
+    border: 1px solid color-mix(in srgb, var(--accent-color) 25%, transparent);
+    border-radius: 15px;
+    overflow: hidden;
+    box-shadow: inset 0 2px 5px rgba(0, 0, 0, 0.2);
+}
+
+.value-slider-fill {
+    position: absolute;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    width: 0%;
+    min-width: 15px;
+    background: linear-gradient(
+        90deg,
+        color-mix(in srgb, var(--accent-color) 88%, black) 0%,
+        var(--accent-color) 100%
+    );
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent-color) 35%, transparent),
+        0 0 10px 0 color-mix(in srgb, var(--accent-color) 35%, transparent);
+    transition: width 0.15s ease;
+    pointer-events: none;
+}
+
+.value-slider-value {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--text-primary);
+    font-weight: 700;
+    font-size: 13px;
+    font-variant-numeric: tabular-nums;
+    /* halo so the number stays legible whether it lands over the accent
+       fill or the bare track, in both light and dark mode */
+    text-shadow: 0 0 4px var(--bg-panel), 0 0 4px var(--bg-panel), 0 0 4px var(--bg-panel);
+    pointer-events: none;
+    z-index: 1;
+}
+
+.value-slider input[type="range"] {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    margin: 0;
+    opacity: 0;
+    cursor: pointer;
+    -webkit-appearance: none;
+    appearance: none;
+    z-index: 2;
+}
+
+.value-slider:has(input:focus-visible) {
+    outline: 2px solid var(--accent-color);
+    outline-offset: 2px;
 }
 
 /* ==================== Game Library Sync ==================== */
@@ -1582,10 +1740,11 @@ body.reduce-motion .progress-fill::after {
 }
 
 .library-game-row {
+    position: relative;
     display: flex !important;
     align-items: center;
     gap: 10px;
-    padding: 7px 12px;
+    padding: 7px 12px 7px 52px;
     margin: 0 !important;
     cursor: pointer;
     border-bottom: 1px solid var(--border-color);
@@ -1601,8 +1760,52 @@ body.reduce-motion .progress-fill::after {
 }
 
 .library-game-row input[type="checkbox"] {
-    accent-color: var(--accent-color);
+    position: absolute;
+    opacity: 0;
+    width: 0;
+    height: 0;
     margin: 0 !important;
+}
+
+/* Mini toggle-switch track/knob, same visual language as .toggle-switch */
+.library-game-row::before {
+    content: "";
+    position: absolute;
+    left: 12px;
+    top: 50%;
+    width: 30px;
+    height: 16px;
+    border-radius: 999px;
+    background: var(--border-color);
+    transform: translateY(-50%);
+    transition: background-color 0.15s ease;
+}
+
+.library-game-row::after {
+    content: "";
+    position: absolute;
+    left: 14px;
+    top: 50%;
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    background: #ffffff;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+    transform: translateY(-50%) translateX(0);
+    transition: transform 0.15s ease;
+}
+
+.library-game-row:has(input:checked)::before {
+    background: var(--accent-color);
+}
+
+.library-game-row:has(input:checked)::after {
+    transform: translateY(-50%) translateX(14px);
+}
+
+.library-game-row:has(input:focus-visible)::before {
+    outline: 2px solid var(--accent-color);
+    outline-offset: 2px;
 }
 
 .library-game-name {
