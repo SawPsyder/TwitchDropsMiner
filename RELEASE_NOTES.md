@@ -1,3 +1,29 @@
+# Release Notes - v1.3.0
+
+This release introduces automatic game library syncing from Steam and Ubisoft Connect, smarter idle-time mining, and a batch of UI polish — plus a fix for watch-time tracking after Twitch changed how it counts minutes watched.
+
+### 🎮 Game Library Sync (New)
+- **Steam & Ubisoft Connect Integration**: The Miner can now automatically build your watch list from games you actually own. Link your Steam account (via a Steam Web API key) or Ubisoft Connect (via a browser-copied login ticket) and it'll match your library against active drop campaigns for you.
+- **Blacklist/Whitelist Modes**: Control exactly which synced games are eligible to be auto-watched, on top of your manually curated list.
+- **Tracked Games Awaiting Link**: A new panel surfaces manual and auto-synced games that have an active campaign but no linked account yet, with a one-click Link/Refresh Status action per game.
+
+### 💤 Idle Behavior
+- **Mine Anything When Idle**: New idle behavior settings let the Miner fall back to mining *any* game with an active campaign when your watched games have nothing currently earnable, instead of sitting idle.
+
+### 🔔 Notifications & UI Polish
+- **Drop-Collected Toasts**: Get an instant toast notification the moment a drop is collected.
+- **Animations Setting**: Added a user preference to toggle UI animations on or off.
+- **Settings Layout Refresh**: Reworked settings layout and terminology, and cleaned up the Help section, for a clearer experience.
+
+### 🌍 Simplified Language Support
+- **English Only**: Removed multi-language translation support. Maintaining accurate translations across many languages wasn't sustainable, so the app now focuses on keeping a single, well-maintained English experience.
+
+### 🐛 Bug Fixes
+- **Watch Time Tracking Restored**: Twitch stopped counting the old GraphQL watch-minute mutation, which could cause drop progress to stall. Watch events are now posted directly to Twitch's Spade endpoint instead, matching how the official site tracks watch time.
+
+### ⚙️ Infrastructure
+- **Versioned Container Images**: Tagged releases now publish versioned container images (e.g. `:1.3.0`, `:1.3`, `:1`, `:latest`) in addition to branch-based tags.
+
 # Release Notes - v1.2.4
 
 This update ensures compatibility with the latest Twitch systems and modernizes our environment requirements for a smoother experience. We’ve updated essential game directory hashes and bumped our Python requirements to keep the miner running at peak performance.
