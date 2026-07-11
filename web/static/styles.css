@@ -369,6 +369,13 @@ header h1 {
     font-size: 12px;
 }
 
+.progress-estimated {
+    text-align: center;
+    color: var(--warning-color);
+    font-size: 12px;
+    cursor: help;
+}
+
 /* Console Output */
 .console-output {
     height: 400px;

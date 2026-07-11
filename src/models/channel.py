@@ -6,7 +6,6 @@ import json
 import logging
 import re
 from base64 import b64encode
-from functools import cached_property
 from typing import TYPE_CHECKING, Any, SupportsInt, cast
 
 import aiohttp
@@ -45,30 +44,9 @@ class Stream:
         self.title: str = title
         self._stream_url: URLType | None = None
 
-    @cached_property
-    def _spade_payload(self) -> JsonType:
-        payload = [
-            {
-                "event": "minute-watched",
-                "properties": {
-                    "broadcast_id": str(self.broadcast_id),
-                    "channel_id": str(self.channel.id),
-                    "channel": self.channel._login,
-                    "hidden": False,
-                    "live": True,
-                    "location": "channel",
-                    "logged_in": True,
-                    "muted": False,
-                    "player": "site",
-                    "user_id": self.channel._twitch._auth_state.user_id,
-                },
-            }
-        ]
-        return {"data": (b64encode(json_minify(payload).encode("utf8"))).decode("utf8")}
-
     @property
-    def _gql_payload(self) -> GQLQuery:
-        payload = [
+    def _watch_payload(self) -> list[JsonType]:
+        return [
             {
                 "event": "minute-watched",
                 "properties": {
@@ -81,19 +59,32 @@ class Stream:
                     "hidden": False,
                     "is_live": True,
                     "live": True,
+                    "location": "channel",
                     "logged_in": True,
                     "minutes_logged": 1,
                     "muted": False,
-                    "user_id": self.channel._twitch._auth_state.user_id,
+                    "player": "site",
+                    "user_id": int(self.channel._twitch._auth_state.user_id),
                 },
             }
         ]
+
+    @property
+    def _spade_payload(self) -> JsonType:
+        return {"data": (b64encode(json_minify(self._watch_payload).encode("utf8"))).decode("utf8")}
+
+    # NOTE: This is currently unused - Twitch silently stopped counting watch time sent
+    # through the sendSpadeEvents GQL mutation (~July 2026); the Spade POST endpoint works.
+    @property
+    def _gql_payload(self) -> GQLQuery:
         return GQLQuery(
             (
                 "\n mutation SendEvents($input: SendSpadeEventsInput!) "
                 "{\n sendSpadeEvents(input: $input) {\n statusCode\n}\n}\n"
             ),
-            b64encode(gzip.compress(json_minify(payload).encode("utf8"))).decode("utf8"),
+            b64encode(gzip.compress(json_minify(self._watch_payload).encode("utf8"))).decode(
+                "utf8"
+            ),
         )
 
     @classmethod
@@ -326,20 +317,34 @@ class Channel:
         Streamer page (HTML) --parse-> Streamer Settings (JavaScript) --parse-> Spade URL
 
         For mobile view, spade_url is available immediately from the page, skipping step #2.
+
+        Both "beacon_url" and "spade_url" point to the same tracking service
+        (spade.sci.twitch.tv), but spade.twitch.tv is on common ad-block DNS lists
+        while beacon.twitch.tv isn't - so prefer the beacon one.
         """
         SETTINGS_PATTERN: str = r'src="(https://[\w.]+/config/settings\.[0-9a-f]{32}\.js)"'
-        SPADE_PATTERN: str = r'"beacon_?url": ?"(https://[^"]+)"'
+        SPADE_PATTERNS: tuple[str, ...] = (
+            r'"beacon_?url": ?"(https://[^"]+)"',
+            r'"spade_?url": ?"(https://[^"]+)"',
+        )
+
+        def find_spade_url(text: str) -> re.Match[str] | None:
+            for pattern in SPADE_PATTERNS:
+                if match := re.search(pattern, text, re.I):
+                    return match
+            return None
+
         async with self._twitch.request("GET", self.url) as response1:
             streamer_html: str = await response1.text(encoding="utf8")
-        match = re.search(SPADE_PATTERN, streamer_html, re.I)
+        match = find_spade_url(streamer_html)
         if not match:
-            match = re.search(SETTINGS_PATTERN, streamer_html, re.I)
-            if not match:
+            settings_match = re.search(SETTINGS_PATTERN, streamer_html, re.I)
+            if not settings_match:
                 raise MinerException("Error while spade_url extraction: step #1")
-            streamer_settings = match.group(1)
+            streamer_settings = settings_match.group(1)
             async with self._twitch.request("GET", streamer_settings) as response2:
                 settings_js: str = await response2.text(encoding="utf8")
-            match = re.search(SPADE_PATTERN, settings_js, re.I)
+            match = find_spade_url(settings_js)
             if not match:
                 raise MinerException("Error while spade_url extraction: step #2")
         return URLType(match.group(1))
@@ -502,12 +507,21 @@ class Channel:
         async with self._twitch.request("HEAD", stream_chunk_url) as head_response:
             return head_response.status == 200
 
-    # NOTE: This is currently unused.
-    async def _send_watch_spade(self) -> bool:
+    async def send_watch(self) -> bool:
+        """
+        Send a "minute-watched" event by POSTing it to the Spade tracking endpoint.
+
+        NOTE: spade.twitch.tv is on common ad-block DNS lists - if it resolves
+        to 0.0.0.0, watch time will not be counted (see README troubleshooting).
+        """
         if self._stream is None:
             return False
         if self._spade_url is None:
-            self._spade_url = await self.get_spade_url()
+            try:
+                self._spade_url = await self.get_spade_url()
+            except (MinerException, RequestException) as exc:
+                logger.warning(f"Spade URL extraction failed for {self.name}: {exc}")
+                return False
         try:
             async with self._twitch.request(
                 "POST", self._spade_url, data=self._stream._spade_payload
@@ -516,7 +530,10 @@ class Channel:
         except RequestException:
             return False
 
-    async def send_watch(self) -> bool:
+    # NOTE: This is currently unused - Twitch silently stopped counting watch time sent
+    # through the sendSpadeEvents GQL mutation (~July 2026): it still returns
+    # statusCode 204, but drop progress no longer advances.
+    async def _send_watch_gql(self) -> bool:
         if self._stream is None:
             return False
         try:

@@ -84,7 +84,9 @@
             "campaign_progress": "Progress:",
             "no_drop": "No active drop",
             "return_to_auto": "Return to Auto Mode",
-            "manual_mode_info": "Manual Mode: Mining"
+            "manual_mode_info": "Manual Mode: Mining",
+            "estimated_badge": "estimated",
+            "estimated_tooltip": "Twitch is not reporting progress right now - the shown minutes include a local estimate and may be inaccurate."
         },
         "channels": {
             "name": "Channels",

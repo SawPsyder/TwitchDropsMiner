@@ -175,16 +175,20 @@ lang/                # Translation JSON files (19 languages)
 
 ### Drop Mining Mechanism
 
-The application sends periodic "watch" payloads through Twitch GraphQL `sendSpadeEvents`:
+The application sends periodic "watch" payloads by POSTing to the Spade tracking endpoint
+(extracted from the channel page / settings.js; `beacon_url` is preferred over `spade_url`
+since spade.twitch.tv is on common ad-block DNS lists):
 
-- Payload contains gzip/base64-encoded minute-watched events with channel/broadcast IDs
+- Payload contains base64-encoded minute-watched events with channel/broadcast IDs
+- NOTE: the GQL `sendSpadeEvents` mutation stopped counting watch time (~July 2026) -
+  it still returns statusCode 204, but drop progress does not advance
 - Twitch reports progress via websocket (User.Drops topic)
 - If websocket updates stop, fallback to GQL CurrentDrop query
 - Extrapolation via "bump minutes" when no updates received
 
 ### GraphQL Operations
 
-Persisted operations are defined in `src/config/operations.py` as `GQL_OPERATIONS`; raw GraphQL payloads such as `sendSpadeEvents` use `GQLQuery`:
+Persisted operations are defined in `src/config/operations.py` as `GQL_OPERATIONS`; raw GraphQL payloads (e.g. the unused `sendSpadeEvents` variant) use `GQLQuery`:
 
 - **Inventory** - Fetch in-progress campaigns and claimed benefits
 - **Campaigns** - List available active/upcoming campaigns

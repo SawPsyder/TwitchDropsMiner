@@ -508,6 +508,18 @@ function updateDropProgress(data) {
     document.getElementById('progress-text').textContent =
         `${data.current_minutes} / ${data.required_minutes} minutes`;
 
+    // Warn when the shown minutes include a local estimate (Twitch isn't reporting progress)
+    const estimatedEl = document.getElementById('progress-estimated');
+    if (data.is_estimated) {
+        const progressT = state.translations.gui?.progress || {};
+        estimatedEl.textContent = `⚠ ${progressT.estimated_badge || 'estimated'}`;
+        estimatedEl.title = progressT.estimated_tooltip ||
+            'Twitch is not reporting progress right now - the shown minutes include a local estimate and may be inaccurate.';
+        estimatedEl.style.display = 'block';
+    } else {
+        estimatedEl.style.display = 'none';
+    }
+
     // Only reset the timer if it's a new drop or if backend time differs by more than 2 seconds
     // This prevents constant timer resets from periodic backend updates
     const shouldResetTimer = isNewDrop || oldRemaining === null || Math.abs(oldRemaining - data.remaining_seconds) > 2;

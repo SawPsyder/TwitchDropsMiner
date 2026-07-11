@@ -98,6 +98,8 @@ class GUIProgress(TypedDict):
     no_drop: str
     return_to_auto: str
     manual_mode_info: str
+    estimated_badge: str
+    estimated_tooltip: str
 
 
 class GUIChannels(TypedDict):
