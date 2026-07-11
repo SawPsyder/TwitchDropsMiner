@@ -639,7 +639,7 @@ class Twitch:
         """
         Sync external game libraries (Steam, ...) and refresh the auto watch
         list: owned games with active campaigns, ranked recently-played
-        (within 6 months) first, then by soonest campaign deadline. The auto
+        (within 12 months) first, then by soonest campaign deadline. The auto
         list ranks below the user's games_to_watch and never modifies it
         (see get_effective_watch_list).
 

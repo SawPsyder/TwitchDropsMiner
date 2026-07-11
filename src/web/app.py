@@ -416,6 +416,7 @@ async def connect(sid, environ):
                 "manual_mode": twitch_client.get_manual_mode_info(),
                 "current_drop": gui_manager.progress.get_current_drop(),
                 "wanted_items": gui_manager.get_wanted_game_tree(),
+                "unlinked_auto_items": gui_manager.get_unlinked_auto_tracked_items(),
                 "auto_watch_games": twitch_client.auto_watch_games,
             },
             room=sid,
@@ -449,6 +450,9 @@ async def get_wanted_items(sid):
     """Client requested wanted items list"""
     if gui_manager:
         await sio.emit("wanted_items_update", gui_manager.get_wanted_game_tree(), to=sid)
+        await sio.emit(
+            "unlinked_auto_items_update", gui_manager.get_unlinked_auto_tracked_items(), to=sid
+        )
 
 
 # Mount static files (CSS, JS, images)

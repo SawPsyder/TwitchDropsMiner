@@ -109,6 +109,14 @@
                         <p class="empty-message-small">No wanted drops queued...</p>
                     </div>
                 </section>
+
+                <!-- Tracked Games Awaiting Link -->
+                <section class="panel wanted-panel unlinked-auto-panel">
+                    <h2 id="unlinked-auto-header">Tracked Games Awaiting Link</h2>
+                    <div id="unlinked-auto-items-list" class="wanted-items-list">
+                        <p class="empty-message-small">No games awaiting link. Everything's linked!</p>
+                    </div>
+                </section>
             </div>
         </div>
 
@@ -440,6 +448,18 @@
             </div>
         </footer>
     </div>
+
+    <!-- Global Loading Overlay -->
+    <div id="loading-overlay" class="loading-overlay" style="display: none;">
+        <div class="loading-content">
+            <div class="loading-spinner"></div>
+            <div id="loading-headline" class="loading-headline"></div>
+            <div id="loading-message"></div>
+        </div>
+    </div>
+
+    <!-- Toast Notifications -->
+    <div id="toast-container" class="toast-container"></div>
 
     <script src="/static/app.js"></script>
 </body>

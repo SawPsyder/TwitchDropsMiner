@@ -164,14 +164,36 @@ class WebGUIManager:
             self._twitch.auto_watch_games,
         )
 
+    def get_unlinked_auto_tracked_items(self) -> list[dict]:
+        return self._stream_selector.get_unlinked_auto_tracked_tree(
+            self._twitch.settings,
+            self._twitch.inventory,
+            self._twitch.settings.games_to_watch,
+            self._twitch.auto_watch_games,
+        )
+
     def broadcast_wanted_items(self):
         """Broadcast the list of wanted items to connected clients."""
         tree = self.get_wanted_game_tree()
         asyncio.create_task(self._broadcaster.emit("wanted_items_update", tree))
+        asyncio.create_task(
+            self._broadcaster.emit("unlinked_auto_items_update", self.get_unlinked_auto_tracked_items())
+        )
 
     def broadcast_auto_watch(self, games: list[str]):
         """Broadcast the auto watch list (library-detected games) to connected clients."""
         asyncio.create_task(self._broadcaster.emit("auto_watch_update", {"games": list(games)}))
+
+    def notify_drop_collected(self, game_name: str, benefits: list[str]):
+        """Notify connected clients that a drop was successfully claimed, for a toast popup.
+
+        Args:
+            game_name: Name of the game the drop belongs to
+            benefits: Names of the benefits included in the claimed drop
+        """
+        asyncio.create_task(
+            self._broadcaster.emit("drop_collected", {"game": game_name, "benefits": benefits})
+        )
 
 
 # Type aliases for backwards compatibility with code that imports from gui

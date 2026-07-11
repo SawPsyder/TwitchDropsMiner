@@ -100,6 +100,7 @@ class GUIProgress(TypedDict):
     manual_mode_info: str
     estimated_badge: str
     estimated_tooltip: str
+    confirmation_pending: str
 
 
 class GUIChannels(TypedDict):
@@ -137,10 +138,18 @@ class GUIWantedSource(TypedDict):
     idle: str
 
 
+class GUIWantedUnlinkedAuto(TypedDict):
+    name: str
+    none: str
+    link_button: str
+    refresh_button: str
+
+
 class GUIWanted(TypedDict):
     name: str
     none: str
     source: GUIWantedSource
+    unlinked_auto: GUIWantedUnlinkedAuto
 
 
 class GUIInvFilters(TypedDict):
@@ -170,6 +179,7 @@ class GUIInventory(TypedDict):
     starts: str
     ends: str
     claimed_drops: str
+    refresh_status: str
     filters: GUIInvFilters
 
 
@@ -259,6 +269,21 @@ class GUIHeader(TypedDict):
     disconnected: str
 
 
+class GUILoadingOverlay(TypedDict):
+    reload_headline: str
+    reload_message: str
+
+
+class GUIToasts(TypedDict):
+    close: str
+    link_failed_headline: str
+    link_failed_message: str
+    link_success_headline: str
+    link_success_message: str
+    drop_collected_headline: str
+    drop_collected_message: str
+
+
 class GUIMessages(TypedDict):
     output: str
     status: GUIStatus
@@ -273,6 +298,8 @@ class GUIMessages(TypedDict):
     footer: GUIFooter
     badges: GUIBadges
     wanted: GUIWanted
+    loading: GUILoadingOverlay
+    toasts: GUIToasts
 
 
 class Translation(TypedDict):

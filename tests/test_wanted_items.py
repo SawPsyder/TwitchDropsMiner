@@ -48,6 +48,8 @@ class TestWantedItems(unittest.TestCase):
         c1.campaign_url = "http://url1"
         c1.game = Game({"id": 1, "name": "Game1", "boxArtURL": "http://img1"})
         c1.can_earn_within.return_value = True
+        c1.linked = True
+        c1.link_url = "http://link1"
 
         d1 = MagicMock(spec=TimedDrop)
         d1.name = "Drop1"
@@ -69,6 +71,8 @@ class TestWantedItems(unittest.TestCase):
         c2.campaign_url = "http://url2"
         c2.game = Game({"id": 2, "name": "Game2", "boxArtURL": "http://img2"})
         c2.can_earn_within.return_value = True
+        c2.linked = True
+        c2.link_url = "http://link2"
 
         d2 = MagicMock(spec=TimedDrop)
         d2.name = "Drop2"
@@ -90,6 +94,8 @@ class TestWantedItems(unittest.TestCase):
         c3.campaign_url = "http://url3"
         c3.game = Game({"id": 3, "name": "Game3", "boxArtURL": "http://img3"})
         c3.can_earn_within.return_value = True
+        c3.linked = True
+        c3.link_url = "http://link3"
 
         d3 = MagicMock(spec=TimedDrop)
         d3.name = "Drop3"
@@ -111,6 +117,8 @@ class TestWantedItems(unittest.TestCase):
         c4.campaign_url = "http://url4"
         c4.game = Game({"id": 1, "name": "Game1", "boxArtURL": "http://img1"})
         c4.can_earn_within.return_value = False
+        c4.linked = True
+        c4.link_url = "http://link4"
 
         d4 = MagicMock(spec=TimedDrop)
         d4.name = "Drop4"
@@ -156,6 +164,8 @@ class TestWantedItems(unittest.TestCase):
         c1.name = "Campaign1"
         c1.campaign_url = "http://url1"
         c1.game = Game({"id": 1, "name": "Game1", "boxArtURL": "http://img1"})
+        c1.linked = True
+        c1.link_url = "http://link1"
 
         d1 = MagicMock(spec=TimedDrop)
         d1.name = "Drop1"
@@ -173,6 +183,111 @@ class TestWantedItems(unittest.TestCase):
 
         # Verify
         self.assertEqual(len(result), 0)
+
+
+class TestUnlinkedAutoTrackedItems(unittest.TestCase):
+    def setUp(self):
+        self.twitch = MagicMock(spec=Twitch)
+        self.twitch.settings = MagicMock()
+        self.twitch.settings.idle_behavior = {"mine_all_when_idle": False}
+        self.twitch.get_change_state_callable.return_value = lambda: None
+        self.twitch.settings.games_to_watch = []
+        self.twitch.settings.mining_benefits = {"BADGE": True, "DIRECT_ENTITLEMENT": True}
+
+        self.gui = WebGUIManager(self.twitch)
+        self.gui._broadcaster = MagicMock()
+
+    def _make_campaign(
+        self, game_name: str, linked: bool, can_earn_within: bool = True
+    ) -> MagicMock:
+        campaign = MagicMock(spec=DropsCampaign)
+        campaign.id = f"{game_name}_campaign"
+        campaign.name = f"{game_name} Campaign"
+        campaign.campaign_url = f"http://test.url/{game_name}"
+        campaign.game = Game({"id": 1, "name": game_name, "boxArtURL": "http://img"})
+        campaign.can_earn_within.return_value = can_earn_within
+        campaign.linked = linked
+        campaign.link_url = f"http://link.url/{game_name}"
+        campaign.expired = False
+
+        drop = MagicMock(spec=TimedDrop)
+        drop.name = f"{game_name} Drop"
+        drop.is_claimed = False
+        drop.get_wanted_unclaimed_benefits = TimedDrop.get_wanted_unclaimed_benefits.__get__(
+            drop, TimedDrop
+        )
+        benefit = MagicMock(spec=Benefit)
+        benefit.name = "Badge1"
+        benefit.type = BenefitType.BADGE
+        benefit.is_wanted = Benefit.is_wanted.__get__(benefit, Benefit)
+        drop.benefits = [benefit]
+        campaign.drops = [drop]
+        return campaign
+
+    def test_unlinked_auto_tracked_game_is_surfaced(self):
+        self.twitch.auto_watch_games = ["Game1"]
+        self.twitch.inventory = [self._make_campaign("Game1", linked=False)]
+
+        result = self.gui.get_unlinked_auto_tracked_items()
+
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0]["game_name"], "Game1")
+        self.assertEqual(result[0]["source"], "auto")
+        self.assertFalse(result[0]["campaigns"][0]["linked"])
+
+    def test_unlinked_manual_game_is_surfaced(self):
+        self.twitch.settings.games_to_watch = ["Game1"]
+        self.twitch.auto_watch_games = []
+        self.twitch.inventory = [self._make_campaign("Game1", linked=False)]
+
+        result = self.gui.get_unlinked_auto_tracked_items()
+
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0]["game_name"], "Game1")
+        self.assertEqual(result[0]["source"], "manual")
+
+    def test_manual_and_auto_games_combined_manual_first_no_duplicates(self):
+        self.twitch.settings.games_to_watch = ["ManualGame", "SharedGame"]
+        self.twitch.auto_watch_games = ["SharedGame", "AutoGame"]
+        self.twitch.inventory = [
+            self._make_campaign("ManualGame", linked=False),
+            self._make_campaign("SharedGame", linked=False),
+            self._make_campaign("AutoGame", linked=False),
+        ]
+
+        result = self.gui.get_unlinked_auto_tracked_items()
+
+        self.assertEqual(
+            [entry["game_name"] for entry in result], ["ManualGame", "SharedGame", "AutoGame"]
+        )
+        self.assertEqual(
+            [entry["source"] for entry in result], ["manual", "manual", "auto"]
+        )
+
+    def test_linked_games_are_excluded(self):
+        self.twitch.auto_watch_games = ["Game1"]
+        self.twitch.inventory = [self._make_campaign("Game1", linked=True)]
+
+        result = self.gui.get_unlinked_auto_tracked_items()
+
+        self.assertEqual(result, [])
+
+    def test_unlinked_non_badge_campaign_still_surfaced(self):
+        # Regression test: DropsCampaign.eligible (and therefore
+        # can_earn_within, used by the main wanted queue) is False for an
+        # unlinked campaign that doesn't grant a badge/emote (e.g. an
+        # in-game item drop, like EVE Online's). This list must still
+        # surface it - that's the whole point of a "link me" prompt.
+        self.twitch.auto_watch_games = ["Game1"]
+        self.twitch.inventory = [
+            self._make_campaign("Game1", linked=False, can_earn_within=False)
+        ]
+
+        result = self.gui.get_unlinked_auto_tracked_items()
+
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0]["game_name"], "Game1")
+        self.assertFalse(result[0]["campaigns"][0]["linked"])
 
 
 if __name__ == "__main__":

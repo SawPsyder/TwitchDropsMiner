@@ -1,3 +1,4 @@
+from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 
 from src.config.settings import Settings
@@ -18,6 +19,7 @@ class StreamSelector:
         settings: Settings,
         campaigns: list[DropsCampaign],
         games_order: list[str] | None = None,
+        campaign_filter: Callable[[DropsCampaign], bool] | None = None,
     ) -> list[dict]:
         """
         Get the hierarchical tree of wanted items (Games -> Campaigns -> Drops -> Benefits).
@@ -26,11 +28,16 @@ class StreamSelector:
         games_order overrides the game name priority order (e.g. the two-tier
         watch list including library-detected games); defaults to the user's
         games_to_watch setting.
+
+        campaign_filter overrides which campaigns qualify for a game; defaults
+        to "can earn within the next hour" (requires the account to be linked
+        or the campaign to grant a badge/emote - see DropsCampaign.eligible).
         """
         wanted_games = []
         games_to_watch = games_order if games_order is not None else settings.games_to_watch
         mining_benefits = settings.mining_benefits
         next_hour = datetime.now(timezone.utc) + timedelta(hours=1)
+        is_campaign_wanted = campaign_filter or (lambda campaign: campaign.can_earn_within(next_hour))
 
         for game_name in games_to_watch:
             wanted_campaigns = []
@@ -45,7 +52,7 @@ class StreamSelector:
                 if game_obj is None:
                     game_obj = campaign.game
 
-                if not campaign.can_earn_within(next_hour):
+                if not is_campaign_wanted(campaign):
                     continue
 
                 wanted_drops = []
@@ -65,6 +72,8 @@ class StreamSelector:
                             "name": campaign.name,
                             "url": campaign.campaign_url,
                             "drops": wanted_drops,
+                            "linked": campaign.linked,
+                            "link_url": campaign.link_url,
                         }
                     )
 
@@ -162,3 +171,43 @@ class StreamSelector:
         primary_tree = self._get_primary_tree(settings, campaigns, manual_games, auto_games)
         tree = primary_tree if primary_tree else self._get_idle_tree(settings, campaigns, primary_tree)
         return [game["game_obj"] for game in tree]
+
+    def get_unlinked_auto_tracked_tree(
+        self,
+        settings: Settings,
+        campaigns: list[DropsCampaign],
+        manual_games: list[str] | None = None,
+        auto_games: list[str] | None = None,
+    ) -> list[dict]:
+        """
+        Games being watched - manually, or auto-detected by a library
+        tracker (Steam, Ubisoft, ...) - that have at least one campaign
+        whose Twitch account isn't linked yet, so nothing will actually be
+        mined until the user links it. Manual games come first, followed by
+        auto-detected ones not already on the manual list (case-insensitive,
+        no duplicates); each entry is tagged with a "source" of "manual" or
+        "auto". Only unlinked campaigns are kept per game.
+
+        This intentionally bypasses the "can earn within" / eligible check
+        used by the main wanted queue: DropsCampaign.eligible is only True
+        when the account is linked OR the campaign grants a badge/emote, so
+        an unlinked campaign without a badge/emote (e.g. an in-game item)
+        would otherwise never show up anywhere - defeating the purpose of
+        this list, which exists precisely to flag that case.
+        """
+        manual_games = manual_games if manual_games is not None else settings.games_to_watch
+        auto_games = list(auto_games) if auto_games else []
+        games_order = LibrarySyncService.combine_watch_lists(manual_games, auto_games)
+        if not games_order:
+            return []
+
+        manual_set = {name.casefold() for name in manual_games}
+        tree = self._get_wanted_game_tree(
+            settings,
+            campaigns,
+            games_order,
+            campaign_filter=lambda campaign: not campaign.linked and not campaign.expired,
+        )
+        for entry in tree:
+            entry["source"] = SOURCE_MANUAL if entry["game_name"].casefold() in manual_set else SOURCE_AUTO
+        return [{**game, "game_obj": None} for game in tree]

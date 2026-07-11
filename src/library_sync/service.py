@@ -220,7 +220,7 @@ class LibrarySyncService:
         passes the active blacklist/whitelist filter. Returned names are the
         Twitch game names (so they match campaigns exactly), ordered in two
         tiers:
-        1. Games played within the last 6 months, most recently played first.
+        1. Games played within the last 12 months, most recently played first.
         2. Everything else (played longer ago, or never played), ordered by
            campaign end date, soonest first, to minimize the chance of
            missing drops before they expire.

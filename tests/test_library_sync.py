@@ -359,7 +359,7 @@ class TestLibrarySyncService(unittest.TestCase):
         self.seed_owned_games(
             service,
             {
-                "Old Favorite": int((now - timedelta(days=150)).timestamp()),
+                "Old Favorite": int((now - timedelta(days=365)).timestamp()),
                 "Fresh Hit": int((now - timedelta(days=10)).timestamp()),
                 "Middle Game": int((now - timedelta(days=60)).timestamp()),
             },
@@ -369,7 +369,7 @@ class TestLibrarySyncService(unittest.TestCase):
             self.campaigns(["Middle Game", "Old Favorite", "Fresh Hit"])
         )
 
-        # all played within the last 6 months: most recently played first
+        # all played within the last 12 months: most recently played first
         self.assertEqual(result, ["Fresh Hit", "Middle Game", "Old Favorite"])
 
     def test_auto_watch_stale_games_ranked_below_recently_played(self):
@@ -379,8 +379,8 @@ class TestLibrarySyncService(unittest.TestCase):
         self.seed_owned_games(
             service,
             {
-                # played 200 days ago: outside the 6 month window
-                "Stale Game": int((now - timedelta(days=200)).timestamp()),
+                # played 366 days ago: outside the 12 month window
+                "Stale Game": int((now - timedelta(days=370)).timestamp()),
                 "Recent Game": int((now - timedelta(days=5)).timestamp()),
                 "Never Played": 0,
             },

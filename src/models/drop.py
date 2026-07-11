@@ -164,6 +164,9 @@ class BaseDrop:
             # wanted queue - push the updated tree to connected clients
             if self._twitch.gui is not None:
                 self._twitch.gui.broadcast_wanted_items()
+                self._twitch.gui.notify_drop_collected(
+                    self.campaign.game.name, [benefit.name for benefit in self.benefits]
+                )
         else:
             logger.error(f"Drop claim has potentially failed! Drop ID: {self.id}")
         return result

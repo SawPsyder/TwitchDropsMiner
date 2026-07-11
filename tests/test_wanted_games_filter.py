@@ -26,6 +26,8 @@ class TestWantedGamesFilter(unittest.TestCase):
         c1.id = "123"
         c1.name = "Test Campaign"
         c1.campaign_url = "http://test.url"
+        c1.linked = True
+        c1.link_url = "http://link.url"
         d1 = MagicMock()
         d1.name = "Test Drop"
         d1.is_claimed = False
@@ -99,7 +101,7 @@ class TestWantedGamesFilter(unittest.TestCase):
         self.assertEqual(wanted_games[0].name, "Game1")
 
 
-def _make_campaign(game_id: int, game_name: str) -> MagicMock:
+def _make_campaign(game_id: int, game_name: str, linked: bool = True) -> MagicMock:
     """A campaign with a single earnable, wanted (unclaimed BADGE) drop."""
     campaign = MagicMock(spec=DropsCampaign)
     campaign.id = f"{game_name}_campaign"
@@ -107,6 +109,9 @@ def _make_campaign(game_id: int, game_name: str) -> MagicMock:
     campaign.campaign_url = f"http://test.url/{game_name}"
     campaign.game = Game({"id": game_id, "name": game_name})
     campaign.can_earn_within.return_value = True
+    campaign.linked = linked
+    campaign.link_url = f"http://link.url/{game_name}"
+    campaign.expired = False
     drop = MagicMock()
     drop.name = f"{game_name} Drop"
     drop.is_claimed = False
@@ -197,6 +202,132 @@ class TestIdleBehaviorFallback(unittest.TestCase):
         wanted_games = self.stream_selector.get_wanted_games(self.settings, inventory, ["Game1"], [])
 
         self.assertEqual([g.name for g in wanted_games], ["Game1"])
+
+
+class TestUnlinkedAutoTrackedTree(unittest.TestCase):
+    """
+    Coverage for get_unlinked_auto_tracked_tree: the "games awaiting link"
+    list surfaced separately from the main wanted queue. Includes both
+    manually-watched and auto-tracked (Steam, Ubisoft, ...) games.
+    """
+
+    def setUp(self):
+        self.settings = MagicMock()
+        self.settings.games_to_watch = []
+        self.settings.idle_behavior = {"mine_all_when_idle": False}
+        self.settings.mining_benefits = {"BADGE": True, "DIRECT_ENTITLEMENT": True}
+        self.stream_selector = StreamSelector()
+
+    def test_empty_when_no_games(self):
+        inventory = [_make_campaign(1, "Game1", linked=False)]
+
+        tree = self.stream_selector.get_unlinked_auto_tracked_tree(
+            self.settings, inventory, manual_games=[], auto_games=[]
+        )
+
+        self.assertEqual(tree, [])
+
+    def test_unlinked_auto_game_is_surfaced(self):
+        inventory = [_make_campaign(1, "Game1", linked=False)]
+
+        tree = self.stream_selector.get_unlinked_auto_tracked_tree(
+            self.settings, inventory, manual_games=[], auto_games=["Game1"]
+        )
+
+        self.assertEqual(len(tree), 1)
+        self.assertEqual(tree[0]["game_name"], "Game1")
+        self.assertEqual(tree[0]["source"], "auto")
+        campaigns = tree[0]["campaigns"]
+        self.assertEqual(len(campaigns), 1)
+        self.assertFalse(campaigns[0]["linked"])
+        self.assertEqual(campaigns[0]["link_url"], "http://link.url/Game1")
+
+    def test_unlinked_manual_game_is_surfaced(self):
+        inventory = [_make_campaign(1, "Game1", linked=False)]
+
+        tree = self.stream_selector.get_unlinked_auto_tracked_tree(
+            self.settings, inventory, manual_games=["Game1"], auto_games=[]
+        )
+
+        self.assertEqual(len(tree), 1)
+        self.assertEqual(tree[0]["game_name"], "Game1")
+        self.assertEqual(tree[0]["source"], "manual")
+
+    def test_manual_games_listed_before_auto_games(self):
+        inventory = [
+            _make_campaign(1, "AutoGame", linked=False),
+            _make_campaign(2, "ManualGame", linked=False),
+        ]
+
+        tree = self.stream_selector.get_unlinked_auto_tracked_tree(
+            self.settings, inventory, manual_games=["ManualGame"], auto_games=["AutoGame"]
+        )
+
+        self.assertEqual([entry["game_name"] for entry in tree], ["ManualGame", "AutoGame"])
+        self.assertEqual(tree[0]["source"], "manual")
+        self.assertEqual(tree[1]["source"], "auto")
+
+    def test_game_in_both_lists_is_not_duplicated(self):
+        inventory = [_make_campaign(1, "Game1", linked=False)]
+
+        tree = self.stream_selector.get_unlinked_auto_tracked_tree(
+            self.settings, inventory, manual_games=["Game1"], auto_games=["Game1"]
+        )
+
+        self.assertEqual(len(tree), 1)
+        self.assertEqual(tree[0]["source"], "manual")
+
+    def test_linked_auto_game_is_excluded(self):
+        inventory = [_make_campaign(1, "Game1", linked=True)]
+
+        tree = self.stream_selector.get_unlinked_auto_tracked_tree(
+            self.settings, inventory, manual_games=[], auto_games=["Game1"]
+        )
+
+        self.assertEqual(tree, [])
+
+    def test_expired_unlinked_campaign_is_excluded(self):
+        campaign = _make_campaign(1, "Game1", linked=False)
+        campaign.expired = True
+
+        tree = self.stream_selector.get_unlinked_auto_tracked_tree(
+            self.settings, campaigns=[campaign], manual_games=[], auto_games=["Game1"]
+        )
+
+        self.assertEqual(tree, [])
+
+    def test_unlinked_non_badge_campaign_still_surfaced(self):
+        # Regression test: DropsCampaign.eligible (and can_earn_within, used
+        # by the main wanted queue) is False for an unlinked campaign that
+        # doesn't grant a badge/emote (e.g. an in-game item drop, like EVE
+        # Online's). This list must bypass that check - that's the whole
+        # point of a "link me" prompt.
+        campaign = _make_campaign(1, "Game1", linked=False)
+        campaign.can_earn_within.return_value = False
+
+        tree = self.stream_selector.get_unlinked_auto_tracked_tree(
+            self.settings, campaigns=[campaign], manual_games=[], auto_games=["Game1"]
+        )
+
+        self.assertEqual(len(tree), 1)
+        self.assertEqual(tree[0]["game_name"], "Game1")
+        self.assertFalse(tree[0]["campaigns"][0]["linked"])
+
+    def test_only_unlinked_campaigns_kept_when_game_has_both(self):
+        linked_campaign = _make_campaign(1, "Game1", linked=True)
+        unlinked_campaign = _make_campaign(1, "Game1", linked=False)
+        unlinked_campaign.id = "unlinked_campaign"
+        unlinked_campaign.name = "Unlinked Campaign"
+        inventory = [linked_campaign, unlinked_campaign]
+
+        tree = self.stream_selector.get_unlinked_auto_tracked_tree(
+            self.settings, inventory, manual_games=[], auto_games=["Game1"]
+        )
+
+        self.assertEqual(len(tree), 1)
+        campaigns = tree[0]["campaigns"]
+        self.assertEqual(len(campaigns), 1)
+        self.assertEqual(campaigns[0]["name"], "Unlinked Campaign")
 
 
 if __name__ == "__main__":

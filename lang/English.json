@@ -86,7 +86,8 @@
             "return_to_auto": "Return to Auto Mode",
             "manual_mode_info": "Manual Mode: Mining",
             "estimated_badge": "estimated",
-            "estimated_tooltip": "Twitch is not reporting progress right now - the shown minutes include a local estimate and may be inaccurate."
+            "estimated_tooltip": "Twitch is not reporting progress right now - the shown minutes include a local estimate and may be inaccurate.",
+            "confirmation_pending": "Drop confirmation pending..."
         },
         "channels": {
             "name": "Channels",
@@ -193,13 +194,32 @@
             }
         },
         "wanted": {
-            "name": "Wanted Drops Queue",
-            "none": "No wanted drops queued...",
+            "name": "Drops Queue",
+            "none": "No drops queued...",
             "source": {
                 "manual": "Manual",
                 "auto": "Auto",
                 "idle": "Idle"
+            },
+            "unlinked_auto": {
+                "name": "Tracked Games Awaiting Link",
+                "none": "No games awaiting link. Everything's linked!",
+                "link_button": "Link Account",
+                "refresh_button": "Refresh Status"
             }
+        },
+        "loading": {
+            "reload_headline": "Refreshing...",
+            "reload_message": "Fetching your updated campaigns and link status..."
+        },
+        "toasts": {
+            "close": "Close",
+            "link_failed_headline": "Account Link Failed",
+            "link_failed_message": "{game} still isn't linked. Please try linking again.",
+            "link_success_headline": "Account Linked",
+            "link_success_message": "{game} is now linked. Happy mining!",
+            "drop_collected_headline": "Drop Collected",
+            "drop_collected_message": "{game}: {benefits}"
         },
         "inventory": {
             "no_campaigns": "No campaigns loaded yet...",
@@ -212,6 +232,7 @@
             "starts": "Starts: {time}",
             "ends": "Ends: {time}",
             "claimed_drops": "claimed",
+            "refresh_status": "Refresh Status",
             "filters": {
                 "active": "Active",
                 "not_linked": "Not Linked",

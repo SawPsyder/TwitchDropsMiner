@@ -11,7 +11,11 @@ const state = {
     ownedGames: [],  // Owned games synced from library providers (for the blacklist/whitelist picker)
     currentDrop: null,
     countdownTimer: null,  // Track the active countdown timer
-    translations: {}  // Store current translations
+    translations: {},  // Store current translations
+    linkClickedCampaigns: new Set(),  // Campaign IDs where "Link Account" was clicked; shows a "Refresh Status" trigger
+    linkClickedAutoGames: new Set(),  // Game names where "Link Account" was clicked in the unlinked auto-tracked panel
+    unlinkedAutoItems: [],  // Latest "Games Awaiting Link" tree (kept in sync for post-refresh link checks)
+    pendingLinkCheck: null  // { kind: 'campaign'|'auto_game', campaignId?, gameName } - set right before a "Refresh Status" reload
 };
 
 // ==================== Animations / Reduced Motion ====================
@@ -192,6 +196,9 @@ socket.on('initial_state', (data) => {
     if (data.wanted_items) {
         renderWantedItems(data.wanted_items);
     }
+    if (data.unlinked_auto_items) {
+        renderUnlinkedAutoItems(data.unlinked_auto_items);
+    }
 });
 
 socket.on('status_update', (data) => {
@@ -337,13 +344,31 @@ socket.on('wanted_items_update', (data) => {
     renderWantedItems(data);
 });
 
+socket.on('unlinked_auto_items_update', (data) => {
+    renderUnlinkedAutoItems(data);
+});
+
+socket.on('drop_collected', (data) => {
+    const toastText = state.translations.gui?.toasts || {};
+    const benefits = (data.benefits || []).join(', ');
+    showToast(
+        'info',
+        toastText.drop_collected_headline || 'Drop Collected',
+        (toastText.drop_collected_message || '{game}: {benefits}')
+            .replace('{game}', data.game)
+            .replace('{benefits}', benefits)
+    );
+});
+
 // ==================== UI Update Functions ====================
 
 function updateStatus(status) {
     document.getElementById('status-text').textContent = status;
 
-    // Loading overlay disabled - UI remains responsive during backend operations
-    // Backend now uses batch updates to prevent flickering
+    // Note: the full-page loading overlay (see "Loading Overlay" section below)
+    // is opt-in and only shown explicitly (e.g. around reloadCampaigns()) - it
+    // is NOT tied to every status_update, since the backend uses batch updates
+    // to keep the UI responsive during normal background operations.
 }
 
 function addConsoleLine(message) {
@@ -589,10 +614,20 @@ function updateDropProgress(data) {
 }
 
 function updateRemainingTime(seconds) {
+    const timeEl = document.getElementById('progress-time');
+
+    // A local estimate can overshoot the required minutes before Twitch confirms
+    // progress, driving the ETA negative - show a pending message instead of that.
+    if (seconds < 0) {
+        const progressT = state.translations.gui?.progress || {};
+        timeEl.textContent = progressT.confirmation_pending || 'Drop confirmation pending...';
+        state.countdownTimer = null;
+        return;
+    }
+
     const minutes = Math.floor(seconds / 60);
     const secs = seconds % 60;
-    document.getElementById('progress-time').textContent =
-        `Time remaining: ${minutes}:${secs.toString().padStart(2, '0')}`;
+    timeEl.textContent = `Time remaining: ${minutes}:${secs.toString().padStart(2, '0')}`;
 
     if (seconds > 0) {
         // Store the timer ID so we can cancel it if needed
@@ -622,6 +657,7 @@ function addCampaign(campaignData) {
 
 function clearInventory() {
     state.campaigns = {};
+    state.linkClickedCampaigns.clear();
     renderInventory();
 }
 
@@ -1044,8 +1080,24 @@ function renderInventory() {
             el.appendChild(campaignNameLink);
             if (!campaign.linked && campaign.link_url) {
                 el.appendChild(makeElement('button', { class: 'link-account-btn' }, 'Link Account', btn => {
-                    btn.addEventListener('click', () => window.open(campaign.link_url, '_blank'));
+                    btn.addEventListener('click', () => {
+                        window.open(campaign.link_url, '_blank');
+                        if (!state.linkClickedCampaigns.has(campaign.id)) {
+                            state.linkClickedCampaigns.add(campaign.id);
+                            renderInventory();
+                        }
+                    });
                 }));
+                if (state.linkClickedCampaigns.has(campaign.id)) {
+                    const refreshStatusText = t.gui?.inventory?.refresh_status || 'Refresh Status';
+                    el.appendChild(makeElement('button', { class: 'link-account-btn refresh-status-btn' }, refreshStatusText, btn => {
+                        btn.addEventListener('click', () => reloadCampaigns({
+                            kind: 'campaign',
+                            campaignId: campaign.id,
+                            gameName: campaign.game_name
+                        }));
+                    }));
+                }
             }
         });
 
@@ -2323,6 +2375,9 @@ function applyTranslations(t) {
         if (wantedHeader) wantedHeader.textContent = t.gui.wanted.name;
         // Re-render wanted items to update empty message
         // Since we don't store wanted items in state globally (only receives them), we rely on updateWantedItems triggering render
+
+        const unlinkedAutoHeader = document.getElementById('unlinked-auto-header');
+        if (unlinkedAutoHeader) unlinkedAutoHeader.textContent = t.gui.wanted.unlinked_auto?.name || unlinkedAutoHeader.textContent;
     }
 
     // Update Inventory Filters (re-using existing inventoryTab variable if available, or just querying)
@@ -2385,12 +2440,248 @@ function applyTranslations(t) {
     }
 }
 
-async function reloadCampaigns() {
+// ==================== Toast Notifications ====================
+
+// info/success/warning auto-dismiss after their duration; error toasts have
+// no entry here and stay until manually closed.
+const TOAST_DURATIONS_MS = {
+    info: 5000,
+    success: 5000,
+    warning: 8000
+};
+
+const TOAST_ICONS = {
+    info: 'ℹ',
+    success: '✓',
+    warning: '⚠',
+    error: '⛔'
+};
+
+/**
+ * Show a toast notification.
+ * @param {'info'|'success'|'warning'|'error'} type
+ * @param {string} headline - Bold title line.
+ * @param {string} [message] - Optional secondary body text.
+ * @param {{duration?: number}} [opts] - Override the default auto-dismiss duration (ms).
+ * @returns {HTMLElement} the toast element, in case the caller wants to dismiss it early.
+ */
+function showToast(type, headline, message, opts = {}) {
+    const container = document.getElementById('toast-container');
+    if (!container) return null;
+
+    const kind = TOAST_ICONS[type] ? type : 'info';
+    const persistent = kind === 'error';
+    const closeLabel = state.translations.gui?.toasts?.close || 'Close';
+
+    const progressBar = makeElement('div', { class: 'toast-progress-bar' });
+    const toastEl = makeElement('div', { class: `toast ${kind}` }, '', el => {
+        el.appendChild(makeElement('div', { class: 'toast-header' }, '', header => {
+            header.appendChild(makeElement('span', { class: 'toast-icon' }, TOAST_ICONS[kind]));
+            header.appendChild(makeElement('span', { class: 'toast-headline' }, headline || ''));
+            header.appendChild(makeElement('button', { class: 'toast-close', type: 'button', title: closeLabel, 'aria-label': closeLabel }, '✕', btn => {
+                btn.addEventListener('click', () => dismissToast(toastEl));
+            }));
+        }));
+        if (message) {
+            el.appendChild(makeElement('div', { class: 'toast-body' }, message));
+        }
+        if (!persistent) {
+            el.appendChild(makeElement('div', { class: 'toast-progress-track' }, '', track => track.appendChild(progressBar)));
+        }
+    });
+
+    container.appendChild(toastEl);
+
+    if (!persistent) {
+        const duration = opts.duration || TOAST_DURATIONS_MS[kind] || 5000;
+        startToastTimer(toastEl, progressBar, duration);
+    }
+
+    return toastEl;
+}
+
+/**
+ * Drive a toast's auto-dismiss countdown and its visible progress bar,
+ * pausing both while the mouse hovers over the toast so users get a chance
+ * to read it before it disappears.
+ */
+function startToastTimer(toastEl, progressBar, initialDuration) {
+    let remaining = initialDuration;
+    let startedAt = 0;
+    let timerId = null;
+
+    const run = (ms) => {
+        startedAt = performance.now();
+        remaining = ms;
+        progressBar.style.transition = 'none';
+        void progressBar.offsetWidth;  // force reflow so the reset above takes effect
+        progressBar.style.transition = `width ${ms}ms linear`;
+        progressBar.style.width = '0%';
+        timerId = setTimeout(() => dismissToast(toastEl), ms);
+    };
+
+    const pause = () => {
+        if (timerId === null) return;
+        clearTimeout(timerId);
+        timerId = null;
+        remaining = Math.max(0, remaining - (performance.now() - startedAt));
+        progressBar.style.transition = 'none';
+        progressBar.style.width = getComputedStyle(progressBar).width;
+    };
+
+    const resume = () => {
+        if (remaining <= 0) {
+            dismissToast(toastEl);
+            return;
+        }
+        void progressBar.offsetWidth;
+        run(remaining);
+    };
+
+    toastEl.addEventListener('mouseenter', pause);
+    toastEl.addEventListener('mouseleave', resume);
+    requestAnimationFrame(() => run(initialDuration));
+}
+
+function dismissToast(toastEl) {
+    if (!toastEl || !toastEl.isConnected || toastEl.classList.contains('leaving')) return;
+    toastEl.classList.add('leaving');
+    // Fallback in case animationend doesn't fire (e.g. toast removed some other way).
+    const remove = () => toastEl.remove();
+    toastEl.addEventListener('animationend', remove, { once: true });
+    setTimeout(remove, 400);
+}
+
+// ==================== Loading Overlay ====================
+
+// Safety-net timeout for the loading overlay: if the socket event we're
+// waiting on never arrives (e.g. dropped connection), don't leave the user
+// stuck behind the overlay forever.
+const LOADING_OVERLAY_TIMEOUT_MS = 20000;
+let loadingOverlayTimeoutId = null;
+
+/**
+ * Show the full-page loading overlay.
+ * @param {string} [headline] - Optional bold headline text.
+ * @param {string} [message] - Optional secondary/sub text.
+ */
+function showLoadingOverlay(headline, message) {
+    const overlay = document.getElementById('loading-overlay');
+    if (!overlay) return;
+
+    const headlineEl = document.getElementById('loading-headline');
+    if (headlineEl) {
+        headlineEl.textContent = headline || '';
+        headlineEl.style.display = headline ? '' : 'none';
+    }
+
+    const messageEl = document.getElementById('loading-message');
+    if (messageEl) {
+        messageEl.textContent = message || '';
+        messageEl.style.display = message ? '' : 'none';
+    }
+
+    overlay.style.display = 'flex';
+}
+
+function hideLoadingOverlay() {
+    const overlay = document.getElementById('loading-overlay');
+    if (overlay) overlay.style.display = 'none';
+    if (loadingOverlayTimeoutId) {
+        clearTimeout(loadingOverlayTimeoutId);
+        loadingOverlayTimeoutId = null;
+    }
+}
+
+/**
+ * Hide the loading overlay as soon as the given one-off Socket.IO event is
+ * received, or after LOADING_OVERLAY_TIMEOUT_MS - whichever comes first.
+ * @param {string} eventName
+ * @param {() => void} [onDone] - called right after the overlay is hidden.
+ */
+function waitForOverlayDismissal(eventName, onDone) {
+    if (loadingOverlayTimeoutId) {
+        clearTimeout(loadingOverlayTimeoutId);
+    }
+    const finish = () => {
+        hideLoadingOverlay();
+        if (onDone) onDone();
+    };
+    socket.once(eventName, finish);
+    loadingOverlayTimeoutId = setTimeout(() => {
+        socket.off(eventName, finish);
+        finish();
+    }, LOADING_OVERLAY_TIMEOUT_MS);
+}
+
+/**
+ * Trigger a full campaign/inventory reload, showing the loading overlay
+ * until it's done.
+ * @param {{kind: 'campaign', campaignId: string, gameName: string} | {kind: 'auto_game', gameName: string} | null} [linkCheck] -
+ *   context to verify once the refresh completes (e.g. from a "Refresh Status"
+ *   button click), so we can warn the user if the account still isn't linked.
+ */
+async function reloadCampaigns(linkCheck = null) {
+    state.pendingLinkCheck = linkCheck;
+    const loadingText = state.translations.gui?.loading || {};
+    showLoadingOverlay(
+        loadingText.reload_headline || 'Refreshing...',
+        loadingText.reload_message || 'Fetching your updated campaigns and link status...'
+    );
+    // unlinked_auto_items_update is broadcast once per full inventory refresh
+    // (right after campaigns/wanted-items are recomputed), making it a
+    // reliable "the reload is done" signal.
+    waitForOverlayDismissal('unlinked_auto_items_update', checkPendingLinkStatus);
     try {
         await fetch('/api/reload', { method: 'POST' });
         // Status will update via Socket.IO when backend starts operation
     } catch (error) {
         console.error('Failed to reload:', error);
+        hideLoadingOverlay();
+        state.pendingLinkCheck = null;
+    }
+}
+
+/**
+ * After a reload triggered by a "Refresh Status" click, check whether the
+ * account actually got linked. If not, revert the button back to "Link
+ * Account" and warn the user via a toast.
+ */
+function checkPendingLinkStatus() {
+    const pending = state.pendingLinkCheck;
+    state.pendingLinkCheck = null;
+    if (!pending) return;
+
+    const toastText = state.translations.gui?.toasts || {};
+    let linked = null;  // null = couldn't determine (e.g. campaign no longer present)
+
+    if (pending.kind === 'campaign') {
+        const campaign = state.campaigns[pending.campaignId];
+        if (campaign) linked = !!campaign.linked;
+    } else if (pending.kind === 'auto_game') {
+        const stillUnlinked = state.unlinkedAutoItems.some(entry => entry.game_name === pending.gameName);
+        linked = !stillUnlinked;
+    }
+
+    if (linked === false) {
+        if (pending.kind === 'campaign') {
+            state.linkClickedCampaigns.delete(pending.campaignId);
+            renderInventory();
+        } else if (pending.kind === 'auto_game') {
+            state.linkClickedAutoGames.delete(pending.gameName);
+            renderUnlinkedAutoItems(state.unlinkedAutoItems);
+        }
+        showToast(
+            'warning',
+            toastText.link_failed_headline || 'Account Link Failed',
+            (toastText.link_failed_message || "{game} still isn't linked. Please try linking again.").replace('{game}', pending.gameName)
+        );
+    } else if (linked === true) {
+        showToast(
+            'success',
+            toastText.link_success_headline || 'Account Linked',
+            (toastText.link_success_message || '{game} is now linked. Happy mining!').replace('{game}', pending.gameName)
+        );
     }
 }
 
@@ -2466,7 +2757,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     });
     document.getElementById('verify-proxy-btn').addEventListener('click', verifyProxy);
-    document.getElementById('reload-btn').addEventListener('click', reloadCampaigns);
+    document.getElementById('reload-btn').addEventListener('click', () => reloadCampaigns());
     document.getElementById('idle-mine-all-when-idle').addEventListener('change', saveSettings);
 
 
@@ -2562,7 +2853,7 @@ function renderWantedItems(tree) {
     container.innerHTML = '';
 
     if (!tree || tree.length === 0) {
-        const emptyMsg = state.translations.gui?.wanted?.none || 'No wanted drops queued...';
+        const emptyMsg = state.translations.gui?.wanted?.none || 'No drops queued...';
         container.replaceChildren(makeElement('p', { class: 'empty-message-small' }, emptyMsg));
         return;
     }
@@ -2609,6 +2900,108 @@ function renderWantedItems(tree) {
                 el.appendChild(makeElement('div', { class: 'wanted-card-body' }, '', b =>
                     b.appendChild(dropContainer)
                 ));
+            });
+
+            campaign.drops.forEach(drop => {
+                const dropEl = makeElement('div', { class: 'wanted-drop-item' }, '', el => {
+                    el.appendChild(makeElement('span', { class: 'wanted-drop-name' }, drop.name));
+                    drop.benefits.forEach(benefit => {
+                        el.appendChild(makeElement('span', { class: 'wanted-benefit-pill' }, benefit));
+                    });
+                });
+                dropContainer.appendChild(dropEl);
+            });
+
+            campaignListEl.appendChild(cardEl);
+        });
+
+        groupEl.appendChild(campaignListEl);
+        container.appendChild(groupEl);
+    });
+}
+
+function renderUnlinkedAutoItems(tree) {
+    const container = document.getElementById('unlinked-auto-items-list');
+    if (!container) return;
+
+    container.innerHTML = '';
+
+    const t = state.translations;
+    state.unlinkedAutoItems = tree || [];
+    if (!tree || tree.length === 0) {
+        const emptyMsg = t.gui?.wanted?.unlinked_auto?.none || "No games awaiting link. Everything's linked!";
+        container.replaceChildren(makeElement('p', { class: 'empty-message-small' }, emptyMsg));
+        return;
+    }
+
+    const linkText = t.gui?.wanted?.unlinked_auto?.link_button || 'Link Account';
+    const refreshText = t.gui?.wanted?.unlinked_auto?.refresh_button || 'Refresh Status';
+
+    tree.forEach((gameGroup) => {
+        const groupEl = document.createElement('div');
+        groupEl.className = 'wanted-game-group';
+
+        // Game Icon
+        let iconUrl = gameGroup.game_icon;
+        if (iconUrl) {
+            iconUrl = iconUrl.replace('{width}', '40').replace('{height}', '53');
+        }
+
+        const headerChildren = [];
+        if (iconUrl) {
+            headerChildren.push(makeImageElement(iconUrl, gameGroup.game_name, 'wanted-game-icon'));
+        }
+        headerChildren.push(makeElement('span', { class: 'wanted-game-title' }, gameGroup.game_name));
+        if (gameGroup.source) {
+            const sourceLabels = t.gui?.wanted?.source || {};
+            const sourceLabel = sourceLabels[gameGroup.source] || gameGroup.source;
+            headerChildren.push(makeElement(
+                'span',
+                { class: `wanted-source-badge ${gameGroup.source}`, title: sourceLabel },
+                sourceLabel
+            ));
+        }
+
+        const headerEl = makeElement('div', { class: 'wanted-game-header' }, '', el => {
+            headerChildren.forEach(child => el.appendChild(child));
+        });
+        groupEl.appendChild(headerEl);
+
+        // Single Link Account button per game (covers every unlinked campaign for it)
+        const gameKey = gameGroup.game_name;
+        const linkUrl = gameGroup.campaigns[0]?.link_url;
+        if (linkUrl) {
+            const actionsEl = makeElement('div', { class: 'wanted-game-actions' }, '', el => {
+                el.appendChild(makeElement('button', { class: 'link-account-btn' }, linkText, btn => {
+                    btn.addEventListener('click', () => {
+                        window.open(linkUrl, '_blank');
+                        if (!state.linkClickedAutoGames.has(gameKey)) {
+                            state.linkClickedAutoGames.add(gameKey);
+                            renderUnlinkedAutoItems(tree);
+                        }
+                    });
+                }));
+                if (state.linkClickedAutoGames.has(gameKey)) {
+                    el.appendChild(makeElement('button', { class: 'link-account-btn refresh-status-btn' }, refreshText, btn => {
+                        btn.addEventListener('click', () => reloadCampaigns({ kind: 'auto_game', gameName: gameKey }));
+                    }));
+                }
+            });
+            groupEl.appendChild(actionsEl);
+        }
+
+        const campaignListEl = document.createElement('div');
+        campaignListEl.className = 'wanted-campaign-list';
+
+        gameGroup.campaigns.forEach(campaign => {
+            const dropContainer = makeElement('div', {});
+            const cardEl = makeElement('div', { class: 'wanted-card' }, '', el => {
+                el.appendChild(makeElement('div', { class: 'wanted-card-header' }, '', h =>
+                    h.appendChild(makeElement('a', { href: campaign.url, target: '_blank', rel: 'noopener noreferrer', class: 'wanted-card-campaign-link', title: campaign.name }, campaign.name))
+                ));
+                el.appendChild(makeElement('div', { class: 'wanted-card-body' }, '', b => {
+                    b.appendChild(dropContainer);
+                }));
             });
 
             campaign.drops.forEach(drop => {

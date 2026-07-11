@@ -119,6 +119,15 @@ active campaign instead of leaving the queue empty. Each queue entry is tagged w
 failures are logged but never break the mining loop. New platforms subclass `LibraryProvider` and
 get registered in `LibrarySyncService._providers`.
 
+`StreamSelector.get_unlinked_auto_tracked_tree()` surfaces manually-watched and auto-tracked games
+that have at least one campaign whose account isn't linked yet - manual games first, then
+auto-tracked ones not already on the manual list (no duplicates), each tagged `"manual"`/`"auto"`.
+It intentionally bypasses the eligible/can-earn-within gate above, since an unlinked campaign
+without a badge/emote reward is never "eligible" and would otherwise never surface anywhere. The
+web GUI shows this as a dedicated, unordered "Tracked Games Awaiting Link" panel (below the Wanted
+Drop Queue) with a single Link/Refresh Status button per game card - pushed via the
+`unlinked_auto_items_update` Socket.IO event and the `unlinked_auto_items` key in `initial_state`.
+
 ### Channel selection priority
 
 1. User-selected channel (if clicked in UI)

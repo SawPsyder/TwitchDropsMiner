@@ -285,7 +285,7 @@ a {
 .main-grid {
     display: grid;
     grid-template-columns: 1fr 1fr;
-    grid-template-rows: auto auto auto;
+    grid-template-rows: auto auto auto auto;
     gap: 20px;
     min-height: 70vh;
 }
@@ -311,6 +311,10 @@ a {
 .wanted-panel {
     grid-column: 1 / -1;
     grid-row: 3;
+}
+
+.wanted-panel.unlinked-auto-panel {
+    grid-row: 4;
 }
 
 /* Login */
@@ -649,6 +653,11 @@ body.reduce-motion .progress-fill::after {
     align-items: flex-start;
 }
 
+.filter-search .small-btn {
+    margin-top: auto;
+    height: 38px;
+}
+
 .game-dropdown-container {
     position: relative;
     flex: 1;
@@ -894,6 +903,17 @@ body.reduce-motion .progress-fill::after {
     box-shadow: 0 1px 2px rgba(255, 167, 38, 0.3);
 }
 
+.refresh-status-btn {
+    margin-top: 8px;
+    background: var(--accent-color);
+    box-shadow: 0 2px 4px color-mix(in srgb, var(--accent-color) 30%, transparent);
+}
+
+.refresh-status-btn:hover {
+    background: var(--accent-color-dark);
+    box-shadow: 0 3px 6px color-mix(in srgb, var(--accent-color) 40%, transparent);
+}
+
 .campaign-status {
     padding: 10px 15px;
     font-size: 12px;
@@ -929,7 +949,7 @@ body.reduce-motion .progress-fill::after {
 }
 
 /* Wanted Items Tree / Groups */
-#wanted-items-list {
+.wanted-items-list {
     display: flex;
     flex-wrap: nowrap;
     gap: 20px;
@@ -937,7 +957,7 @@ body.reduce-motion .progress-fill::after {
 }
 
 .wanted-game-group {
-    min-width: 302px;
+    min-width: 314px;
     background: var(--bg-secondary);
     border: 1px solid var(--border-color);
     border-radius: 8px;
@@ -982,6 +1002,20 @@ body.reduce-motion .progress-fill::after {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+}
+
+.wanted-game-actions {
+    display: flex;
+    gap: 8px;
+    padding: 10px 15px;
+    background: var(--bg-panel);
+    border-bottom: 1px solid var(--border-color);
+}
+
+.wanted-game-actions .link-account-btn {
+    margin-top: 0;
+    width: auto;
+    flex: 1;
 }
 
 .wanted-source-badge {
@@ -1897,10 +1931,154 @@ body.dnd-active .sortable-item.dragging {
     }
 }
 
+.loading-headline {
+    font-size: 20px;
+    font-weight: 700;
+    color: var(--text-primary);
+}
+
 #loading-message {
     font-size: 16px;
     color: var(--text-primary);
     margin-top: 10px;
+}
+
+/* Toast Notifications */
+.toast-container {
+    position: fixed;
+    top: 20px;
+    right: 20px;
+    z-index: 10000;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    width: 340px;
+    max-width: calc(100vw - 40px);
+    pointer-events: none;
+}
+
+.toast {
+    pointer-events: auto;
+    background: var(--bg-panel);
+    border: 1px solid var(--border-color);
+    border-left: 4px solid var(--accent-color);
+    border-radius: 8px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+    overflow: hidden;
+    animation: toast-in 0.25s ease-out;
+}
+
+.toast.leaving {
+    animation: toast-out 0.2s ease-in forwards;
+}
+
+.toast.success {
+    border-left-color: var(--success-color);
+}
+
+.toast.warning {
+    border-left-color: var(--warning-color);
+}
+
+.toast.error {
+    border-left-color: var(--error-color);
+}
+
+.toast-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 12px 10px 6px 14px;
+}
+
+.toast-icon {
+    font-size: 15px;
+    line-height: 1;
+    flex-shrink: 0;
+}
+
+.toast-headline {
+    flex: 1;
+    min-width: 0;
+    font-weight: 700;
+    font-size: 14px;
+    color: var(--text-primary);
+    overflow-wrap: break-word;
+}
+
+.toast-close {
+    flex-shrink: 0;
+    background: none;
+    border: none;
+    color: var(--text-secondary);
+    font-size: 15px;
+    line-height: 1;
+    cursor: pointer;
+    padding: 4px;
+    border-radius: 4px;
+    transition: color 0.15s, background 0.15s;
+}
+
+.toast-close:hover {
+    color: var(--text-primary);
+    background: rgba(255, 255, 255, 0.08);
+}
+
+.toast-body {
+    padding: 0 14px 12px 14px;
+    font-size: 13px;
+    line-height: 1.4;
+    color: var(--text-secondary);
+    overflow-wrap: break-word;
+}
+
+.toast-progress-track {
+    height: 3px;
+    background: rgba(255, 255, 255, 0.08);
+}
+
+.toast-progress-bar {
+    height: 100%;
+    width: 100%;
+    background: var(--accent-color);
+    transition-property: width;
+    transition-timing-function: linear;
+}
+
+.toast.success .toast-progress-bar {
+    background: var(--success-color);
+}
+
+.toast.warning .toast-progress-bar {
+    background: var(--warning-color);
+}
+
+.toast.error .toast-progress-bar {
+    background: var(--error-color);
+}
+
+@keyframes toast-in {
+    from {
+        opacity: 0;
+        transform: translateX(24px);
+    }
+
+    to {
+        opacity: 1;
+        transform: translateX(0);
+    }
+}
+
+@keyframes toast-out {
+    from {
+        opacity: 1;
+        transform: translateX(0);
+    }
+
+    to {
+        opacity: 0;
+        transform: translateX(24px);
+    }
 }
 
 /* Manual Mode Styles */
@@ -2142,7 +2320,6 @@ body.dnd-active .sortable-item.dragging {
 .action-button:hover,
 .secondary-btn:hover,
 .small-btn:hover {
-    transform: translateY(-1px);
     box-shadow: 0 4px 10px rgba(0, 0, 0, 0.15);
 }
 
@@ -2192,8 +2369,7 @@ body.dnd-active .sortable-item.dragging {
     transition: transform 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease;
 }
 
-.campaign-card:hover,
-.wanted-card:hover {
+.campaign-card:hover {
     box-shadow: 0 6px 16px rgba(0, 0, 0, 0.12);
 }
 
