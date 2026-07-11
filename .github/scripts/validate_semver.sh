@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# grep -P needs an explicit UTF-8 locale - on some shells (e.g. Git Bash on
+# Windows) the ambient locale resolves to something grep rejects even though
+# `locale` reports UTF-8, causing "grep: -P supports only unibyte and UTF-8
+# locales" (exit 2) on every call below.
+export LC_ALL=C.UTF-8
+
 # Script: validate_semver.sh
 # Description: Validates version strings against SemVer specification
 # Usage: validate_semver.sh <version>

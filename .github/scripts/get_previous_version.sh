@@ -1,5 +1,9 @@
 #!/bin/bash
 
+# grep -oP needs an explicit UTF-8 locale in some shells (e.g. Git Bash on
+# Windows) - see validate_semver.sh for details.
+export LC_ALL=C.UTF-8
+
 # get_previous_version.sh - Extract versions from git history with chronological filtering
 # Usage: get_previous_version.sh [version]
 #

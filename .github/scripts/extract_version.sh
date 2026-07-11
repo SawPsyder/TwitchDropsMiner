@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# grep -oP needs an explicit UTF-8 locale in some shells (e.g. Git Bash on
+# Windows) - see validate_semver.sh for details.
+export LC_ALL=C.UTF-8
+
 # Script: extract_version.sh
 # Description: Validates that src/version.py and pyproject.toml agree, and
 #              outputs the current version.
