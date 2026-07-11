@@ -79,6 +79,12 @@ class SettingsManager:
         should_trigger_update |= self.check_and_update_setting(
             "dark_mode", settings_data.get("dark_mode")
         )
+        if settings_data.get("idle_behavior") is not None:
+            should_trigger_update |= self.check_and_update_setting(
+                "idle_behavior",
+                self._sanitize_idle_behavior(settings_data["idle_behavior"]),
+                True,
+            )
         # guard against empty/unknown values (e.g. saves sent before the
         # frontend language dropdown is populated) - never abort the update
         language = settings_data.get("language") or None
@@ -148,6 +154,14 @@ class SettingsManager:
         self._log_change(f"Setting changed: {key} = {log_value if log_value is not None else new_value}")
         action(new_value)
         return should_trigger_update
+
+    def _sanitize_idle_behavior(self, value: dict[str, Any]) -> dict[str, Any]:
+        """Validate an incoming idle_behavior settings object against the current one."""
+        sanitized: dict[str, Any] = dict(value)
+        current: dict[str, Any] = dict(self._settings.idle_behavior)
+        merge_json(sanitized, current)
+        sanitized["mine_all_when_idle"] = bool(sanitized["mine_all_when_idle"])
+        return sanitized
 
     def _sanitize_library_sync(self, value: dict[str, Any]) -> dict[str, Any]:
         """Validate an incoming library_sync settings object against the current one.

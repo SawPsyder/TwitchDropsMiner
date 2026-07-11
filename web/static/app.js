@@ -1136,6 +1136,12 @@ function updateSettingsUI(settings) {
     }
 
 
+    // Restore idle behavior settings
+    const idleMineAllCheckbox = document.getElementById('idle-mine-all-when-idle');
+    if (idleMineAllCheckbox) {
+        idleMineAllCheckbox.checked = settings.idle_behavior?.mine_all_when_idle !== false;
+    }
+
     // Restore library sync settings
     updateLibrarySyncUI(settings.library_sync);
 
@@ -1884,6 +1890,9 @@ async function saveSettings() {
         minimum_refresh_interval_minutes: parseInt(document.getElementById('minimum-refresh-interval').value),
         proxy: state.settings.proxy || '',
         games_to_watch: state.settings.games_to_watch || [],
+        idle_behavior: {
+            mine_all_when_idle: document.getElementById('idle-mine-all-when-idle')?.checked !== false
+        },
         inventory_filters: getInventoryFilters(),
         mining_benefits: {
             "DIRECT_ENTITLEMENT": document.getElementById('mining-benefit-item')?.checked,
@@ -1961,14 +1970,12 @@ function applyTranslations(t) {
     const tabButtons = {
         'main': document.querySelector('[data-tab="main"]'),
         'inventory': document.querySelector('[data-tab="inventory"]'),
-        'settings': document.querySelector('[data-tab="settings"]'),
-        'help': document.querySelector('[data-tab="help"]')
+        'settings': document.querySelector('[data-tab="settings"]')
     };
 
     if (tabButtons.main && t.gui?.tabs) tabButtons.main.textContent = t.gui.tabs.main;
     if (tabButtons.inventory && t.gui?.tabs) tabButtons.inventory.textContent = t.gui.tabs.inventory;
     if (tabButtons.settings && t.gui?.tabs) tabButtons.settings.textContent = t.gui.tabs.settings;
-    if (tabButtons.help && t.gui?.tabs) tabButtons.help.textContent = t.gui.tabs.help;
 
     // Update Main tab - Login section
     const mainTab = document.getElementById('main-tab');
@@ -2111,6 +2118,15 @@ function applyTranslations(t) {
         const reloadBtn = document.getElementById('reload-btn');
         if (reloadBtn) reloadBtn.textContent = t.gui.settings.reload_campaigns;
 
+        // Idle behavior section
+        const idleBehavior = t.gui.settings.idle_behavior;
+        if (idleBehavior) {
+            const idleHeader = document.getElementById('settings-idle-header');
+            if (idleHeader && idleBehavior.name) idleHeader.textContent = idleBehavior.name;
+            const idleHelp = document.getElementById('settings-idle-help');
+            if (idleHelp && idleBehavior.help) idleHelp.textContent = idleBehavior.help;
+        }
+
         // Library sync section
         const library = t.gui.settings.library;
         if (library) {
@@ -2141,61 +2157,6 @@ function applyTranslations(t) {
 
         // Re-render games to watch with translated empty messages
         renderGamesToWatch();
-    }
-
-    // Update Help tab
-    const helpTab = document.getElementById('help-tab');
-    if (helpTab && t.gui?.help) {
-        // Robust ID selection for Help tab headers
-        const aboutHeader = document.getElementById('help-about-header');
-        if (aboutHeader) aboutHeader.textContent = t.gui.help.about || 'About Twitch Drops Miner';
-
-        const howtoHeader = document.getElementById('help-howto-header');
-        if (howtoHeader) howtoHeader.textContent = t.gui.help.how_to_use || 'How to Use';
-
-        const featuresHeader = document.getElementById('help-features-header');
-        if (featuresHeader) featuresHeader.textContent = t.gui.help.features || 'Features';
-
-        const notesHeader = document.getElementById('help-notes-header');
-        if (notesHeader) notesHeader.textContent = t.gui.help.important_notes || 'Important Notes';
-
-        // Update list items and links (keeping innerHTML approach for lists as they are dynamic content blocks)
-        const helpContent = helpTab.querySelector('.help-content');
-        if (helpContent) {
-            const howToItems = t.gui.help.how_to_use_items || [
-                'Login using your Twitch account (OAuth device code flow)',
-                'Link your accounts at <a href="https://www.twitch.tv/drops/campaigns" target="_blank">twitch.tv/drops/campaigns</a>',
-                'The miner will automatically discover campaigns and start mining',
-                'Configure priority games in Settings to focus on what you want',
-                'Monitor progress in the Main and Inventory tabs'
-            ];
-            const featuresItems = t.gui.help.features_items || [
-                'Stream-less drop mining - saves bandwidth',
-                'Game priority and exclusion lists',
-                'Tracks up to 199 channels simultaneously',
-                'Automatic channel switching',
-                'Real-time progress tracking'
-            ];
-            const notesItems = t.gui.help.important_notes_items || [
-                'Do not watch streams on the same account while mining',
-                'Keep your cookies.jar file secure',
-                'Requires linked game accounts for drops'
-            ];
-
-            helpContent.replaceChildren(
-                makeElement('h2', { id: 'help-about-header' }, t.gui.help.about || 'About Twitch Drops Miner'),
-                makeElement('p', {}, t.gui.help.about_text || 'This application automatically mines timed Twitch drops without downloading stream data.'),
-                makeElement('h3', { id: 'help-howto-header' }, t.gui.help.how_to_use || 'How to Use'),
-                makeHelpList('ol', howToItems),
-                makeElement('h3', { id: 'help-features-header' }, t.gui.help.features || 'Features'),
-                makeHelpList('ul', featuresItems),
-                makeElement('h3', { id: 'help-notes-header' }, t.gui.help.important_notes || 'Important Notes'),
-                makeHelpList('ul', notesItems),
-                makeElement('div', { class: 'help-links' }, '', el =>
-                    el.appendChild(makeElement('a', { href: 'https://github.com/rangermix/TwitchDropsMiner', target: '_blank', rel: 'noopener noreferrer' }, t.gui.help.github_repo || 'GitHub Repository'))
-                ),
-            );
-        }
     }
 
     // Update Footer
@@ -2368,6 +2329,7 @@ document.addEventListener('DOMContentLoaded', () => {
     });
     document.getElementById('verify-proxy-btn').addEventListener('click', verifyProxy);
     document.getElementById('reload-btn').addEventListener('click', reloadCampaigns);
+    document.getElementById('idle-mine-all-when-idle').addEventListener('change', saveSettings);
 
 
     // Games to watch management
@@ -2521,8 +2483,6 @@ function renderWantedItems(tree) {
 
 // ==================== DOM Utilities ====================
 
-const TRUSTED_HELP_LINKS = new Set(['https://www.twitch.tv/drops/campaigns']);
-
 /**
  * @param {string} tag
  * @param {Record<string, string|number|boolean>} attrs
@@ -2549,41 +2509,3 @@ function makeImageElement(src, alt, className) {
     return image;
 }
 
-function makeHelpList(tag, items) {
-    return makeElement(tag, {}, null, list => {
-        items.forEach(item => {
-            list.appendChild(makeElement('li', {}, null, li => appendTrustedHelpContent(li, item)));
-        });
-    });
-}
-
-function appendTrustedHelpContent(parent, text) {
-    const source = String(text);
-    const linkPattern = /<a\b[^>]*\bhref=(["'])(https:\/\/www\.twitch\.tv\/drops\/campaigns)\1[^>]*>(.*?)<\/a>/gi;
-    let lastIndex = 0;
-    let match;
-    let matched = false;
-
-    while ((match = linkPattern.exec(source)) !== null) {
-        matched = true;
-        if (match.index > lastIndex) {
-            parent.appendChild(document.createTextNode(source.slice(lastIndex, match.index)));
-        }
-        const href = match[2];
-        if (TRUSTED_HELP_LINKS.has(href)) {
-            parent.appendChild(makeElement('a', { href, target: '_blank', rel: 'noopener noreferrer' }, match[3]));
-        } else {
-            parent.appendChild(document.createTextNode(match[0]));
-        }
-        lastIndex = linkPattern.lastIndex;
-    }
-
-    if (!matched) {
-        parent.textContent = source;
-        return;
-    }
-
-    if (lastIndex < source.length) {
-        parent.appendChild(document.createTextNode(source.slice(lastIndex)));
-    }
-}

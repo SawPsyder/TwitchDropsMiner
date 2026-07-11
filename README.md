@@ -66,7 +66,7 @@ All credit for TwitchDropsMiner itself belongs upstream:
 - [@rangermix](https://github.com/rangermix) - author of the AI-assisted rewrite at [rangermix/TwitchDropsMiner](https://github.com/rangermix/TwitchDropsMiner) that this fork is based on
 
 The translation and contribution credits below are carried over from upstream and reflect their
-work, not this fork's:
+work, not this fork's (translations are disabled here):
 
 
 @guihkx - For the CI script, CI maintenance, and everything related to Linux builds.  

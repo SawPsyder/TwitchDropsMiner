@@ -61,7 +61,6 @@ class GUITabs(TypedDict):
     main: str
     inventory: str
     settings: str
-    help: str
 
 
 class GUILoginForm(TypedDict):
@@ -171,6 +170,11 @@ class GUISettingsGeneral(TypedDict):
     dark_mode: str
 
 
+class GUISettingsIdleBehavior(TypedDict):
+    name: str
+    help: str
+
+
 class GUISettingsLibrary(TypedDict):
     name: str
     help: str
@@ -224,19 +228,8 @@ class GUISettings(TypedDict):
     actions: str
     connection_quality: str
     minimum_refresh: str
+    idle_behavior: GUISettingsIdleBehavior
     library: GUISettingsLibrary
-
-
-class GUIHelp(TypedDict):
-    about: str
-    about_text: str
-    how_to_use: str
-    how_to_use_items: list[str]
-    features: str
-    features_items: list[str]
-    important_notes: str
-    important_notes_items: list[str]
-    github_repo: str
 
 
 class GUIHeader(TypedDict):
@@ -259,7 +252,6 @@ class GUIMessages(TypedDict):
     channels: GUIChannels
     inventory: GUIInventory
     settings: GUISettings
-    help: GUIHelp
     header: GUIHeader
     footer: GUIFooter
     badges: GUIBadges

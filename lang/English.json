@@ -50,8 +50,7 @@
         "tabs": {
             "main": "Main",
             "inventory": "Inventory",
-            "settings": "Settings",
-            "help": "Help"
+            "settings": "Settings"
         },
         "login": {
             "name": "Login Form",
@@ -124,6 +123,10 @@
             "actions": "Actions",
             "connection_quality": "Connection Quality:",
             "minimum_refresh": "Minimum Refresh Interval (minutes):",
+            "idle_behavior": {
+                "name": "Idle Behavior",
+                "help": "When the manual and automated tracklists are done or empty, mine drops for every active campaign instead of sitting idle."
+            },
             "library": {
                 "name": "Automated Tracklist",
                 "help": "Connect your game libraries to automatically watch games you own whenever they have an active drop campaign.",
@@ -155,33 +158,6 @@
                 "added_games": "Added: {games}",
                 "no_new_games": "No new games to add."
             }
-        },
-        "help": {
-            "about": "About Twitch Drops Miner",
-            "about_text": "This application automatically mines timed Twitch drops without downloading stream data.",
-            "how_to_use": "How to Use",
-            "how_to_use_items": [
-                "Login using your Twitch account (OAuth device code flow)",
-                "Link your accounts at <a href=\"https://www.twitch.tv/drops/campaigns\" target=\"_blank\">twitch.tv/drops/campaigns</a>",
-                "The miner will automatically discover campaigns and start mining",
-                "Configure priority games in Settings to focus on what you want",
-                "Monitor progress in the Main and Inventory tabs"
-            ],
-            "features": "Features",
-            "features_items": [
-                "Stream-less drop mining - saves bandwidth",
-                "Game priority and exclusion lists",
-                "Tracks up to 199 channels simultaneously",
-                "Automatic channel switching",
-                "Real-time progress tracking"
-            ],
-            "important_notes": "Important Notes",
-            "important_notes_items": [
-                "Do not watch streams on the same account while mining",
-                "Keep your cookies.jar file secure",
-                "Requires linked game accounts for drops"
-            ],
-            "github_repo": "GitHub Repository"
         },
         "header": {
             "title": "Twitch Drops Miner",

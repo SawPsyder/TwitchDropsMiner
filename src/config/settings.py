@@ -31,6 +31,12 @@ class LibrarySyncSettings(TypedDict):
     ubisoft: UbisoftLibrarySettings
 
 
+class IdleBehaviorSettings(TypedDict):
+    # when the manual and automated tracklists are both empty/exhausted, mine
+    # drops for every actively-campaigned game instead of sitting idle
+    mine_all_when_idle: bool
+
+
 class InventoryFilters(TypedDict):
     game_name_search: list[str]
     show_active: bool
@@ -48,6 +54,9 @@ default_settings = {
     "connection_quality": 1,
     "dark_mode": False,
     "games_to_watch": [],
+    "idle_behavior": {
+        "mine_all_when_idle": True,
+    },
     "language": DEFAULT_LANG,
     "inventory_filters": {
         "game_name_search": [],
@@ -92,6 +101,7 @@ class Settings:
     connection_quality: int
     dark_mode: bool
     games_to_watch: list[str]
+    idle_behavior: IdleBehaviorSettings
     language: str
     inventory_filters: InventoryFilters
     library_sync: LibrarySyncSettings

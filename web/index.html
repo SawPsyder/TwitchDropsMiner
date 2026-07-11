@@ -16,12 +16,12 @@
             <div class="header-top">
                 <h1>🎮 Twitch Drops Miner</h1>
                 <div class="header-controls">
-                    <label for="language" class="language-selector">
+                    <!-- <label for="language" class="language-selector">
                         <span>Language:</span>
                         <select id="language">
                             <option value="en">English</option>
                         </select>
-                    </label>
+                    </label> -->
                 </div>
             </div>
             <div class="status-bar">
@@ -44,7 +44,6 @@
             <button class="tab-button active" data-tab="main">Main</button>
             <button class="tab-button" data-tab="inventory">Inventory</button>
             <button class="tab-button" data-tab="settings">Settings</button>
-            <button class="tab-button" data-tab="help">Help</button>
         </nav>
 
         <!-- Main Tab -->
@@ -231,6 +230,20 @@
                     </div>
                 </section>
 
+                <section class="settings-section settings-section-half settings-idle">
+                    <div class="library-header-row">
+                        <div>
+                            <h2 id="settings-idle-header">Idle Behavior</h2>
+                            <p id="settings-idle-help" class="help-text">When the manual and automated tracklists
+                                are done or empty, mine drops for every active campaign instead of sitting idle.</p>
+                        </div>
+                        <label class="toggle-switch" title="Mine all drops when idle">
+                            <input type="checkbox" id="idle-mine-all-when-idle" checked>
+                            <span class="toggle-slider"></span>
+                        </label>
+                    </div>
+                </section>
+
                 <section class="settings-section settings-section-full settings-games">
                     <h2 id="settings-games-header">Manual Tracklist</h2>
                     <p id="settings-games-help" class="help-text">Select games to watch. Order matters - drag to
@@ -396,44 +409,6 @@
             </div>
         </div>
 
-        <!-- Help Tab -->
-        <div id="help-tab" class="tab-content">
-            <div class="help-content">
-                <h2 id="help-about-header">About Twitch Drops Miner</h2>
-                <p>This application automatically mines timed Twitch drops without downloading stream data.</p>
-
-                <h3 id="help-howto-header">How to Use</h3>
-                <ol>
-                    <li>Login using your Twitch account (OAuth device code flow)</li>
-                    <li>Link your accounts at <a href="https://www.twitch.tv/drops/campaigns"
-                            target="_blank">twitch.tv/drops/campaigns</a></li>
-                    <li>The miner will automatically discover campaigns and start mining</li>
-                    <li>Configure priority games in Settings to focus on what you want</li>
-                    <li>Monitor progress in the Main and Inventory tabs</li>
-                </ol>
-
-                <h3 id="help-features-header">Features</h3>
-                <ul>
-                    <li>Stream-less drop mining - saves bandwidth</li>
-                    <li>Game priority and exclusion lists</li>
-                    <li>Tracks up to 199 channels simultaneously</li>
-                    <li>Automatic channel switching</li>
-                    <li>Real-time progress tracking</li>
-                </ul>
-
-                <h3 id="help-notes-header">Important Notes</h3>
-                <ul>
-                    <li>Do not watch streams on the same account while mining</li>
-                    <li>Keep your cookies.jar file secure</li>
-                    <li>Requires linked game accounts for drops</li>
-                </ul>
-
-                <div class="help-links">
-                    <a href="https://github.com/rangermix/TwitchDropsMiner" target="_blank">GitHub
-                        Repository</a>
-                </div>
-            </div>
-        </div>
         <!-- Footer -->
         <footer class="footer">
             <div class="footer-content">
@@ -446,7 +421,8 @@
                     </span>
                 </div>
                 <div class="footer-links">
-                    <a href="https://github.com/rangermix/TwitchDropsMiner" target="_blank">GitHub</a>
+                    <a href="https://github.com/SawPsyder/TwitchDropsMiner" target="_blank">This fork: SawPsyder/TwitchDropsMiner</a>
+                    <a href="https://github.com/DevilXD/TwitchDropsMiner" target="_blank">Origin: DevilXD/TwitchDropsMiner</a>
                 </div>
             </div>
         </footer>

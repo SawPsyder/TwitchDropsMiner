@@ -681,10 +681,17 @@ class Twitch:
         """
         The two-tier watch list: user-selected games (in priority order)
         followed by auto-detected library games (recently played first).
+
+        When both tiers are empty/exhausted and idle_behavior.mine_all_when_idle
+        is enabled, falls back to every game with a campaign in inventory instead
+        of leaving the miner idle.
         """
-        return LibrarySyncService.combine_watch_lists(
+        watch_list = LibrarySyncService.combine_watch_lists(
             self.settings.games_to_watch, self.auto_watch_games
         )
+        if not watch_list and self.settings.idle_behavior["mine_all_when_idle"]:
+            watch_list = sorted({campaign.game.name for campaign in self.inventory})
+        return watch_list
 
     async def get_live_streams(
         self, game: Game, *, limit: int = 20, drops_enabled: bool = True
