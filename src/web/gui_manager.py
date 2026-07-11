@@ -160,7 +160,8 @@ class WebGUIManager:
         return self._stream_selector.get_wanted_game_tree(
             self._twitch.settings,
             self._twitch.inventory,
-            self._twitch.get_effective_watch_list(),
+            self._twitch.settings.games_to_watch,
+            self._twitch.auto_watch_games,
         )
 
     def broadcast_wanted_items(self):

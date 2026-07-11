@@ -144,6 +144,7 @@ lang/                # Translation JSON files (19 languages)
 - `UbisoftProvider` (ubisoft.py): unofficial ubiservices API (Uplay GraphQL owned-games query); authenticates with a browser-copied `rememberMeTicket` (localStorage `PRODrememberMe` on connect.ubisoft.com) since Ubisoft disabled password Basic-auth logins ~April 2026 - this also covers 2FA accounts; rotated remember-me tickets and the derived session persist in `DATA_DIR/ubisoft_auth.json`; last-played times are unavailable (always 0)
 - `LibrarySyncService` (service.py): caches owned games in `DATA_DIR/library_cache.json` (~12h refresh), computes the auto watch list of owned games with active campaigns (blacklist/whitelist filtered, ordered by last played descending)
 - Two-tier watch list: `Twitch.get_effective_watch_list()` = user's games_to_watch first (persisted), then the runtime `Twitch.auto_watch_games` (never written into settings)
+- `StreamSelector` (services/stream_selector.py) builds the actual wanted-items queue from that two-tier list; if it comes up empty (the watched games have nothing earnable right now) and `settings.idle_behavior["mine_all_when_idle"]` is enabled, it falls back to every game with an active campaign instead of leaving the queue empty. Each queue entry is tagged with a `source` of `"manual"`, `"auto"`, or `"idle"` (shown as a badge in the web GUI's Wanted Drop Queue)
 - Runs during GAMES_UPDATE via `Twitch.sync_game_libraries()`; provider failures never break the mining loop
 
 **src/websocket/pool.py** - WebSocket management:

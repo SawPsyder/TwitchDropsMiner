@@ -94,7 +94,8 @@
             "pending": "OFFLINE ⏳",
             "offline": "OFFLINE ❌",
             "no_channels": "No channels tracked yet...",
-            "no_channels_for_games": "No channels found for selected games...",
+            "no_channels_for_games": "No active channels for manual or auto tracked drops.",
+            "no_channels_for_games_sub": "(Idle mode will not list channels here)",
             "channel_count": "channel",
             "channel_count_plural": "channels",
             "viewers": "viewers"
@@ -102,7 +103,14 @@
         "settings": {
             "general": {
                 "name": "General",
-                "dark_mode": "Dark Mode"
+                "dark_mode": "Dark Mode",
+                "animations": {
+                    "name": "Animations",
+                    "help": "\"Auto\" follows your system's reduced motion preference; \"On\"/\"Off\" always override it.",
+                    "auto": "Auto",
+                    "on": "On",
+                    "off": "Off"
+                }
             },
             "mining_benefits": "Mining Benefits",
             "mining_benefits_help": "Select which types of drops you want to mine.",
@@ -186,7 +194,12 @@
         },
         "wanted": {
             "name": "Wanted Drops Queue",
-            "none": "No wanted drops queued..."
+            "none": "No wanted drops queued...",
+            "source": {
+                "manual": "Manual",
+                "auto": "Auto",
+                "idle": "Idle"
+            }
         },
         "inventory": {
             "no_campaigns": "No campaigns loaded yet...",

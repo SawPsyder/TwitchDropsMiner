@@ -268,9 +268,11 @@ class Twitch:
                     self._output_campaign_mapping(next_hour)
 
                 logger.info("Building wanted games list")
-                # Build wanted_games list preserving the two-tier watch list order
+                # Build wanted_games list preserving the two-tier watch list order.
+                # StreamSelector falls back to every campaigned game (idle_behavior)
+                # if the manual/auto tiers don't actually have anything earnable.
                 self.wanted_games = self._stream_selector.get_wanted_games(
-                    self.settings, self.inventory, games_to_watch
+                    self.settings, self.inventory, self.settings.games_to_watch, self.auto_watch_games
                 )
                 logger.info("Wanted games list built")
 
@@ -682,16 +684,15 @@ class Twitch:
         The two-tier watch list: user-selected games (in priority order)
         followed by auto-detected library games (recently played first).
 
-        When both tiers are empty/exhausted and idle_behavior.mine_all_when_idle
-        is enabled, falls back to every game with a campaign in inventory instead
-        of leaving the miner idle.
+        This does not include the idle_behavior.mine_all_when_idle fallback:
+        that's applied by StreamSelector (see get_wanted_games /
+        get_wanted_game_tree) once it knows whether this list actually
+        produces any earnable drops, instead of just checking whether the
+        list of game names is empty.
         """
-        watch_list = LibrarySyncService.combine_watch_lists(
+        return LibrarySyncService.combine_watch_lists(
             self.settings.games_to_watch, self.auto_watch_games
         )
-        if not watch_list and self.settings.idle_behavior["mine_all_when_idle"]:
-            watch_list = sorted({campaign.game.name for campaign in self.inventory})
-        return watch_list
 
     async def get_live_streams(
         self, game: Game, *, limit: int = 20, drops_enabled: bool = True

@@ -13,6 +13,8 @@
     --text-secondary: #666666;
     --border-color: #dddddd;
     --accent-color: #af83f0;
+    --accent-color-dark: #9146ff;
+    --accent-gradient-color: linear-gradient(135deg, var(--accent-color) 0%, var(--accent-color-dark) 100%);
     --success-color: #00c853;
     --warning-color: #ffa726;
     --error-color: #e2584e;
@@ -28,6 +30,7 @@ body.dark-mode {
     --text-primary: #e0e0e0;
     --text-secondary: #a0a0a0;
     --border-color: #444444;
+    --progress-bg: #3a3a3a;
 }
 
 /* Scrollbars */
@@ -227,7 +230,7 @@ a {
 /* Tabs */
 .tabs {
     display: flex;
-    gap: 5px;
+    gap: 20px;
     margin-bottom: 20px;
 }
 
@@ -236,7 +239,7 @@ a {
     padding: 12px;
     background: var(--bg-panel);
     border: 1px solid var(--border-color);
-    border-radius: 8px 8px 0 0;
+    border-radius: 8px 8px;
     cursor: pointer;
     font-size: 16px;
     color: var(--text-primary);
@@ -374,23 +377,82 @@ a {
 }
 
 .progress-bar {
+    position: relative;
     width: 100%;
     height: 30px;
     background: var(--progress-bg);
+    border: 1px solid color-mix(in srgb, var(--accent-color) 25%, transparent);
     border-radius: 15px;
     overflow: hidden;
     margin-bottom: 10px;
+    box-shadow: inset 0 2px 5px rgba(0, 0, 0, 0.2);
 }
 
 .progress-fill {
+    position: relative;
+    isolation: isolate;
+    overflow: hidden;
     height: 100%;
-    background: linear-gradient(90deg, var(--accent-color), var(--success-color));
-    transition: width 0.3s ease;
+    min-width: 2px;
+    background: linear-gradient(
+        90deg,
+        color-mix(in srgb, var(--accent-color) 88%, black) 0%,
+        var(--accent-color) 100%
+    );
+    transition: width 0.4s cubic-bezier(0.4, 0, 0.2, 1);
     display: flex;
     align-items: center;
     justify-content: center;
     color: white;
     font-weight: bold;
+    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent-color) 35%, transparent),
+        0 0 10px 0 color-mix(in srgb, var(--accent-color) 35%, transparent);
+    animation: progress-glow 3.2s ease-in-out infinite;
+}
+
+/* Faint, slow-moving highlight sweep for a modern, understated shimmer */
+.progress-fill::after {
+    content: '';
+    position: absolute;
+    z-index: -1;
+    top: 0;
+    bottom: 0;
+    left: -50%;
+    width: 50%;
+    background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.22), transparent);
+    animation: progress-shine 4.5s ease-in-out infinite;
+}
+
+@keyframes progress-shine {
+    0% {
+        left: -50%;
+    }
+    70%, 100% {
+        left: 150%;
+    }
+}
+
+@keyframes progress-glow {
+    0%, 100% {
+        box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent-color) 30%, transparent),
+            0 0 8px 0 color-mix(in srgb, var(--accent-color) 30%, transparent);
+    }
+    50% {
+        box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent-color) 45%, transparent),
+            0 0 12px 1px color-mix(in srgb, var(--accent-color) 55%, transparent);
+    }
+}
+
+/* Reduced motion: "auto" mirrors the OS/browser preference (see app.js),
+   "off" forces it on regardless, "on" never adds this class */
+body.reduce-motion .progress-fill {
+    animation: none;
+}
+
+body.reduce-motion .progress-fill::after {
+    animation: none;
+    content: none;
 }
 
 .progress-text {
@@ -441,7 +503,7 @@ a {
     padding: 12px;
     margin-bottom: 8px;
     margin-top: 12px;
-    background: linear-gradient(135deg, var(--accent-color) 0%, rgba(145, 70, 255, 0.7) 100%);
+    background: var(--accent-gradient-color);
     border-radius: 8px;
     color: white;
     font-weight: bold;
@@ -491,6 +553,10 @@ a {
 }
 
 .channel-item:hover {
+    border-color: var(--accent-color);
+}
+
+.channel-item.online:hover {
     border-color: var(--accent-color);
 }
 
@@ -855,22 +921,26 @@ a {
     grid-column: 1 / -1;
 }
 
+.sub-message {
+    display: inline-block;
+    margin-top: 4px;
+    font-size: 12px;
+    color: var(--text-secondary);
+}
+
 /* Wanted Items Tree / Groups */
 #wanted-items-list {
     display: flex;
-    flex-wrap: wrap;
+    flex-wrap: nowrap;
     gap: 20px;
+    overflow: auto;
 }
 
 .wanted-game-group {
-    flex: min-content;
-    /* Grow, shrink, basis */
-    min-width: 0;
-    /* Fix for flex item overflow */
+    min-width: 302px;
     background: var(--bg-secondary);
     border: 1px solid var(--border-color);
     border-radius: 8px;
-    margin-bottom: 20px;
     break-inside: avoid;
     overflow: hidden;
     position: relative;
@@ -906,18 +976,45 @@ a {
     background: #000;
 }
 
+.wanted-game-title {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.wanted-source-badge {
+    flex-shrink: 0;
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 3px;
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    color: white;
+}
+
+.wanted-source-badge.manual {
+    background: var(--accent-color);
+}
+
+.wanted-source-badge.auto {
+    background: var(--success-color);
+}
+
+.wanted-source-badge.idle {
+    background: var(--warning-color);
+}
+
 .wanted-campaign-list {
-    padding: 10px;
     display: flex;
     flex-direction: column;
-    gap: 10px;
 }
 
 /* Wanted Cards (Nested inside Game Group) */
 .wanted-card {
     background: var(--bg-panel);
-    border: 1px solid var(--border-color);
-    border-radius: 6px;
     overflow: hidden;
     position: relative;
 }
@@ -1658,7 +1755,7 @@ a {
     background: var(--bg-panel);
     border: 2px solid var(--border-color);
     border-radius: 6px;
-    cursor: move;
+    cursor: grab;
     transition: all 0.2s;
     user-select: none;
 }
@@ -1673,14 +1770,20 @@ a {
     transform: scale(0.95);
 }
 
-.drag-handle {
-    font-size: 18px;
-    color: var(--text-secondary);
-    cursor: grab;
+/* While a drag is active, suppress hover transitions on the other items -
+   otherwise the live reordering constantly toggles :hover on whichever item
+   ends up under the cursor, causing the preview to jitter/flicker */
+body.dnd-active .sortable-item {
+    transition: none;
 }
 
-.drag-handle:active {
-    cursor: grabbing;
+body.dnd-active .sortable-item:hover {
+    border-color: var(--border-color);
+    background: var(--bg-panel);
+}
+
+body.dnd-active .sortable-item.dragging {
+    border-color: var(--accent-color);
 }
 
 .priority-number {
@@ -1701,51 +1804,59 @@ a {
     font-weight: 500;
 }
 
-.remove-btn {
-    padding: 4px 8px;
-    background: var(--error-color);
+.remove-btn,
+.add-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    padding: 0;
     color: white;
     border: none;
     border-radius: 3px;
     cursor: pointer;
     font-size: 14px;
     font-weight: bold;
+    line-height: 1;
     opacity: 0.8;
     transition: opacity 0.2s;
+    flex-shrink: 0;
+}
+
+.remove-btn {
+    background: var(--error-color);
 }
 
 .remove-btn:hover {
     opacity: 1;
 }
 
-/* Checkbox list for available games */
-.checkbox-list {
-    max-height: 400px;
-    overflow-y: auto;
+.add-btn {
+    background: var(--success-color);
 }
 
-.game-checkbox {
-    display: flex;
-    align-items: center;
-    padding: 8px;
-    margin-bottom: 5px;
-    background: var(--bg-panel);
-    border-radius: 4px;
-    cursor: pointer;
-    transition: background 0.2s;
+.add-btn-icon {
+    display: inline-block;
+    transform: rotate(45deg);
 }
 
-.game-checkbox:hover {
+.add-btn:hover {
+    opacity: 1;
+}
+
+/* Available games list uses the same card design as the selected games list */
+.available-game-item {
+    cursor: grab;
+}
+
+.available-game-item:active {
+    cursor: grabbing;
+}
+
+.available-game-item:hover {
+    border-color: var(--accent-color);
     background: rgba(145, 70, 255, 0.1);
-}
-
-.game-checkbox input[type="checkbox"] {
-    margin-right: 10px;
-    cursor: pointer;
-}
-
-.game-checkbox span {
-    user-select: none;
 }
 
 /* Loading Overlay */
@@ -2083,16 +2194,11 @@ a {
 
 .campaign-card:hover,
 .wanted-card:hover {
-    transform: translateY(-2px);
     box-shadow: 0 6px 16px rgba(0, 0, 0, 0.12);
 }
 
 .channel-item {
     transition: background-color 0.15s ease, transform 0.15s ease, border-color 0.15s ease;
-}
-
-.channel-item:hover {
-    transform: translateX(3px);
 }
 
 /* Watching channel: soft accent pulse to draw the eye without distracting */
@@ -2107,36 +2213,6 @@ a {
 
 .channel-item.watching {
     animation: watching-pulse 2.4s ease-in-out infinite;
-}
-
-/* Drop progress: smoother fill + moving sheen while mining */
-.progress-fill {
-    transition: width 0.6s cubic-bezier(0.22, 1, 0.36, 1);
-    position: relative;
-    overflow: hidden;
-}
-
-@keyframes progress-sheen {
-    from {
-        transform: translateX(-100%);
-    }
-    to {
-        transform: translateX(250%);
-    }
-}
-
-.progress-fill::after {
-    content: "";
-    position: absolute;
-    inset: 0;
-    width: 40%;
-    background: linear-gradient(
-        105deg,
-        transparent 0%,
-        rgba(255, 255, 255, 0.25) 50%,
-        transparent 100%
-    );
-    animation: progress-sheen 2.8s ease-in-out infinite;
 }
 
 /* Chips pop in */
@@ -2190,13 +2266,12 @@ select:focus {
     transition: color 0.15s ease, background-color 0.15s ease;
 }
 
-/* Accessibility: users who prefer reduced motion get none of the above */
-@media (prefers-reduced-motion: reduce) {
-    *,
-    *::before,
-    *::after {
-        animation-duration: 0.01ms !important;
-        animation-iteration-count: 1 !important;
-        transition-duration: 0.01ms !important;
-    }
+/* Accessibility: reduced motion - class is toggled in app.js based on the
+   Settings > General > Animations preference (auto/on/off) */
+body.reduce-motion *,
+body.reduce-motion *::before,
+body.reduce-motion *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
 }

@@ -109,6 +109,7 @@ class GUIChannels(TypedDict):
     offline: str
     no_channels: str
     no_channels_for_games: str
+    no_channels_for_games_sub: str
     channel_count: str
     channel_count_plural: str
     viewers: str
@@ -130,9 +131,16 @@ class GUIBadges(TypedDict):
     proxy: GUIBadgeItem
 
 
+class GUIWantedSource(TypedDict):
+    manual: str
+    auto: str
+    idle: str
+
+
 class GUIWanted(TypedDict):
     name: str
     none: str
+    source: GUIWantedSource
 
 
 class GUIInvFilters(TypedDict):
@@ -165,9 +173,18 @@ class GUIInventory(TypedDict):
     filters: GUIInvFilters
 
 
+class GUISettingsAnimations(TypedDict):
+    name: str
+    help: str
+    auto: str
+    on: str
+    off: str
+
+
 class GUISettingsGeneral(TypedDict):
     name: str
     dark_mode: str
+    animations: GUISettingsAnimations
 
 
 class GUISettingsIdleBehavior(TypedDict):

@@ -1,8 +1,15 @@
 from datetime import datetime, timedelta, timezone
 
 from src.config.settings import Settings
+from src.library_sync.service import LibrarySyncService
 from src.models.campaign import DropsCampaign
 from src.models.game import Game
+
+
+# Tags identifying where a wanted-queue entry came from.
+SOURCE_MANUAL = "manual"
+SOURCE_AUTO = "auto"
+SOURCE_IDLE = "idle"
 
 
 class StreamSelector:
@@ -74,23 +81,84 @@ class StreamSelector:
 
         return wanted_games
 
+    def _get_primary_tree(
+        self,
+        settings: Settings,
+        campaigns: list[DropsCampaign],
+        manual_games: list[str] | None,
+        auto_games: list[str] | None,
+    ) -> list[dict]:
+        """
+        The two-tier watch list tree (user's manual games_to_watch first,
+        then auto-detected library games), tagged with a "source" of
+        "manual" or "auto".
+        """
+        manual_games = manual_games if manual_games is not None else settings.games_to_watch
+        auto_games = list(auto_games) if auto_games else []
+        games_order = LibrarySyncService.combine_watch_lists(manual_games, auto_games)
+        primary_tree = self._get_wanted_game_tree(settings, campaigns, games_order)
+
+        manual_set = {name.casefold() for name in manual_games}
+        auto_set = {name.casefold() for name in auto_games}
+        for entry in primary_tree:
+            name_cf = entry["game_name"].casefold()
+            entry["source"] = SOURCE_MANUAL if name_cf in manual_set else (
+                SOURCE_AUTO if name_cf in auto_set else SOURCE_IDLE
+            )
+        return primary_tree
+
+    def _get_idle_tree(
+        self,
+        settings: Settings,
+        campaigns: list[DropsCampaign],
+        exclude: list[dict],
+    ) -> list[dict]:
+        """
+        Every earnable game not already in `exclude`, tagged "idle". Empty if
+        idle_behavior.mine_all_when_idle is disabled.
+        """
+        if not settings.idle_behavior["mine_all_when_idle"]:
+            return []
+        all_games = sorted({campaign.game.name for campaign in campaigns})
+        full_tree = self._get_wanted_game_tree(settings, campaigns, all_games)
+        already_queued = {entry["game_name"].casefold() for entry in exclude}
+        idle_tree = [
+            entry for entry in full_tree if entry["game_name"].casefold() not in already_queued
+        ]
+        for entry in idle_tree:
+            entry["source"] = SOURCE_IDLE
+        return idle_tree
+
     def get_wanted_game_tree(
         self,
         settings: Settings,
         campaigns: list[DropsCampaign],
-        games_order: list[str] | None = None,
+        manual_games: list[str] | None = None,
+        auto_games: list[str] | None = None,
     ) -> list[dict]:
-        return [
-            {**game, "game_obj": None}
-            for game in self._get_wanted_game_tree(settings, campaigns, games_order)
-        ]
+        """
+        The full display queue: the two-tier watch list first, followed by
+        the idle_behavior preview (every other earnable game) so the user
+        can see what will be mined automatically once the active games run
+        out - even while there's still something active to mine.
+        """
+        primary_tree = self._get_primary_tree(settings, campaigns, manual_games, auto_games)
+        idle_tree = self._get_idle_tree(settings, campaigns, primary_tree)
+        return [{**game, "game_obj": None} for game in primary_tree + idle_tree]
 
     def get_wanted_games(
         self,
         settings: Settings,
         campaigns: list[DropsCampaign],
-        games_order: list[str] | None = None,
+        manual_games: list[str] | None = None,
+        auto_games: list[str] | None = None,
     ) -> list[Game]:
-        return [
-            game["game_obj"] for game in self._get_wanted_game_tree(settings, campaigns, games_order)
-        ]
+        """
+        The actual mining priority list: the two-tier watch list, falling
+        back to every other earnable game only when that list is completely
+        empty (unlike get_wanted_game_tree, this doesn't keep tracking the
+        idle preview games once there's something active to mine).
+        """
+        primary_tree = self._get_primary_tree(settings, campaigns, manual_games, auto_games)
+        tree = primary_tree if primary_tree else self._get_idle_tree(settings, campaigns, primary_tree)
+        return [game["game_obj"] for game in tree]

@@ -14,6 +14,39 @@ const state = {
     translations: {}  // Store current translations
 };
 
+// ==================== Animations / Reduced Motion ====================
+
+// "auto" mirrors this media query; "on"/"off" (Settings > General > Animations)
+// override it regardless of what the OS/browser reports.
+const osReducedMotionQuery = window.matchMedia('(prefers-reduced-motion: reduce)');
+
+function applyAnimationsMode(mode) {
+    const effectiveReduced = mode === 'off' ? true : mode === 'on' ? false : osReducedMotionQuery.matches;
+    document.body.classList.toggle('reduce-motion', effectiveReduced);
+}
+
+function getAnimationsModeFromUI() {
+    if (document.getElementById('animations-on')?.checked) return 'on';
+    if (document.getElementById('animations-off')?.checked) return 'off';
+    return 'auto';
+}
+
+function setAnimationsModeUI(mode) {
+    const value = mode || 'auto';
+    const radio = document.getElementById(`animations-${value}`);
+    if (radio) radio.checked = true;
+    applyAnimationsMode(value);
+}
+
+// Live-react to OS-level changes while left on "auto", and apply a sane
+// default immediately (before settings have loaded) to avoid a flash of motion.
+osReducedMotionQuery.addEventListener('change', () => {
+    if ((state.settings.animations || 'auto') === 'auto') {
+        applyAnimationsMode('auto');
+    }
+});
+applyAnimationsMode('auto');
+
 // ==================== Version Checking ====================
 
 async function fetchAndDisplayVersion() {
@@ -386,8 +419,13 @@ function renderChannels() {
 
     if (filteredChannels.length === 0) {
         const emptyMsg = t.gui?.channels?.no_channels_for_games || 'No channels found for selected games...';
+        const emptySubMsg = t.gui?.channels?.no_channels_for_games_sub || '(Idle mode will not list channels here)';
         container.replaceChildren(
-            makeElement('p', { class: 'empty-message' }, emptyMsg),
+            makeElement('p', { class: 'empty-message' }, '', el => {
+                el.appendChild(document.createTextNode(emptyMsg));
+                el.appendChild(document.createElement('br'));
+                el.appendChild(makeElement('span', { class: 'sub-message' }, emptySubMsg));
+            }),
         );
         return;
     }
@@ -1073,6 +1111,7 @@ function updateLoginStatus(data) {
 function updateSettingsUI(settings) {
     state.settings = settings;
     document.getElementById('dark-mode').checked = settings.dark_mode || false;
+    setAnimationsModeUI(settings.animations);
     document.getElementById('connection-quality').value = settings.connection_quality || 1;
     document.getElementById('minimum-refresh-interval').value = settings.minimum_refresh_interval_minutes || 30;
 
@@ -1232,7 +1271,6 @@ function renderSelectedGames(games) {
         div.draggable = true;
         div.dataset.game = game;
         div.replaceChildren(
-            makeElement('span', { class: 'drag-handle' }, '☰'),
             makeElement('span', { class: 'priority-number' }, String(index + 1)),
             makeElement('span', { class: 'game-name' }, game),
             makeElement('button', { class: 'remove-btn' }, '✕'),
@@ -1242,10 +1280,8 @@ function renderSelectedGames(games) {
         const removeBtn = div.querySelector('.remove-btn');
         removeBtn.addEventListener('click', () => removeGameFromWatch(game));
 
-        // Drag event handlers
+        // Drag event handlers (reordering/cross-list drop handled at the container level)
         div.addEventListener('dragstart', handleDragStart);
-        div.addEventListener('dragover', handleDragOver);
-        div.addEventListener('drop', handleDrop);
         div.addEventListener('dragend', handleDragEnd);
 
         container.appendChild(div);
@@ -1272,51 +1308,97 @@ function renderAvailableGames(games, filterText) {
     }
 
     games.forEach(game => {
-        const label = document.createElement('label');
-        label.className = 'game-checkbox';
-        label.replaceChildren(
-            makeElement('input', { type: 'checkbox', value: game }),
-            makeElement('span', {}, game),
+        const div = document.createElement('div');
+        div.className = 'sortable-item available-game-item';
+        div.draggable = true;
+        div.dataset.game = game;
+        const addBtn = makeElement('button', { class: 'add-btn', title: 'Add to tracklist' }, null, (btn) => {
+            btn.appendChild(makeElement('span', { class: 'add-btn-icon' }, '✕'));
+        });
+        div.replaceChildren(
+            makeElement('span', { class: 'game-name' }, game),
+            addBtn,
         );
 
-        const checkbox = label.querySelector('input[type="checkbox"]');
-        checkbox.addEventListener('change', (e) => toggleGameWatch(game, e.target.checked));
+        addBtn.addEventListener('click', () => toggleGameWatch(game, true));
 
-        container.appendChild(label);
+        // Drag event handlers (reordering/cross-list drop handled at the container level)
+        div.addEventListener('dragstart', handleDragStart);
+        div.addEventListener('dragend', handleDragEnd);
+
+        container.appendChild(div);
     });
 }
 
-// Drag and drop handlers
+// Drag and drop handlers - unified between the selected and available games
+// lists so an item can be dragged either way: from "Selected" to "Available"
+// to remove it from the tracklist, or from "Available" to "Selected" (at a
+// specific position) to add it.
 function handleDragStart(e) {
     draggedElement = e.target;
     e.target.classList.add('dragging');
+    // Suppress hover highlight/transitions on all items while dragging - they
+    // fight with the live reordering below and cause visible flicker
+    document.body.classList.add('dnd-active');
     e.dataTransfer.effectAllowed = 'move';
     e.dataTransfer.setData('text/html', e.target.innerHTML);
 }
 
-function handleDragOver(e) {
-    if (e.preventDefault) {
-        e.preventDefault();
-    }
-    e.dataTransfer.dropEffect = 'move';
+// Repositioning is batched to at most once per animation frame (dragover
+// fires far more often than the screen can repaint) and skipped entirely
+// when it wouldn't actually change the DOM order - both are needed to stop
+// the dragged item's preview from jittering/flickering while hovering.
+let dragOverRaf = null;
 
-    const target = e.target.closest('.sortable-item');
-    if (target && target !== draggedElement) {
-        const container = target.parentNode;
-        const allItems = [...container.querySelectorAll('.sortable-item')];
-        const draggedIndex = allItems.indexOf(draggedElement);
-        const targetIndex = allItems.indexOf(target);
+// Determine which existing item the dragged element should be inserted before,
+// based on the cursor's vertical position within the container. Returns null
+// if it should be appended at the end.
+function getDragAfterElement(container, y) {
+    const items = [...container.querySelectorAll('.sortable-item:not(.dragging)')];
 
-        if (draggedIndex < targetIndex) {
-            target.parentNode.insertBefore(draggedElement, target.nextSibling);
-        } else {
-            target.parentNode.insertBefore(draggedElement, target);
+    return items.reduce((closest, item) => {
+        const box = item.getBoundingClientRect();
+        const offset = y - box.top - box.height / 2;
+        if (offset < 0 && offset > closest.offset) {
+            return { offset, element: item };
         }
-    }
-    return false;
+        return closest;
+    }, { offset: Number.NEGATIVE_INFINITY, element: null }).element;
 }
 
-function handleDrop(e) {
+// Attached once to both list containers - handles hovering over items,
+// empty space below the last item, and empty lists alike.
+function handleContainerDragOver(e) {
+    e.preventDefault();
+    if (!draggedElement) return;
+    e.dataTransfer.dropEffect = 'move';
+
+    const container = e.currentTarget;
+    const clientY = e.clientY;
+
+    if (dragOverRaf !== null) return;
+    dragOverRaf = requestAnimationFrame(() => {
+        dragOverRaf = null;
+        if (!draggedElement) return;
+
+        // The "empty" placeholder message would otherwise block the drop target
+        container.querySelector('.empty-message')?.remove();
+
+        const afterElement = getDragAfterElement(container, clientY);
+        if (afterElement == null) {
+            // Only move if it isn't already the last item, otherwise this is a no-op
+            // insert that still triggers a reflow (and the resulting flicker)
+            if (container.lastElementChild !== draggedElement) {
+                container.appendChild(draggedElement);
+            }
+        } else if (afterElement !== draggedElement && afterElement.previousElementSibling !== draggedElement) {
+            container.insertBefore(draggedElement, afterElement);
+        }
+    });
+}
+
+function handleContainerDrop(e) {
+    e.preventDefault();
     if (e.stopPropagation) {
         e.stopPropagation();
     }
@@ -1325,23 +1407,52 @@ function handleDrop(e) {
 
 function handleDragEnd(e) {
     e.target.classList.remove('dragging');
+    document.body.classList.remove('dnd-active');
+    if (dragOverRaf !== null) {
+        cancelAnimationFrame(dragOverRaf);
+        dragOverRaf = null;
+    }
+    draggedElement = null;
 
-    // Update the order in state
-    const container = document.getElementById('selected-games-list');
-    const items = container.querySelectorAll('.sortable-item');
-    const newOrder = Array.from(items).map(item => item.dataset.game);
+    const finalContainer = e.target.parentNode;
+    const gameName = e.target.dataset.game;
 
-    state.settings.games_to_watch = newOrder;
+    if (finalContainer && finalContainer.id === 'selected-games-list') {
+        // Dropped into (or reordered within) the tracklist: rebuild the order
+        // from the current DOM order, which also covers games newly dragged
+        // in from the available games list.
+        const items = finalContainer.querySelectorAll('.sortable-item');
+        state.settings.games_to_watch = Array.from(items).map(item => item.dataset.game);
+    } else {
+        // Dropped onto the available games list (or anywhere else): remove it
+        // from the watch list, if it was on it.
+        const games = state.settings.games_to_watch || [];
+        const index = games.indexOf(gameName);
+        if (index === -1) {
+            // Nothing changed (e.g. just reordered within the available games list)
+            renderGamesToWatch();
+            return;
+        }
+        games.splice(index, 1);
+        state.settings.games_to_watch = games;
+    }
 
-    // Re-render to update priority numbers
-    renderSelectedGames(newOrder);
-
-    // Re-render channels list to apply updated filter
+    renderGamesToWatch();
     renderChannels();
-
-    // Save settings
     saveSettings();
 }
+
+// Wires up the container-level drag-over/drop handlers; called once on init
+// since the containers themselves persist across re-renders.
+function setupGamesDragAndDrop() {
+    for (const id of ['selected-games-list', 'available-games-list']) {
+        const container = document.getElementById(id);
+        if (!container) continue;
+        container.addEventListener('dragover', handleContainerDragOver);
+        container.addEventListener('drop', handleContainerDrop);
+    }
+}
+
 
 function toggleGameWatch(gameName, checked) {
     const games = state.settings.games_to_watch || [];
@@ -1884,8 +1995,9 @@ async function verifyProxy() {
 async function saveSettings() {
     const settings = {
         dark_mode: document.getElementById('dark-mode').checked,
+        animations: getAnimationsModeFromUI(),
         // the dropdown is empty until languages are fetched - never send ""
-        language: document.getElementById('language').value || undefined,
+        language: document.getElementById('language')?.value || undefined,
         connection_quality: parseInt(document.getElementById('connection-quality').value),
         minimum_refresh_interval_minutes: parseInt(document.getElementById('minimum-refresh-interval').value),
         proxy: state.settings.proxy || '',
@@ -2075,6 +2187,20 @@ function applyTranslations(t) {
             darkModeLabel.textContent = '';
             darkModeLabel.appendChild(checkbox);
             darkModeLabel.appendChild(document.createTextNode(' ' + t.gui.settings.general.dark_mode));
+        }
+
+        const animations = t.gui.settings.general.animations;
+        if (animations) {
+            const animationsHeader = document.getElementById('animations-header');
+            if (animationsHeader) animationsHeader.textContent = animations.name;
+            const animationsHelp = document.getElementById('animations-help');
+            if (animationsHelp) animationsHelp.textContent = animations.help;
+            const autoLabel = document.getElementById('animations-auto-label');
+            if (autoLabel) autoLabel.textContent = animations.auto;
+            const onLabel = document.getElementById('animations-on-label');
+            if (onLabel) onLabel.textContent = animations.on;
+            const offLabel = document.getElementById('animations-off-label');
+            if (offLabel) offLabel.textContent = animations.off;
         }
 
         const connQualityLabel = settingsTab.querySelector('label:has(#connection-quality)');
@@ -2313,7 +2439,19 @@ document.addEventListener('DOMContentLoaded', () => {
         // Then save settings
         saveSettings();
     });
-    document.getElementById('language').addEventListener('change', saveSettings);
+    document.getElementById('language')?.addEventListener('change', saveSettings);
+    document.getElementById('animations-auto').addEventListener('change', () => {
+        applyAnimationsMode('auto');
+        saveSettings();
+    });
+    document.getElementById('animations-on').addEventListener('change', () => {
+        applyAnimationsMode('on');
+        saveSettings();
+    });
+    document.getElementById('animations-off').addEventListener('change', () => {
+        applyAnimationsMode('off');
+        saveSettings();
+    });
     document.getElementById('connection-quality').addEventListener('change', saveSettings);
     document.getElementById('minimum-refresh-interval').addEventListener('change', saveSettings);
     // Proxy uses a manual "Set Proxy" button instead of auto-save
@@ -2337,6 +2475,7 @@ document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('deselect-all-btn').addEventListener('click', deselectAllGames);
     document.getElementById('add-game-btn').addEventListener('click', addGameFromSearch);
     document.getElementById('games-filter').addEventListener('input', renderGamesToWatch);
+    setupGamesDragAndDrop();
 
     // Inventory filters
     document.getElementById('filter-active').addEventListener('change', onInventoryFilterChange);
@@ -2443,6 +2582,15 @@ function renderWantedItems(tree) {
             headerChildren.push(makeImageElement(iconUrl, gameGroup.game_name, 'wanted-game-icon'));
         }
         headerChildren.push(makeElement('span', { class: 'wanted-game-title' }, gameGroup.game_name));
+        if (gameGroup.source) {
+            const sourceLabels = state.translations.gui?.wanted?.source || {};
+            const sourceLabel = sourceLabels[gameGroup.source] || gameGroup.source;
+            headerChildren.push(makeElement(
+                'span',
+                { class: `wanted-source-badge ${gameGroup.source}`, title: sourceLabel },
+                sourceLabel
+            ));
+        }
 
         const headerEl = makeElement('div', { class: 'wanted-game-header' }, '', el => {
             headerChildren.forEach(child => el.appendChild(child));

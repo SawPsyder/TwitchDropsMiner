@@ -185,6 +185,19 @@
                     <label>
                         <input type="checkbox" id="dark-mode"> Dark Mode
                     </label>
+                    <div class="library-block">
+                        <h3 id="animations-header">Animations</h3>
+                        <p id="animations-help" class="help-text">"Auto" follows your system's reduced motion
+                            preference; "On"/"Off" always override it.</p>
+                        <div class="segmented-control" id="animations-control" role="radiogroup">
+                            <input type="radio" name="animations-mode" id="animations-auto" value="auto" checked>
+                            <label for="animations-auto" id="animations-auto-label">Auto</label>
+                            <input type="radio" name="animations-mode" id="animations-on" value="on">
+                            <label for="animations-on" id="animations-on-label">On</label>
+                            <input type="radio" name="animations-mode" id="animations-off" value="off">
+                            <label for="animations-off" id="animations-off-label">Off</label>
+                        </div>
+                    </div>
                     <label>
                         Connection Quality:
                         <input type="number" id="connection-quality" min="1" max="6" value="1">
@@ -268,7 +281,7 @@
 
                         <div class="available-games">
                             <h3>Available Games</h3>
-                            <div id="available-games-list" class="checkbox-list"></div>
+                            <div id="available-games-list" class="sortable-list"></div>
                         </div>
                     </div>
                 </section>

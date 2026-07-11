@@ -51,6 +51,7 @@ class InventoryFilters(TypedDict):
 
 
 default_settings = {
+    "animations": "auto",  # "auto" | "on" | "off" - UI motion/animation preference
     "connection_quality": 1,
     "dark_mode": False,
     "games_to_watch": [],
@@ -98,6 +99,7 @@ default_settings = {
 
 @dataclass
 class Settings:
+    animations: str
     connection_quality: int
     dark_mode: bool
     games_to_watch: list[str]

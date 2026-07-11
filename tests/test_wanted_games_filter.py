@@ -99,5 +99,105 @@ class TestWantedGamesFilter(unittest.TestCase):
         self.assertEqual(wanted_games[0].name, "Game1")
 
 
+def _make_campaign(game_id: int, game_name: str) -> MagicMock:
+    """A campaign with a single earnable, wanted (unclaimed BADGE) drop."""
+    campaign = MagicMock(spec=DropsCampaign)
+    campaign.id = f"{game_name}_campaign"
+    campaign.name = f"{game_name} Campaign"
+    campaign.campaign_url = f"http://test.url/{game_name}"
+    campaign.game = Game({"id": game_id, "name": game_name})
+    campaign.can_earn_within.return_value = True
+    drop = MagicMock()
+    drop.name = f"{game_name} Drop"
+    drop.is_claimed = False
+    drop.get_wanted_unclaimed_benefits.return_value = ["Benefit"]
+    campaign.drops = [drop]
+    return campaign
+
+
+class TestIdleBehaviorFallback(unittest.TestCase):
+    """
+    Regression coverage for the idle_behavior.mine_all_when_idle fallback:
+    it must trigger whenever the resulting wanted queue is empty, not merely
+    when games_to_watch/auto_watch_games happen to be empty lists (games on
+    those lists may simply have nothing earnable right now).
+    """
+
+    def setUp(self):
+        self.settings = MagicMock()
+        self.settings.mining_benefits = {"BADGE": True, "DIRECT_ENTITLEMENT": True}
+        self.stream_selector = StreamSelector()
+
+    def test_falls_back_to_all_campaigned_games_when_watch_list_is_unproductive(self):
+        # games_to_watch names a game with no active campaign; idle fallback
+        # should still surface the unrelated game that does have one.
+        self.settings.games_to_watch = ["Game1"]
+        self.settings.idle_behavior = {"mine_all_when_idle": True}
+        inventory = [_make_campaign(2, "Game2")]
+
+        wanted_games = self.stream_selector.get_wanted_games(self.settings, inventory, ["Game1"], [])
+
+        self.assertEqual([g.name for g in wanted_games], ["Game2"])
+
+    def test_does_not_fall_back_when_idle_behavior_disabled(self):
+        self.settings.games_to_watch = ["Game1"]
+        self.settings.idle_behavior = {"mine_all_when_idle": False}
+        inventory = [_make_campaign(2, "Game2")]
+
+        wanted_games = self.stream_selector.get_wanted_games(self.settings, inventory, ["Game1"], [])
+
+        self.assertEqual(wanted_games, [])
+
+    def test_source_tags_manual_auto_and_idle(self):
+        self.settings.games_to_watch = ["Game1"]
+        self.settings.idle_behavior = {"mine_all_when_idle": True}
+        inventory = [_make_campaign(1, "Game1"), _make_campaign(2, "Game2")]
+
+        tree = self.stream_selector.get_wanted_game_tree(
+            self.settings, inventory, ["Game1"], ["Game2"]
+        )
+
+        sources = {entry["game_name"]: entry["source"] for entry in tree}
+        self.assertEqual(sources, {"Game1": "manual", "Game2": "auto"})
+
+    def test_idle_fallback_entries_are_tagged_idle(self):
+        self.settings.games_to_watch = ["Game1"]
+        self.settings.idle_behavior = {"mine_all_when_idle": True}
+        # Game1 (manual) has no campaign, Game3 does -> idle fallback kicks in
+        inventory = [_make_campaign(3, "Game3")]
+
+        tree = self.stream_selector.get_wanted_game_tree(self.settings, inventory, ["Game1"], [])
+
+        self.assertEqual(len(tree), 1)
+        self.assertEqual(tree[0]["game_name"], "Game3")
+        self.assertEqual(tree[0]["source"], "idle")
+
+    def test_idle_preview_shown_behind_active_manual_games_in_tree(self):
+        # Game1 (manual) is active/earnable, Game2 has no watch-list entry
+        # but does have a campaign -> it should still show up in the display
+        # tree, behind Game1, tagged as idle.
+        self.settings.games_to_watch = ["Game1"]
+        self.settings.idle_behavior = {"mine_all_when_idle": True}
+        inventory = [_make_campaign(1, "Game1"), _make_campaign(2, "Game2")]
+
+        tree = self.stream_selector.get_wanted_game_tree(self.settings, inventory, ["Game1"], [])
+
+        self.assertEqual([entry["game_name"] for entry in tree], ["Game1", "Game2"])
+        self.assertEqual(tree[0]["source"], "manual")
+        self.assertEqual(tree[1]["source"], "idle")
+
+    def test_idle_preview_not_included_in_actual_mining_priority(self):
+        # Unlike the display tree, get_wanted_games (channel selection
+        # priority) should NOT keep tracking idle-preview games while there's
+        # still something active on the manual/auto watch list.
+        self.settings.games_to_watch = ["Game1"]
+        self.settings.idle_behavior = {"mine_all_when_idle": True}
+        inventory = [_make_campaign(1, "Game1"), _make_campaign(2, "Game2")]
+
+        wanted_games = self.stream_selector.get_wanted_games(self.settings, inventory, ["Game1"], [])
+
+        self.assertEqual([g.name for g in wanted_games], ["Game1"])
+
+
 if __name__ == "__main__":
     unittest.main()

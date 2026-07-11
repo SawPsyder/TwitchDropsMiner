@@ -15,6 +15,10 @@ from src.utils import merge_json
 
 logger = logging.getLogger("TwitchDrops")
 
+# "auto" follows the browser/OS reduced-motion preference, "on"/"off" force animations
+# on or off regardless of that preference (see web/static/app.js and styles.css)
+ANIMATIONS_MODES = ("auto", "on", "off")
+
 
 if TYPE_CHECKING:
     from src.config.settings import Settings
@@ -49,6 +53,10 @@ class SettingsManager:
             Dictionary containing all user-configurable settings
         """
         settings = vars(self._settings).copy()
+        # included so late-connecting/refreshed clients can populate the manual
+        # tracklist's available games list without waiting for the next
+        # "games_available" broadcast (e.g. from a manual "Reload Campaigns")
+        settings["games_available"] = self._available_games
         return settings
 
     def get_languages(self) -> dict[str, Any]:
@@ -79,6 +87,11 @@ class SettingsManager:
         should_trigger_update |= self.check_and_update_setting(
             "dark_mode", settings_data.get("dark_mode")
         )
+        animations = settings_data.get("animations")
+        if animations is not None and animations not in ANIMATIONS_MODES:
+            self._log_change(f"Ignoring unknown animations mode: {animations!r}")
+            animations = None
+        should_trigger_update |= self.check_and_update_setting("animations", animations)
         if settings_data.get("idle_behavior") is not None:
             should_trigger_update |= self.check_and_update_setting(
                 "idle_behavior",

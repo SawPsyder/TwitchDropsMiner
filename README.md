@@ -26,6 +26,7 @@
 Personal tweaks layered on top of upstream, built for my own setup rather than general use:
 
 - 🎮 **Game Library Sync**: Auto-watches owned games with active drop campaigns via Steam and Ubisoft libraries, so games dont have to be hand-picked.
+- 💤 **Idle Miner**: Watches channels with active drop campaigns with already connected accounts not in any other track list.
 - 🐳 **Own Docker image**: Built and published from this repo (GHCR) for my own Portainer deployment, instead of pulling upstream's image.
 
 > ⚠️ This fork (and the project it's built on) is heavily developed using AI-assisted coding

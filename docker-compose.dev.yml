@@ -1,0 +1,40 @@
+# Development override for docker-compose.yml.
+#
+# Bind-mounts the source code into the container and runs it through
+# `watchfiles`, so local code edits are picked up automatically (the app
+# process is restarted on change) without needing to rebuild the image or
+# manually restart the container.
+#
+# Usage:
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up --build
+#
+# NOTE: This file is for local development only. Do not use it in production
+# deployments - use the plain docker-compose.yml (or the pre-built image)
+# instead, since bind-mounting source code and auto-restarting on every save
+# is not desirable in production.
+services:
+  twitch-drops-miner:
+    volumes:
+      # Bind-mount source code so edits on the host are reflected instantly
+      # inside the container.
+      - ./main.py:/app/main.py:ro
+      - ./src:/app/src:ro
+      - ./lang:/app/lang:ro
+      - ./web:/app/web:ro
+      - ./icons:/app/icons:ro
+    # watchfiles is already installed as a transitive dependency of
+    # uvicorn[standard]. It restarts `python main.py` whenever a watched
+    # file changes. Only main.py/src/lang are watched for restarts, since
+    # those are loaded once at startup; web/ static assets are served
+    # straight from the (also bind-mounted) filesystem and pick up edits on
+    # the next browser request without needing a restart.
+    command:
+      [
+        "watchfiles",
+        "--sigint-timeout",
+        "10",
+        "python main.py",
+        "/app/main.py",
+        "/app/src",
+        "/app/lang",
+      ]

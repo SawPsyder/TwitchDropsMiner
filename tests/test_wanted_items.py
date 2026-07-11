@@ -14,6 +14,9 @@ class TestWantedItems(unittest.TestCase):
         # Mock Twitch Client
         self.twitch = MagicMock(spec=Twitch)
         self.twitch.settings = MagicMock()
+        # idle_behavior preview isn't what these filtering tests exercise -
+        # keep it off so extra games with campaigns don't show up unexpectedly
+        self.twitch.settings.idle_behavior = {"mine_all_when_idle": False}
         self.twitch.get_change_state_callable.return_value = lambda: None
         # the effective watch list combines user picks with library auto-detected games
         self.twitch.auto_watch_games = []

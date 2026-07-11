@@ -55,6 +55,27 @@ class TestSettingsAPI(unittest.IsolatedAsyncioTestCase):
         manager.update_settings({"games_to_watch": games})
         mock_callback.assert_called_once()
 
+    async def test_animations_setting_validation(self):
+        mock_broadcaster = AsyncMock()
+        mock_settings = MagicMock(spec=Settings)
+        mock_settings.animations = "auto"
+        mock_console = MagicMock()
+        mock_callback = MagicMock()
+
+        manager = SettingsManager(
+            mock_broadcaster, mock_settings, mock_console, on_change=mock_callback
+        )
+
+        # Valid value is applied and does not require a mining-loop restart
+        manager.update_settings({"animations": "off"})
+        self.assertEqual(mock_settings.animations, "off")
+        mock_callback.assert_not_called()
+
+        # Invalid value is ignored, current setting is left untouched
+        manager.update_settings({"animations": "bogus"})
+        self.assertEqual(mock_settings.animations, "off")
+        mock_console.print.assert_called_with("Ignoring unknown animations mode: 'bogus'")
+
 
 if __name__ == "__main__":
     unittest.main()
