@@ -1,13 +1,22 @@
 name: GitHub Release
 
+# Fires directly off a pushed v*.*.* tag (created by .github/scripts/release.sh).
+# This fork doesn't use upstream's release/<version> branch + Docker Hub pipeline,
+# so there's no separate job to wait on - this runs independently of ghcr-publish.yml.
+
 on:
+  push:
+    tags:
+      - 'v*.*.*'
   workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing tag to (re-)publish a release for, e.g. v1.3.0'
+        required: true
+        type: string
 
 permissions:
   contents: write
-
-env:
-  CURRENT_BRANCH_NAME: ${{ github.head_ref || github.ref_name }}
 
 jobs:
   create-github-release:
@@ -18,19 +27,20 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v5
         with:
-          ref: ${{ env.CURRENT_BRANCH_NAME }}
+          ref: ${{ github.event.inputs.tag || github.ref_name }}
           fetch-depth: 0
 
-      - name: Extract version from branch
+      - name: Extract version from tag
         id: extract
-        run: .github/scripts/extract_version.sh "${{ env.CURRENT_BRANCH_NAME }}"
+        run: |
+          TAG="${{ github.event.inputs.tag || github.ref_name }}"
+          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
 
       - name: Validate version format
         id: validate
         run: .github/scripts/validate_semver.sh "${{ steps.extract.outputs.version }}"
 
       - name: Extract release notes
-        id: release-notes
         run: .github/scripts/extract_release_notes.sh "${{ steps.extract.outputs.version }}"
 
       - name: Create GitHub Release
@@ -38,6 +48,6 @@ jobs:
         with:
           tag_name: v${{ steps.extract.outputs.version }}
           name: Release ${{ steps.extract.outputs.version }}
-          body_path: release_notes.md
+          body_path: extracted_release_notes.md
           prerelease: ${{ steps.validate.outputs.is_prerelease }}
           draft: false

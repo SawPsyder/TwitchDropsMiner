@@ -159,6 +159,36 @@ directly - there are no other language files to keep in sync anymore.
 state (cookies, settings, image cache, logs) lives under `DATA_DIR` - never assume a path relative to
 the source tree for user data.
 
+## Release Process
+
+This repo (`SawPsyder/TwitchDropsMiner`) is a personal fork of `rangermix/TwitchDropsMiner` and is
+released independently - it does **not** use upstream's release pipeline (Docker Hub, Gemini-authored
+release notes, `release/<version>` branches, `PUBLISHER_TOKEN`/`DOCKERHUB_*`/`GEMINI_API_KEY` secrets).
+None of those secrets exist on this fork, and there's no push access to upstream, so don't assume
+upstream's workflows are runnable here. Do not resurrect `docker-release.yml`, `version-release.yml`,
+or `generate_release_notes.sh` - they were deleted on purpose.
+
+This fork's flow instead publishes versioned images straight to GHCR under this fork's own owner:
+
+1. Feature work happens on `develop`; releases are cut from `main`.
+2. Before cutting a release, draft a `# Release Notes - v<version>` section at the top of
+   `RELEASE_NOTES.md` (there's no Gemini key configured here, so this is written by hand/by Claude
+   from the commit log since the last tag - match the tone/format of existing entries) and commit it.
+3. Run `.github/scripts/release.sh <version> [source_branch]` (default `source_branch` is `develop`).
+   It fast-forwards `main`, validates the version, requires the `RELEASE_NOTES.md` entry to already
+   exist, bumps `src/version.py` + `pyproject.toml`, commits, pushes, and pushes a `v<version>` tag.
+4. The pushed tag independently triggers two GitHub Actions (no chaining/waiting between them):
+   - `ghcr-publish.yml` builds and pushes `ghcr.io/<owner>/twitchdropsminer:<version>` (plus
+     `:<major.minor>`, `:<major>`, `:latest` for stable releases) - this is the image referenced in
+     personal `docker-compose`/Portainer setups.
+   - `github-release.yml` creates the GitHub Release, extracting the matching section from
+     `RELEASE_NOTES.md` via `extract_release_notes.sh`.
+5. `.github/scripts/revert_release.sh <version>` undoes a bad release (deletes the tag/GitHub release,
+   reverts version files) - it has no release branch to clean up since none is created.
+
+None of these scripts set a bot git identity - they're meant to be run locally/by an agent using
+whatever git identity is already configured, not by CI as `github-actions[bot]`.
+
 ## Project scope
 
 Supported: web GUI, Docker deployment, remote/headless access.

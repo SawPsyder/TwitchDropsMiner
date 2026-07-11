@@ -3,8 +3,13 @@ set -e
 
 # Script to extract release notes for a specific version from RELEASE_NOTES.md
 # Usage: ./extract_release_notes.sh <version>
+#
+# Writes to extracted_release_notes.md (NOT release_notes.md - on a
+# case-insensitive filesystem that name collides with RELEASE_NOTES.md and
+# will silently truncate it).
 
 VERSION="$1"
+OUTPUT_FILE="extracted_release_notes.md"
 
 if [ -z "$VERSION" ]; then
   echo "❌ Error: Version argument required"
@@ -28,23 +33,34 @@ awk -v ver="$VERSION" '
     }
   }
   printing { print }
-' RELEASE_NOTES.md > release_notes.md
+' RELEASE_NOTES.md > "$OUTPUT_FILE"
 
 # Check if we found content (should always succeed now)
-if [ ! -s release_notes.md ]; then
+if [ ! -s "$OUTPUT_FILE" ]; then
   echo "❌ Error: Could not extract release notes for version $VERSION"
   exit 1
 fi
 
 echo "✅ Successfully extracted release notes for version $VERSION"
 
-# Append Docker information
-echo "---" >> release_notes.md
-echo "" >> release_notes.md
-echo "### Docker Images" >> release_notes.md
-echo "" >> release_notes.md
-echo '```bash' >> release_notes.md
-echo "docker pull rangermix/twitch-drops-miner:$VERSION" >> release_notes.md
-echo '```' >> release_notes.md
+# Figure out this fork's own GHCR image (ghcr.io/<owner>/twitchdropsminer),
+# not upstream's Docker Hub image - this fork doesn't publish there.
+OWNER="${GITHUB_REPOSITORY_OWNER:-}"
+if [ -z "$OWNER" ]; then
+  REMOTE_URL=$(git config --get remote.origin.url || echo "")
+  OWNER=$(echo "$REMOTE_URL" | sed -E 's#.*[:/]([^/]+)/[^/]+\.git#\1#')
+fi
+OWNER=$(echo "$OWNER" | tr '[:upper:]' '[:lower:]')
 
-echo "✅ Release notes written to release_notes.md"
+# Append Docker information
+{
+  echo "---"
+  echo ""
+  echo "### Docker Images"
+  echo ""
+  echo '```bash'
+  echo "docker pull ghcr.io/$OWNER/twitchdropsminer:$VERSION"
+  echo '```'
+} >> "$OUTPUT_FILE"
+
+echo "✅ Release notes written to $OUTPUT_FILE"
