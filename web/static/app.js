@@ -1436,7 +1436,7 @@ function updateLibraryModeDesc() {
             || 'Only the owned games selected below are watched automatically.';
     } else {
         desc.textContent = library.mode_blacklist_desc
-            || 'All owned games with an active campaign are watched automatically — except the games selected below.';
+            || 'All owned games with an active campaign are watched automatically - except the games selected below.';
     }
 }
 

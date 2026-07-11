@@ -130,7 +130,7 @@
                 "mode": "Automation mode",
                 "mode_blacklist_name": "Blacklist",
                 "mode_whitelist_name": "Whitelist",
-                "mode_blacklist_desc": "All owned games with an active campaign are watched automatically — except the games selected below.",
+                "mode_blacklist_desc": "All owned games with an active campaign are watched automatically - except the games selected below.",
                 "mode_whitelist_desc": "Only the owned games selected below are watched automatically.",
                 "search_library": "Search your library...",
                 "no_owned_games": "No games synced yet. Configure a platform above and click Sync Now.",

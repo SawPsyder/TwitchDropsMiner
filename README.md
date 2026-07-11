@@ -13,11 +13,11 @@
 
 | | Repo | Role |
 |---|------|------|
-| 🌱 | [`DevilXD/TwitchDropsMiner`](https://github.com/DevilXD/TwitchDropsMiner) | The original project — where all of this started |
-| 🚀 | [`rangermix/TwitchDropsMiner`](https://github.com/rangermix/TwitchDropsMiner) | The AI-assisted rewrite this is built on — actively maintained, the one with docs, Docker images, and community support |
-| 📍 | [`SawPsyder/TwitchDropsMiner`](https://github.com/SawPsyder/TwitchDropsMiner) *(you are here)* | My personal fork — no guarantees, no support, may diverge or break at any time |
+| 🌱 | [`DevilXD/TwitchDropsMiner`](https://github.com/DevilXD/TwitchDropsMiner) | The original project - where all of this started |
+| 🚀 | [`rangermix/TwitchDropsMiner`](https://github.com/rangermix/TwitchDropsMiner) | The AI-assisted rewrite this is built on - actively maintained, the one with docs, Docker images, and community support |
+| 📍 | [`SawPsyder/TwitchDropsMiner`](https://github.com/SawPsyder/TwitchDropsMiner) *(you are here)* | My personal fork - no guarantees, no support, may diverge or break at any time |
 
-**Looking to actually use TDM?** Go to **[`rangermix/TwitchDropsMiner`](https://github.com/rangermix/TwitchDropsMiner)** — it has the setup instructions, pre-built images, and an actual maintainer behind it.
+**Looking to actually use TDM?** Go to **[`rangermix/TwitchDropsMiner`](https://github.com/rangermix/TwitchDropsMiner)** - it has the setup instructions, pre-built images, and an actual maintainer behind it.
 
 ---
 
@@ -37,12 +37,12 @@ Personal tweaks layered on top of upstream, built for my own setup rather than g
 
 ## 💖 Support the Project
 
-This fork isn't accepting support, sponsorships, or issues — all credit and all the real work
+This fork isn't accepting support, sponsorships, or issues - all credit and all the real work
 lives upstream. Please direct any support there instead:
 
 <div align="center">
 
-### ✨ **Support the forkcurrent maintainer** — [@rangermix](https://github.com/rangermix)
+### ✨ **Support the forkcurrent maintainer** - [@rangermix](https://github.com/rangermix)
 
 [![Buy Me a Coffee](https://i.imgur.com/cL95gzE.png)](https://buymeacoffee.com/rangermix)
 
@@ -50,7 +50,7 @@ lives upstream. Please direct any support there instead:
 
 ---
 
-### 🎯 **Support the original author** — [@DevilXD](https://github.com/DevilXD)
+### 🎯 **Support the original author** - [@DevilXD](https://github.com/DevilXD)
 
 [☕ Buy Me a Coffee](https://www.buymeacoffee.com/DevilXD) · [❤️ Patreon](https://www.patreon.com/bePatron?u=26937862)
 
@@ -62,8 +62,8 @@ lives upstream. Please direct any support there instead:
 
 All credit for TwitchDropsMiner itself belongs upstream:
 
-- [@DevilXD](https://github.com/DevilXD) — original author of [TwitchDropsMiner](https://github.com/DevilXD/TwitchDropsMiner)
-- [@rangermix](https://github.com/rangermix) — author of the AI-assisted rewrite at [rangermix/TwitchDropsMiner](https://github.com/rangermix/TwitchDropsMiner) that this fork is based on
+- [@DevilXD](https://github.com/DevilXD) - original author of [TwitchDropsMiner](https://github.com/DevilXD/TwitchDropsMiner)
+- [@rangermix](https://github.com/rangermix) - author of the AI-assisted rewrite at [rangermix/TwitchDropsMiner](https://github.com/rangermix/TwitchDropsMiner) that this fork is based on
 
 The translation and contribution credits below are carried over from upstream and reflect their
 work, not this fork's:
