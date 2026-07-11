@@ -15,6 +15,11 @@ class TestWantedItems(unittest.TestCase):
         self.twitch = MagicMock(spec=Twitch)
         self.twitch.settings = MagicMock()
         self.twitch.get_change_state_callable.return_value = lambda: None
+        # the effective watch list combines user picks with library auto-detected games
+        self.twitch.auto_watch_games = []
+        self.twitch.get_effective_watch_list = lambda: (
+            self.twitch.settings.games_to_watch + self.twitch.auto_watch_games
+        )
 
         # Mock dependencies created in __init__
         # We can't easily mock internal creation of sub-managers without patching,

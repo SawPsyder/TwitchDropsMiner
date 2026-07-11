@@ -7,14 +7,21 @@ from src.models.game import Game
 
 class StreamSelector:
     def _get_wanted_game_tree(
-        self, settings: Settings, campaigns: list[DropsCampaign]
+        self,
+        settings: Settings,
+        campaigns: list[DropsCampaign],
+        games_order: list[str] | None = None,
     ) -> list[dict]:
         """
         Get the hierarchical tree of wanted items (Games -> Campaigns -> Drops -> Benefits).
         Ignoring 'can earn within' time constraint.
+
+        games_order overrides the game name priority order (e.g. the two-tier
+        watch list including library-detected games); defaults to the user's
+        games_to_watch setting.
         """
         wanted_games = []
-        games_to_watch = settings.games_to_watch
+        games_to_watch = games_order if games_order is not None else settings.games_to_watch
         mining_benefits = settings.mining_benefits
         next_hour = datetime.now(timezone.utc) + timedelta(hours=1)
 
@@ -68,11 +75,22 @@ class StreamSelector:
         return wanted_games
 
     def get_wanted_game_tree(
-        self, settings: Settings, campaigns: list[DropsCampaign]
+        self,
+        settings: Settings,
+        campaigns: list[DropsCampaign],
+        games_order: list[str] | None = None,
     ) -> list[dict]:
         return [
-            {**game, "game_obj": None} for game in self._get_wanted_game_tree(settings, campaigns)
+            {**game, "game_obj": None}
+            for game in self._get_wanted_game_tree(settings, campaigns, games_order)
         ]
 
-    def get_wanted_games(self, settings: Settings, campaigns: list[DropsCampaign]) -> list[Game]:
-        return [game["game_obj"] for game in self._get_wanted_game_tree(settings, campaigns)]
+    def get_wanted_games(
+        self,
+        settings: Settings,
+        campaigns: list[DropsCampaign],
+        games_order: list[str] | None = None,
+    ) -> list[Game]:
+        return [
+            game["game_obj"] for game in self._get_wanted_game_tree(settings, campaigns, games_order)
+        ]

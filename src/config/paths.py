@@ -49,3 +49,4 @@ LANG_PATH = PROJECT_ROOT / "lang"
 # Persistent storage paths - use DATA_DIR for Docker compatibility
 COOKIES_PATH = DATA_DIR / "cookies.jar"
 SETTINGS_PATH = DATA_DIR / "settings.json"
+LIBRARY_CACHE_PATH = DATA_DIR / "library_cache.json"

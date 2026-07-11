@@ -8,7 +8,8 @@
         "goes_offline": "{channel} goes OFFLINE, switching...",
         "claimed_drop": "Claimed drop: {drop}",
         "no_channel": "No available channels to watch. Waiting for an ONLINE channel...",
-        "no_campaign": "No active campaigns to mine drops for. Waiting for an active campaign..."
+        "no_campaign": "No active campaigns to mine drops for. Waiting for an active campaign...",
+        "library_sync_added": "Library sync: added {games} to Games to Watch"
     },
     "login": {
         "unexpected_content": "Unexpected content type returned, usually due to being redirected. Do you need to login for internet access?",
@@ -122,7 +123,35 @@
             "all_games_selected": "All games are selected or no games available.",
             "actions": "Actions",
             "connection_quality": "Connection Quality:",
-            "minimum_refresh": "Minimum Refresh Interval (minutes):"
+            "minimum_refresh": "Minimum Refresh Interval (minutes):",
+            "library": {
+                "name": "Game Library Sync",
+                "help": "Connect your game libraries to automatically watch games you own whenever they have an active drop campaign.",
+                "mode": "Automation mode",
+                "mode_blacklist_name": "Blacklist",
+                "mode_whitelist_name": "Whitelist",
+                "mode_blacklist_desc": "All owned games with an active campaign are watched automatically — except the games selected below.",
+                "mode_whitelist_desc": "Only the owned games selected below are watched automatically.",
+                "search_library": "Search your library...",
+                "no_owned_games": "No games synced yet. Configure Steam above and click Sync Now.",
+                "no_library_match": "No games match your search.",
+                "more_games": "…and {count} more - refine your search",
+                "not_configured": "Not configured",
+                "steam": "Steam",
+                "steam_api_key": "Steam Web API key",
+                "steam_api_key_hint": "Get a free key at steamcommunity.com/dev/apikey. Your profile's game details must be public.",
+                "steam_id": "SteamID64, custom URL name, or profile URL",
+                "sync_now": "Sync Now",
+                "syncing": "Syncing...",
+                "sync_disabled": "Library sync is disabled.",
+                "auto_list_label": "Auto-added games (recently played first)",
+                "auto_list_empty": "No games auto-added yet.",
+                "last_sync": "Last sync:",
+                "never_synced": "Never synced",
+                "owned_games": "owned games",
+                "added_games": "Added: {games}",
+                "no_new_games": "No new games to add."
+            }
         },
         "help": {
             "about": "About Twitch Drops Miner",

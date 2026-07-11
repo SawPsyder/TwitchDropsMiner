@@ -158,13 +158,19 @@ class WebGUIManager:
 
     def get_wanted_game_tree(self) -> list[dict]:
         return self._stream_selector.get_wanted_game_tree(
-            self._twitch.settings, self._twitch.inventory
+            self._twitch.settings,
+            self._twitch.inventory,
+            self._twitch.get_effective_watch_list(),
         )
 
     def broadcast_wanted_items(self):
         """Broadcast the list of wanted items to connected clients."""
         tree = self.get_wanted_game_tree()
         asyncio.create_task(self._broadcaster.emit("wanted_items_update", tree))
+
+    def broadcast_auto_watch(self, games: list[str]):
+        """Broadcast the auto watch list (library-detected games) to connected clients."""
+        asyncio.create_task(self._broadcaster.emit("auto_watch_update", {"games": list(games)}))
 
 
 # Type aliases for backwards compatibility with code that imports from gui

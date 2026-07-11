@@ -160,6 +160,10 @@ class BaseDrop:
             self._twitch.print(
                 _.t["status"]["claimed_drop"].format(drop=claim_text.replace("\n", " "))
             )
+            # the claimed drop (and possibly its whole game) just left the
+            # wanted queue - push the updated tree to connected clients
+            if self._twitch.gui is not None:
+                self._twitch.gui.broadcast_wanted_items()
         else:
             logger.error(f"Drop claim has potentially failed! Drop ID: {self.id}")
         return result

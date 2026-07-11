@@ -9,6 +9,20 @@ from src.config import DEFAULT_LANG, SETTINGS_PATH
 from src.utils import json_load, json_save
 
 
+class SteamLibrarySettings(TypedDict):
+    enabled: bool
+    api_key: str
+    steam_id: str
+
+
+class LibrarySyncSettings(TypedDict):
+    enabled: bool
+    list_mode: str  # "blacklist" | "whitelist"
+    blacklist: list[str]
+    whitelist: list[str]
+    steam: SteamLibrarySettings
+
+
 class InventoryFilters(TypedDict):
     game_name_search: list[str]
     show_active: bool
@@ -39,6 +53,17 @@ default_settings = {
         "show_not_linked": True,
         "show_upcoming": True,
     },
+    "library_sync": {
+        "enabled": False,
+        "list_mode": "blacklist",
+        "blacklist": [],
+        "whitelist": [],
+        "steam": {
+            "enabled": False,
+            "api_key": "",
+            "steam_id": "",
+        },
+    },
     "minimum_refresh_interval_minutes": 30,
     "mining_benefits": {
         "BADGE": True,
@@ -57,6 +82,7 @@ class Settings:
     games_to_watch: list[str]
     language: str
     inventory_filters: InventoryFilters
+    library_sync: LibrarySyncSettings
     minimum_refresh_interval_minutes: int
     mining_benefits: dict[str, bool]
     proxy: str

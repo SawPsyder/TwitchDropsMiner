@@ -11,5 +11,5 @@ services:
       - ./logs:/app/logs
     environment:
       # Set timezone (optional, defaults to UTC)
-      - TZ=Australia/Sydney
-    restart: unless-stopped
+      - TZ=Europe/Berlin
+    restart: on-failure

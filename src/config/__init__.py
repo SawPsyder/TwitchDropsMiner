@@ -37,6 +37,7 @@ from .paths import (
     COOKIES_PATH,
     DATA_DIR,
     LANG_PATH,
+    LIBRARY_CACHE_PATH,
     SETTINGS_PATH,
     _merge_vars,
 )
@@ -74,6 +75,7 @@ __all__ = [
     "LANG_PATH",
     "COOKIES_PATH",
     "SETTINGS_PATH",
+    "LIBRARY_CACHE_PATH",
     "_merge_vars",
     # client_info.py
     "ClientInfo",

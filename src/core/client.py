@@ -23,6 +23,7 @@ from src.exceptions import (
     RequestException,
 )
 from src.i18n import _
+from src.library_sync import LibrarySyncService
 from src.models.campaign import DropsCampaign
 from src.models.channel import Channel
 from src.services.channel_service import ChannelService
@@ -57,6 +58,9 @@ class Twitch:
         self._state: State = State.IDLE
         self._state_change = asyncio.Event()
         self.wanted_games: list[Game] = []
+        # auto-detected games from library sync (recently played first),
+        # ranked below the user's games_to_watch in the effective watch list
+        self.auto_watch_games: list[str] = []
         self.inventory: list[DropsCampaign] = []
         self._drops: dict[str, TimedDrop] = {}
         self._campaigns: dict[str, DropsCampaign] = {}
@@ -88,6 +92,7 @@ class Twitch:
         self._inventory_service: InventoryService = InventoryService(self)
         self._watch_service: WatchService = WatchService(self)
         self._stream_selector: StreamSelector = StreamSelector()
+        self.library_sync: LibrarySyncService = LibrarySyncService(settings)
 
     def _ensure_api_clients(self) -> None:
         """Ensure API clients are initialized (called after GUI is set)."""
@@ -134,6 +139,7 @@ class Twitch:
         self.inventory.clear()
         self._auth_state.clear()
         self.wanted_games.clear()
+        self.auto_watch_games.clear()
         self._mnt_triggers.clear()
         # wait at least half a second + whatever it takes to complete the closing
         # this allows aiohttp to safely close the session
@@ -243,11 +249,14 @@ class Twitch:
                         for drop in campaign.drops:
                             if drop.can_claim:
                                 await drop.claim()
-                # figure out which games we want based on games_to_watch whitelist
+                # sync external game libraries and refresh the auto watch list
+                await self.sync_game_libraries()
+                # figure out which games we want based on the two-tier watch list
+                # (user's games_to_watch first, then library-detected games)
                 self.wanted_games.clear()
-                games_to_watch: list[str] = self.settings.games_to_watch
+                games_to_watch: list[str] = self.get_effective_watch_list()
                 next_hour: datetime = datetime.now(timezone.utc) + timedelta(hours=1)
-                logger.info("games_to_watch: %s", games_to_watch)
+                logger.info("effective watch list: %s", games_to_watch)
                 logger.info(
                     "inventory has %d eligible campaigns",
                     sum(1 for c in self.inventory if c.eligible),
@@ -259,9 +268,9 @@ class Twitch:
                     self._output_campaign_mapping(next_hour)
 
                 logger.info("Building wanted games list")
-                # Build wanted_games list preserving the order from games_to_watch
+                # Build wanted_games list preserving the two-tier watch list order
                 self.wanted_games = self._stream_selector.get_wanted_games(
-                    self.settings, self.inventory
+                    self.settings, self.inventory, games_to_watch
                 )
                 logger.info("Wanted games list built")
 
@@ -294,6 +303,9 @@ class Twitch:
                         logger.info(
                             f"Manual mode: prioritizing game {self._manual_target_game.name}"
                         )
+
+                # the auto watch list may have changed - push the fresh tree
+                self.gui.broadcast_wanted_items()
 
                 full_cleanup = True
                 self.restart_watching()
@@ -620,6 +632,58 @@ class Twitch:
     def get_active_campaign(self, channel: Channel | None = None) -> DropsCampaign | None:
         """Delegate to InventoryService."""
         return self._inventory_service.get_active_campaign(channel)
+
+    async def sync_game_libraries(self, *, force: bool = False) -> list[str]:
+        """
+        Sync external game libraries (Steam, ...) and refresh the auto watch
+        list: owned games with active campaigns, most recently played first.
+        The auto list ranks below the user's games_to_watch and never modifies
+        it (see get_effective_watch_list).
+
+        Failures are logged but never interrupt the mining loop.
+
+        Returns:
+            The list of game names that are new on the auto watch list.
+        """
+        if not self.library_sync.enabled:
+            if self.auto_watch_games:
+                self.auto_watch_games = []
+                self.gui.broadcast_auto_watch(self.auto_watch_games)
+            return []
+        try:
+            await self.library_sync.sync(force=force)
+            auto_games = self.library_sync.get_auto_watch_games(
+                campaign.game.name for campaign in self.inventory
+            )
+        except Exception:
+            logger.exception("Library sync failed")
+            return []
+        user_games = {name.casefold() for name in self.settings.games_to_watch}
+        previous = {name.casefold() for name in self.auto_watch_games}
+        added = [
+            name
+            for name in auto_games
+            if name.casefold() not in previous and name.casefold() not in user_games
+        ]
+        if auto_games != self.auto_watch_games:
+            self.auto_watch_games = auto_games
+            self.gui.broadcast_auto_watch(auto_games)
+        if added:
+            self.print(
+                _.t["status"]
+                .get("library_sync_added", "Library sync: added {games} to Games to Watch")
+                .format(games=", ".join(added))
+            )
+        return added
+
+    def get_effective_watch_list(self) -> list[str]:
+        """
+        The two-tier watch list: user-selected games (in priority order)
+        followed by auto-detected library games (recently played first).
+        """
+        return LibrarySyncService.combine_watch_lists(
+            self.settings.games_to_watch, self.auto_watch_games
+        )
 
     async def get_live_streams(
         self, game: Game, *, limit: int = 20, drops_enabled: bool = True

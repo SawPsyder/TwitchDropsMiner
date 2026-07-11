@@ -7,6 +7,8 @@ const state = {
     channels: {},
     campaigns: {},
     settings: {},
+    autoWatchGames: [],  // Library-detected games (recently played first), ranked below user picks
+    ownedGames: [],  // Owned games synced from library providers (for the blacklist/whitelist picker)
     currentDrop: null,
     countdownTimer: null,  // Track the active countdown timer
     translations: {}  // Store current translations
@@ -140,6 +142,10 @@ socket.on('initial_state', (data) => {
         }
     }
 
+    if (data.auto_watch_games) {
+        state.autoWatchGames = data.auto_watch_games;
+        renderAutoWatchList();
+    }
     if (data.settings) updateSettingsUI(data.settings);
     if (data.login) updateLoginStatus(data.login);
     if (data.manual_mode) updateManualModeUI(data.manual_mode);
@@ -287,6 +293,13 @@ socket.on('language_changed', (data) => {
     fetchAndApplyTranslations();
 });
 
+socket.on('auto_watch_update', (data) => {
+    state.autoWatchGames = data.games || [];
+    renderAutoWatchList();
+    // channels are filtered against the effective watch list
+    renderChannels();
+});
+
 socket.on('wanted_items_update', (data) => {
     renderWantedItems(data);
 });
@@ -359,8 +372,8 @@ function renderChannels() {
         return;
     }
 
-    // Get the games to watch list from settings
-    const gamesToWatch = state.settings.games_to_watch || [];
+    // Get the effective watch list: user picks + library-detected games
+    const gamesToWatch = (state.settings.games_to_watch || []).concat(state.autoWatchGames || []);
     const gamesToWatchSet = new Set(gamesToWatch);
 
     // Filter channels to only include those playing games in the watch list
@@ -1123,6 +1136,9 @@ function updateSettingsUI(settings) {
     }
 
 
+    // Restore library sync settings
+    updateLibrarySyncUI(settings.library_sync);
+
     // Update games to watch lists
     renderGamesToWatch();
 
@@ -1396,6 +1412,331 @@ function addGameFromSearch() {
     saveSettings();
 }
 
+// ==================== Game Library Sync ====================
+
+const LIBRARY_PICKER_MAX_ROWS = 200;
+
+function getLibraryModeFromUI() {
+    return document.getElementById('library-mode-whitelist')?.checked ? 'whitelist' : 'blacklist';
+}
+
+function getActiveLibraryList() {
+    const ls = state.settings.library_sync || (state.settings.library_sync = {});
+    const mode = getLibraryModeFromUI();
+    if (!Array.isArray(ls[mode])) ls[mode] = [];
+    return ls[mode];
+}
+
+function updateLibraryModeDesc() {
+    const desc = document.getElementById('library-mode-desc');
+    if (!desc) return;
+    const library = state.translations.gui?.settings?.library || {};
+    if (getLibraryModeFromUI() === 'whitelist') {
+        desc.textContent = library.mode_whitelist_desc
+            || 'Only the owned games selected below are watched automatically.';
+    } else {
+        desc.textContent = library.mode_blacklist_desc
+            || 'All owned games with an active campaign are watched automatically — except the games selected below.';
+    }
+}
+
+function updateLibrarySyncUI(librarySync) {
+    if (!librarySync) return;
+
+    const enabledCheckbox = document.getElementById('library-sync-enabled');
+    if (enabledCheckbox) enabledCheckbox.checked = librarySync.enabled || false;
+    updateLibraryOptionsVisibility();
+
+    const steam = librarySync.steam || {};
+    const steamEnabled = document.getElementById('steam-sync-enabled');
+    if (steamEnabled) steamEnabled.checked = steam.enabled || false;
+    // don't clobber fields the user is currently typing in with save echoes
+    const steamApiKey = document.getElementById('steam-api-key');
+    if (steamApiKey && document.activeElement !== steamApiKey) steamApiKey.value = steam.api_key || '';
+    const steamId = document.getElementById('steam-id');
+    if (steamId && document.activeElement !== steamId) steamId.value = steam.steam_id || '';
+
+    // keep the provider status line in sync with the new configuration
+    fetchLibraryStatus();
+
+    const isWhitelist = librarySync.list_mode === 'whitelist';
+    const blacklistRadio = document.getElementById('library-mode-blacklist');
+    const whitelistRadio = document.getElementById('library-mode-whitelist');
+    if (blacklistRadio) blacklistRadio.checked = !isWhitelist;
+    if (whitelistRadio) whitelistRadio.checked = isWhitelist;
+
+    updateLibraryModeDesc();
+    renderLibraryPicker();
+}
+
+function updateLibraryOptionsVisibility() {
+    const options = document.getElementById('library-sync-options');
+    const enabled = document.getElementById('library-sync-enabled')?.checked;
+    if (options) options.classList.toggle('library-disabled', !enabled);
+}
+
+function getLibrarySyncFromUI() {
+    const ls = state.settings.library_sync || {};
+    return {
+        enabled: document.getElementById('library-sync-enabled')?.checked || false,
+        list_mode: getLibraryModeFromUI(),
+        blacklist: ls.blacklist || [],
+        whitelist: ls.whitelist || [],
+        steam: {
+            enabled: document.getElementById('steam-sync-enabled')?.checked || false,
+            api_key: document.getElementById('steam-api-key')?.value.trim() || '',
+            steam_id: document.getElementById('steam-id')?.value.trim() || '',
+        },
+    };
+}
+
+function onLibraryModeChange() {
+    const ls = state.settings.library_sync || (state.settings.library_sync = {});
+    ls.list_mode = getLibraryModeFromUI();
+    updateLibraryModeDesc();
+    renderLibraryPicker();
+    saveSettings();
+}
+
+function toggleLibraryListGame(gameName, listed) {
+    const list = getActiveLibraryList();
+    const index = list.findIndex(name => name.toLowerCase() === gameName.toLowerCase());
+    if (listed && index === -1) {
+        list.push(gameName);
+    } else if (!listed && index > -1) {
+        list.splice(index, 1);
+    }
+    renderLibraryPicker();
+    saveSettings();
+}
+
+function formatLastPlayed(timestamp) {
+    if (!timestamp) return '';
+    try {
+        return new Date(timestamp * 1000).toLocaleDateString();
+    } catch (e) {
+        return '';
+    }
+}
+
+function renderLibraryPicker() {
+    renderLibraryChips();
+    renderLibraryOwnedList();
+}
+
+function renderLibraryChips() {
+    const container = document.getElementById('library-list-chips');
+    if (!container) return;
+    container.innerHTML = '';
+
+    const list = getActiveLibraryList();
+    if (list.length === 0) {
+        container.style.display = 'none';
+        return;
+    }
+    container.style.display = 'flex';
+
+    list.forEach(game => {
+        const chip = makeElement('span', { class: 'chip' }, null, el => {
+            el.appendChild(makeElement('span', { class: 'chip-name' }, game));
+            const removeBtn = makeElement('button', { class: 'chip-remove', title: 'Remove' }, '✕');
+            removeBtn.addEventListener('click', () => toggleLibraryListGame(game, false));
+            el.appendChild(removeBtn);
+        });
+        container.appendChild(chip);
+    });
+}
+
+function renderLibraryOwnedList() {
+    const container = document.getElementById('library-owned-list');
+    if (!container) return;
+    const library = state.translations.gui?.settings?.library || {};
+    container.innerHTML = '';
+
+    const owned = state.ownedGames || [];
+    if (owned.length === 0) {
+        const emptyMsg = library.no_owned_games
+            || 'No games synced yet. Configure Steam above and click Sync Now.';
+        container.replaceChildren(makeElement('p', { class: 'empty-message' }, emptyMsg));
+        return;
+    }
+
+    const filterText = (document.getElementById('library-game-search')?.value || '').toLowerCase();
+    const listedNames = new Set(getActiveLibraryList().map(name => name.toLowerCase()));
+    const filtered = owned.filter(game => game.name.toLowerCase().includes(filterText));
+
+    if (filtered.length === 0) {
+        const emptyMsg = library.no_library_match || 'No games match your search.';
+        container.replaceChildren(makeElement('p', { class: 'empty-message' }, emptyMsg));
+        return;
+    }
+
+    const visible = filtered.slice(0, LIBRARY_PICKER_MAX_ROWS);
+    visible.forEach(game => {
+        const listed = listedNames.has(game.name.toLowerCase());
+        const row = makeElement('label', { class: 'library-game-row' }, null, el => {
+            const checkbox = makeElement('input', { type: 'checkbox' });
+            checkbox.checked = listed;
+            checkbox.addEventListener('change', (e) => toggleLibraryListGame(game.name, e.target.checked));
+            el.appendChild(checkbox);
+            el.appendChild(makeElement('span', { class: 'library-game-name' }, game.name));
+            const lastPlayed = formatLastPlayed(game.last_played);
+            if (lastPlayed) {
+                el.appendChild(makeElement('span', { class: 'library-game-played' }, lastPlayed));
+            }
+        });
+        container.appendChild(row);
+    });
+
+    if (filtered.length > visible.length) {
+        const moreTemplate = library.more_games || '…and {count} more - refine your search';
+        container.appendChild(makeElement(
+            'p', { class: 'empty-message' },
+            moreTemplate.replace('{count}', String(filtered.length - visible.length))
+        ));
+    }
+}
+
+async function fetchOwnedGames() {
+    try {
+        const response = await fetch('/api/library/games');
+        const data = await response.json();
+        state.ownedGames = data.games || [];
+        renderLibraryPicker();
+    } catch (error) {
+        console.error('Failed to fetch owned games:', error);
+    }
+}
+
+async function fetchLibraryStatus() {
+    try {
+        const response = await fetch('/api/library/status');
+        updateProviderStatusLine(await response.json());
+    } catch (error) {
+        console.error('Failed to fetch library status:', error);
+    }
+}
+
+function updateProviderStatusLine(status) {
+    const line = document.getElementById('steam-status-line');
+    if (!line) return;
+    const library = state.translations.gui?.settings?.library || {};
+    const steam = status?.providers?.steam;
+
+    line.classList.remove('status-ok', 'status-error');
+    if (!steam || !steam.configured) {
+        line.textContent = library.not_configured || 'Not configured';
+        return;
+    }
+    if (steam.last_error) {
+        line.classList.add('status-error');
+        line.textContent = steam.last_error;
+        return;
+    }
+    const parts = [`${steam.game_count} ${library.owned_games || 'owned games'}`];
+    if (steam.last_sync) {
+        const lastSyncLabel = library.last_sync || 'Last sync:';
+        parts.push(`${lastSyncLabel} ${new Date(steam.last_sync).toLocaleString()}`);
+    } else {
+        parts.push(library.never_synced || 'Never synced');
+    }
+    line.classList.add('status-ok');
+    line.textContent = parts.join(' • ');
+}
+
+function renderAutoWatchList() {
+    const container = document.getElementById('auto-watch-list');
+    if (!container) return;
+    const t = state.translations;
+    const library = t.gui?.settings?.library || {};
+
+    container.innerHTML = '';
+    const games = state.autoWatchGames || [];
+    if (games.length === 0) {
+        const emptyMsg = library.auto_list_empty || 'No games auto-added yet.';
+        container.replaceChildren(makeElement('p', { class: 'empty-message' }, emptyMsg));
+        return;
+    }
+
+    games.forEach((game, index) => {
+        container.appendChild(makeElement('div', { class: 'auto-watch-item' }, null, el => {
+            el.appendChild(makeElement('span', { class: 'priority-number' }, String(index + 1)));
+            el.appendChild(makeElement('span', { class: 'game-name' }, game));
+        }));
+    });
+}
+
+function renderLibrarySyncStatus(data) {
+    const statusDiv = document.getElementById('library-sync-status');
+    if (!statusDiv) return;
+    const t = state.translations;
+    const library = t.gui?.settings?.library || {};
+
+    statusDiv.style.display = 'block';
+    if (!data.success) {
+        statusDiv.className = 'verify-result error';
+        statusDiv.textContent = `✗ ${data.message || library.sync_disabled || 'Library sync is disabled.'}`;
+        return;
+    }
+
+    const parts = [];
+    let hasError = false;
+    const providers = data.status?.providers || {};
+    Object.entries(providers).forEach(([name, provider]) => {
+        if (!provider.enabled) return;
+        const providerName = name.charAt(0).toUpperCase() + name.slice(1);
+        if (provider.last_error) {
+            hasError = true;
+            parts.push(`✗ ${provider.last_error}`);
+        } else {
+            const ownedGames = library.owned_games || 'owned games';
+            parts.push(`✓ ${providerName}: ${provider.game_count} ${ownedGames}`);
+        }
+    });
+
+    const added = data.added_games || [];
+    if (added.length > 0) {
+        const addedTemplate = library.added_games || 'Added: {games}';
+        parts.push(addedTemplate.replace('{games}', added.join(', ')));
+    } else if (!hasError) {
+        parts.push(library.no_new_games || 'No new games to add.');
+    }
+
+    statusDiv.className = hasError ? 'verify-result error' : 'verify-result success';
+    statusDiv.textContent = parts.join(' • ');
+}
+
+async function syncLibraryNow() {
+    const statusDiv = document.getElementById('library-sync-status');
+    const t = state.translations;
+    if (statusDiv) {
+        statusDiv.style.display = 'block';
+        statusDiv.className = 'verify-result loading';
+        statusDiv.textContent = t.gui?.settings?.library?.syncing || 'Syncing...';
+    }
+
+    try {
+        // make sure the backend syncs with the freshest configuration
+        await saveSettings();
+        const response = await fetch('/api/library/sync', { method: 'POST' });
+        const data = await response.json();
+        if (data.auto_watch_games) {
+            state.autoWatchGames = data.auto_watch_games;
+            renderAutoWatchList();
+            renderChannels();
+        }
+        renderLibrarySyncStatus(data);
+        if (data.status) updateProviderStatusLine(data.status);
+        // refresh the owned-games picker with the newly synced library
+        fetchOwnedGames();
+    } catch (error) {
+        if (statusDiv) {
+            statusDiv.className = 'verify-result error';
+            statusDiv.textContent = `Error: ${error.message}`;
+        }
+    }
+}
+
 function flashTitle() {
     const originalTitle = document.title;
     let count = 0;
@@ -1523,7 +1864,8 @@ async function verifyProxy() {
 async function saveSettings() {
     const settings = {
         dark_mode: document.getElementById('dark-mode').checked,
-        language: document.getElementById('language').value,
+        // the dropdown is empty until languages are fetched - never send ""
+        language: document.getElementById('language').value || undefined,
         connection_quality: parseInt(document.getElementById('connection-quality').value),
         minimum_refresh_interval_minutes: parseInt(document.getElementById('minimum-refresh-interval').value),
         proxy: state.settings.proxy || '',
@@ -1534,8 +1876,10 @@ async function saveSettings() {
             "BADGE": document.getElementById('mining-benefit-badge')?.checked,
             "EMOTE": document.getElementById('mining-benefit-emote')?.checked,
             "UNKNOWN": document.getElementById('mining-benefit-unknown')?.checked
-        }
+        },
+        library_sync: getLibrarySyncFromUI()
     };
+    state.settings.library_sync = settings.library_sync;
 
     try {
         await fetch('/api/settings', {
@@ -1752,6 +2096,31 @@ function applyTranslations(t) {
 
         const reloadBtn = document.getElementById('reload-btn');
         if (reloadBtn) reloadBtn.textContent = t.gui.settings.reload_campaigns;
+
+        // Library sync section
+        const library = t.gui.settings.library;
+        if (library) {
+            const setLibraryText = (id, value) => {
+                const el = document.getElementById(id);
+                if (el && value) el.textContent = value;
+            };
+            setLibraryText('settings-library-header', library.name);
+            setLibraryText('settings-library-help', library.help);
+            setLibraryText('library-steam-header', library.steam);
+            setLibraryText('steam-api-key-label', library.steam_api_key);
+            setLibraryText('steam-id-label', library.steam_id);
+            setLibraryText('library-mode-header', library.mode);
+            setLibraryText('library-mode-blacklist-label', library.mode_blacklist_name);
+            setLibraryText('library-mode-whitelist-label', library.mode_whitelist_name);
+            setLibraryText('library-sync-now-btn', library.sync_now);
+            setLibraryText('auto-watch-header', library.auto_list_label);
+            const librarySearch = document.getElementById('library-game-search');
+            if (librarySearch && library.search_library) librarySearch.placeholder = library.search_library;
+            updateLibraryModeDesc();
+            // re-render lists with translated empty messages
+            renderLibraryPicker();
+            renderAutoWatchList();
+        }
 
         // Re-render games to watch with translated empty messages
         renderGamesToWatch();
@@ -2008,6 +2377,23 @@ document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('mining-benefit-badge').addEventListener('change', saveSettings);
     document.getElementById('mining-benefit-emote').addEventListener('change', saveSettings);
     document.getElementById('mining-benefit-unknown').addEventListener('change', saveSettings);
+
+    // Game library sync
+    document.getElementById('library-sync-enabled').addEventListener('change', () => {
+        updateLibraryOptionsVisibility();
+        saveSettings();
+    });
+    document.getElementById('steam-sync-enabled').addEventListener('change', saveSettings);
+    document.getElementById('steam-api-key').addEventListener('change', saveSettings);
+    document.getElementById('steam-id').addEventListener('change', saveSettings);
+    document.getElementById('library-mode-blacklist').addEventListener('change', onLibraryModeChange);
+    document.getElementById('library-mode-whitelist').addEventListener('change', onLibraryModeChange);
+    document.getElementById('library-game-search').addEventListener('input', renderLibraryOwnedList);
+    document.getElementById('library-sync-now-btn').addEventListener('click', syncLibraryNow);
+
+    // Load library data for the picker and provider status
+    fetchOwnedGames();
+    fetchLibraryStatus();
 
 
     // Inventory game search dropdown

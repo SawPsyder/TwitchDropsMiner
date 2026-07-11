@@ -15,6 +15,7 @@ class StatusMessages(TypedDict):
     claimed_drop: str
     no_channel: str
     no_campaign: str
+    library_sync_added: str
 
 
 class LoginStatus(TypedDict):
@@ -170,6 +171,35 @@ class GUISettingsGeneral(TypedDict):
     dark_mode: str
 
 
+class GUISettingsLibrary(TypedDict):
+    name: str
+    help: str
+    mode: str
+    mode_blacklist_name: str
+    mode_whitelist_name: str
+    mode_blacklist_desc: str
+    mode_whitelist_desc: str
+    search_library: str
+    no_owned_games: str
+    no_library_match: str
+    more_games: str
+    not_configured: str
+    steam: str
+    steam_api_key: str
+    steam_api_key_hint: str
+    steam_id: str
+    sync_now: str
+    syncing: str
+    sync_disabled: str
+    auto_list_label: str
+    auto_list_empty: str
+    last_sync: str
+    never_synced: str
+    owned_games: str
+    added_games: str
+    no_new_games: str
+
+
 class GUISettings(TypedDict):
     general: GUISettingsGeneral
     mining_benefits: str
@@ -191,6 +221,7 @@ class GUISettings(TypedDict):
     actions: str
     connection_quality: str
     minimum_refresh: str
+    library: GUISettingsLibrary
 
 
 class GUIHelp(TypedDict):

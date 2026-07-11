@@ -8,7 +8,9 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 from src.i18n.translator import _
+from src.library_sync import LIST_MODES
 from src.models.game import Game
+from src.utils import merge_json
 
 
 logger = logging.getLogger("TwitchDrops")
@@ -77,8 +79,14 @@ class SettingsManager:
         should_trigger_update |= self.check_and_update_setting(
             "dark_mode", settings_data.get("dark_mode")
         )
+        # guard against empty/unknown values (e.g. saves sent before the
+        # frontend language dropdown is populated) - never abort the update
+        language = settings_data.get("language") or None
+        if language is not None and language not in _.get_languages():
+            self._log_change(f"Ignoring unknown language: {language!r}")
+            language = None
         should_trigger_update |= self.check_and_update_setting(
-            "language", settings_data.get("language"), False, self._set_language
+            "language", language, False, self._set_language
         )
         should_trigger_update |= self.check_and_update_setting(
             "connection_quality", settings_data.get("connection_quality")
@@ -101,6 +109,17 @@ class SettingsManager:
         should_trigger_update |= self.check_and_update_setting(
             "mining_benefits", settings_data.get("mining_benefits"), True
         )
+        if settings_data.get("library_sync") is not None:
+            sanitized_library_sync = self._sanitize_library_sync(settings_data["library_sync"])
+            current_library_sync: dict[str, Any] = getattr(self._settings, "library_sync", {})
+            # credential-only edits (API key, Steam ID) are persisted but don't
+            # need to restart the mining loop - automation changes do
+            requires_update = self._strip_library_credentials(
+                current_library_sync
+            ) != self._strip_library_credentials(sanitized_library_sync)
+            should_trigger_update |= self.check_and_update_setting(
+                "library_sync", sanitized_library_sync, requires_update
+            )
 
         self._settings.save()
         asyncio.create_task(self._broadcaster.emit("settings_updated", self.get_settings()))
@@ -121,6 +140,34 @@ class SettingsManager:
         self._log_change(f"Setting changed: {key} = {new_value}")
         action(new_value)
         return should_trigger_update
+
+    def _sanitize_library_sync(self, value: dict[str, Any]) -> dict[str, Any]:
+        """Validate an incoming library_sync settings object against the current one.
+
+        Unknown keys are dropped, missing keys are filled in from the current
+        settings, and invalid values are replaced with their current ones.
+        """
+        sanitized: dict[str, Any] = dict(value)
+        current: dict[str, Any] = dict(self._settings.library_sync)
+        merge_json(sanitized, current)
+        if sanitized["list_mode"] not in LIST_MODES:
+            sanitized["list_mode"] = current["list_mode"]
+        for list_key in ("blacklist", "whitelist"):
+            sanitized[list_key] = [
+                str(name).strip() for name in sanitized[list_key] if str(name).strip()
+            ]
+        return sanitized
+
+    @staticmethod
+    def _strip_library_credentials(value: dict[str, Any]) -> dict[str, Any]:
+        """A copy of a library_sync settings object without provider credentials."""
+        stripped = dict(value)
+        for provider_key in ("steam",):
+            provider = dict(stripped.get(provider_key, {}))
+            provider.pop("api_key", None)
+            provider.pop("steam_id", None)
+            stripped[provider_key] = provider
+        return stripped
 
     def _set_language(self, language: str):
         _.set_language(language)

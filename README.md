@@ -23,6 +23,7 @@ No more tab juggling, channel switching, or missing rewards — just set it, for
 - ⚙️ **Auto Channel Switching** — Always mines the best available stream
 - 💾 **Persistent Login** — OAuth login saved via cookies
 - 🕹️ **Simple Web UI** — Manage everything from your browser
+- 🎮 **Game Library Sync** — Connect your Steam library to auto-watch owned games with active campaigns: your manual picks always rank first, auto-detected games follow ordered by recently played (blacklist/whitelist control; more platforms planned)
 - 🛡️ **Safe Frontend Rendering** — Dynamic UI content is rendered with DOM APIs to avoid HTML injection
 - 🧩 **Docker-Ready** — One command to deploy anywhere
 
@@ -73,6 +74,20 @@ Visit 👉 **<http://localhost:8080>**
 3. The miner auto-fetches available campaigns
 4. Select games you want to farm, or type a custom game and click **Add Game** → click **Reload**
 5. TDM starts mining drops automatically 🎉
+
+**Optional — Game Library Sync (Steam):**
+
+1. In **Settings → Game Library Sync**, enable library sync and Steam
+2. Enter your [Steam Web API key](https://steamcommunity.com/dev/apikey) and your SteamID64 (or custom profile URL) — your profile's *game details* must be public
+3. Pick an automation mode:
+   - **Blacklist** — every owned game with an active campaign is watched automatically, except listed games
+   - **Whitelist** — only owned games on the list are watched automatically
+4. Click **Sync Now** (libraries also re-sync automatically every ~12 hours)
+
+The watch list is two-tier: your manually selected games always have priority, in the order you set.
+Auto-detected library games rank below them, ordered by how recently you played them on Steam
+(never-played games last). The auto tier never modifies your manual list — use the blacklist to
+exclude games from it.
 
 📝 **Tip:**  
 Make sure your Twitch account is linked to your game accounts →  

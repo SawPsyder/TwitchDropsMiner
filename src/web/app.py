@@ -76,6 +76,7 @@ class SettingsUpdate(BaseModel):
     minimum_refresh_interval_minutes: int | None = None
     inventory_filters: dict | None = None
     mining_benefits: dict[str, bool] | None = None
+    library_sync: dict | None = None
 
 
 class ProxyVerifyRequest(BaseModel):
@@ -283,6 +284,58 @@ async def get_version():
     }
 
 
+@app.get("/api/library/status")
+async def get_library_status():
+    """Get game library sync status (providers, last sync, owned game counts)"""
+    if not twitch_client:
+        raise HTTPException(status_code=503, detail="Twitch client not initialized")
+
+    return {
+        **twitch_client.library_sync.get_status(),
+        "auto_watch_games": twitch_client.auto_watch_games,
+    }
+
+
+@app.get("/api/library/games")
+async def get_library_games():
+    """Get the owned games synced from all enabled library providers"""
+    if not twitch_client:
+        raise HTTPException(status_code=503, detail="Twitch client not initialized")
+
+    return {"games": twitch_client.library_sync.get_owned_games_summary()}
+
+
+@app.post("/api/library/sync")
+async def trigger_library_sync():
+    """Force a game library sync and auto-add owned games with campaigns"""
+    if not gui_manager or not twitch_client:
+        raise HTTPException(status_code=503, detail="Twitch client not initialized")
+
+    if not twitch_client.library_sync.enabled:
+        return {
+            "success": False,
+            "message": "Library sync is disabled",
+            "added_games": [],
+            "auto_watch_games": [],
+            "status": twitch_client.library_sync.get_status(),
+        }
+
+    previous_auto = list(twitch_client.auto_watch_games)
+    added_games = await twitch_client.sync_game_libraries(force=True)
+    if twitch_client.auto_watch_games != previous_auto:
+        from src.config import State
+
+        # let the changed auto watch list take effect
+        twitch_client.change_state(State.GAMES_UPDATE)
+
+    return {
+        "success": True,
+        "added_games": added_games,
+        "auto_watch_games": twitch_client.auto_watch_games,
+        "status": twitch_client.library_sync.get_status(),
+    }
+
+
 @app.post("/api/login")
 async def submit_login(login_data: LoginRequest):
     """Submit login credentials"""
@@ -361,6 +414,7 @@ async def connect(sid, environ):
                 "manual_mode": twitch_client.get_manual_mode_info(),
                 "current_drop": gui_manager.progress.get_current_drop(),
                 "wanted_items": gui_manager.get_wanted_game_tree(),
+                "auto_watch_games": twitch_client.auto_watch_games,
             },
             room=sid,
         )

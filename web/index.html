@@ -260,6 +260,88 @@
                     </div>
                 </section>
 
+                <section class="settings-section library-section">
+                    <div class="library-header-row">
+                        <div>
+                            <h2 id="settings-library-header">Game Library Sync</h2>
+                            <p id="settings-library-help" class="help-text">Connect your game libraries to
+                                automatically watch games you own whenever they have an active drop campaign.</p>
+                        </div>
+                        <label class="toggle-switch" title="Enable library sync">
+                            <input type="checkbox" id="library-sync-enabled">
+                            <span class="toggle-slider"></span>
+                        </label>
+                    </div>
+
+                    <div id="library-sync-options" class="library-sync-options">
+                        <div class="library-provider-card">
+                            <div class="provider-card-header">
+                                <div class="provider-identity">
+                                    <span class="provider-logo" aria-hidden="true">
+                                        <svg viewBox="0 0 24 24" width="28" height="28" fill="currentColor">
+                                            <path d="M12 2C6.8 2 2.5 5.9 2 11l5.4 2.2c.5-.3 1-.5 1.6-.5l2.4-3.5v-.1c0-2.1 1.7-3.8 3.8-3.8s3.8 1.7 3.8 3.8-1.7 3.8-3.8 3.8h-.1l-3.4 2.5v.2c0 1.6-1.3 2.8-2.8 2.8-1.4 0-2.5-1-2.8-2.3l-3.9-1.6C3.2 18.9 7.2 22 12 22c5.5 0 10-4.5 10-10S17.5 2 12 2zM8.3 17.2l-1.2-.5c.2.5.6.8 1.1 1 1.1.4 2.3-.1 2.7-1.2.2-.5.2-1.1 0-1.6s-.6-.9-1.1-1.1c-.5-.2-1.1-.2-1.6 0l1.3.5c.8.3 1.2 1.2.8 2s-1.2 1.2-2 .9zm10.4-8.1c0-1.4-1.1-2.5-2.5-2.5s-2.5 1.1-2.5 2.5 1.1 2.5 2.5 2.5 2.5-1.1 2.5-2.5zm-4.4 0c0-1 .8-1.9 1.9-1.9s1.9.8 1.9 1.9-.8 1.9-1.9 1.9-1.9-.9-1.9-1.9z"/>
+                                        </svg>
+                                    </span>
+                                    <div>
+                                        <h3 id="library-steam-header">Steam</h3>
+                                        <div id="steam-status-line" class="provider-status">Not configured</div>
+                                    </div>
+                                </div>
+                                <label class="toggle-switch" title="Enable Steam">
+                                    <input type="checkbox" id="steam-sync-enabled">
+                                    <span class="toggle-slider"></span>
+                                </label>
+                            </div>
+                            <div class="provider-card-body">
+                                <div class="library-field">
+                                    <label for="steam-api-key" id="steam-api-key-label">Steam Web API key</label>
+                                    <input type="password" id="steam-api-key" autocomplete="off"
+                                        placeholder="XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX">
+                                    <small id="steam-api-key-hint" class="help-text-inline">Get a free key at
+                                        <a href="https://steamcommunity.com/dev/apikey" target="_blank"
+                                            rel="noopener">steamcommunity.com/dev/apikey</a>. Your profile's game
+                                        details must be public.</small>
+                                </div>
+                                <div class="library-field">
+                                    <label for="steam-id" id="steam-id-label">SteamID64, custom URL name, or profile
+                                        URL</label>
+                                    <input type="text" id="steam-id" autocomplete="off"
+                                        placeholder="76561198… / my-vanity-name">
+                                </div>
+                                <div class="provider-card-footer">
+                                    <button id="library-sync-now-btn" class="action-button">Sync Now</button>
+                                    <div id="library-sync-status" class="verify-result" style="display: none;"></div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="library-block">
+                            <h3 id="library-mode-header">Automation mode</h3>
+                            <div class="segmented-control" id="library-mode-control" role="radiogroup">
+                                <input type="radio" name="library-list-mode" id="library-mode-blacklist"
+                                    value="blacklist" checked>
+                                <label for="library-mode-blacklist" id="library-mode-blacklist-label">Blacklist</label>
+                                <input type="radio" name="library-list-mode" id="library-mode-whitelist"
+                                    value="whitelist">
+                                <label for="library-mode-whitelist" id="library-mode-whitelist-label">Whitelist</label>
+                            </div>
+                            <p id="library-mode-desc" class="help-text"></p>
+
+                            <div id="library-list-chips" class="chips-container"></div>
+
+                            <div class="library-picker">
+                                <input type="text" id="library-game-search" placeholder="Search your library...">
+                                <div id="library-owned-list" class="library-owned-list"></div>
+                            </div>
+                        </div>
+
+                        <div class="library-block">
+                            <h3 id="auto-watch-header">Auto-added games (recently played first)</h3>
+                            <div id="auto-watch-list" class="auto-watch-list"></div>
+                        </div>
+                    </div>
+                </section>
+
                 <section class="settings-section">
                     <h2 id="settings-actions-header">Actions</h2>
                     <div class="settings-actions">

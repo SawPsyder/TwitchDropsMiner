@@ -56,6 +56,7 @@ src/
 ├── auth/            # Authentication (auth_state for OAuth and token management)
 ├── api/             # External API (HTTP client, GraphQL client)
 ├── websocket/       # Real-time updates (websocket connection, pool)
+├── library_sync/    # External game library sync (LibraryProvider base, SteamProvider, LibrarySyncService)
 ├── web/             # Web GUI (app, gui_manager, api/)
 │   └── managers/    # Individual UI managers (status, console, channels, campaigns, inventory, login, settings, cache, broadcaster)
 ├── services/        # Business logic services (channel, inventory, watch, maintenance, message_handlers)
@@ -131,10 +132,18 @@ lang/                # Translation JSON files (19 languages)
 
 **src/web/app.py** - FastAPI application:
 
-- REST API endpoints: `/api/status`, `/api/channels`, `/api/campaigns`, `/api/settings`, `/api/login`, `/api/oauth/confirm`, `/api/reload`, `/api/close`, `/api/version`
+- REST API endpoints: `/api/status`, `/api/channels`, `/api/campaigns`, `/api/settings`, `/api/login`, `/api/oauth/confirm`, `/api/reload`, `/api/close`, `/api/version`, `/api/library/status`, `/api/library/sync`
 - Socket.IO server for real-time bi-directional communication
 - Serves static web frontend from `web/` directory
 - Integrates with WebGUIManager via `set_managers()`
+
+**src/library_sync/** - Game library sync:
+
+- `LibraryProvider` (base.py): abstract provider + `OwnedGame` (incl. last_played timestamp) + `normalize_game_name()` for cross-platform name matching
+- `SteamProvider` (steam.py): Steam Web API (GetOwnedGames incl. rtime_last_played, ResolveVanityURL); accepts SteamID64, vanity name, or profile URL
+- `LibrarySyncService` (service.py): caches owned games in `DATA_DIR/library_cache.json` (~12h refresh), computes the auto watch list of owned games with active campaigns (blacklist/whitelist filtered, ordered by last played descending)
+- Two-tier watch list: `Twitch.get_effective_watch_list()` = user's games_to_watch first (persisted), then the runtime `Twitch.auto_watch_games` (never written into settings)
+- Runs during GAMES_UPDATE via `Twitch.sync_game_libraries()`; provider failures never break the mining loop
 
 **src/websocket/pool.py** - WebSocket management:
 
@@ -147,6 +156,7 @@ lang/                # Translation JSON files (19 languages)
 
 - Games to watch list (auto-populated from available campaigns if empty)
 - Games can also be added manually from the web settings search box
+- Library sync configuration (enable flag, blacklist/whitelist mode and lists, per-provider settings such as Steam API key and Steam ID)
 - Connection quality multiplier
 - Language selection
 - Proxy support (including verification)
@@ -158,7 +168,7 @@ lang/                # Translation JSON files (19 languages)
 
 1. **IDLE** - Waiting for campaigns or user action
 2. **INVENTORY_FETCH** - Fetch campaigns from GraphQL, claim completed drops
-3. **GAMES_UPDATE** - Determine wanted games based on priority/exclude lists
+3. **GAMES_UPDATE** - Sync game libraries (auto-add owned games), determine wanted games based on priority/exclude lists
 4. **CHANNELS_CLEANUP** - Remove channels not streaming wanted games
 5. **CHANNELS_FETCH** - Discover channels via ACL lists or game directories
 6. **CHANNEL_SWITCH** - Select best channel to watch based on priority/ACL
@@ -338,6 +348,7 @@ source env/bin/activate && python -m pytest tests/
 
 - `tests/test_proxy_settings.py` - Tests for proxy settings configuration
 - `tests/test_verify_proxy.py` - Tests for proxy verification functionality
+- `tests/test_library_sync.py` - Tests for game library sync (name matching, Steam provider, blacklist/whitelist filtering, settings sanitization)
 
 
 ### Manual Testing
@@ -360,7 +371,7 @@ The application uses a web-based interface accessible via browser:
 
 **src/web/app.py** - FastAPI application:
 
-- REST API endpoints: `/api/status`, `/api/channels`, `/api/campaigns`, `/api/settings`, `/api/login`, `/api/oauth/confirm`, `/api/reload`, `/api/close`, `/api/version`
+- REST API endpoints: `/api/status`, `/api/channels`, `/api/campaigns`, `/api/settings`, `/api/login`, `/api/oauth/confirm`, `/api/reload`, `/api/close`, `/api/version`, `/api/library/status`, `/api/library/sync`
 - Socket.IO server for real-time bi-directional communication
 - Serves static web frontend from `web/` directory
 - Integrates with WebGUIManager via `set_managers()`

@@ -1057,6 +1057,376 @@ header h1 {
     margin-left: 10px;
 }
 
+/* ==================== Game Library Sync ==================== */
+
+.library-header-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 15px;
+}
+
+.library-header-row .help-text {
+    margin-bottom: 10px;
+}
+
+/* Toggle switch */
+.toggle-switch {
+    position: relative;
+    display: inline-block;
+    width: 44px;
+    height: 24px;
+    flex-shrink: 0;
+    margin-bottom: 0 !important;
+}
+
+.toggle-switch input {
+    opacity: 0;
+    width: 0;
+    height: 0;
+    margin: 0;
+}
+
+.toggle-slider {
+    position: absolute;
+    inset: 0;
+    cursor: pointer;
+    background-color: var(--border-color);
+    border-radius: 24px;
+    transition: background-color 0.2s ease;
+}
+
+.toggle-slider::before {
+    content: "";
+    position: absolute;
+    height: 18px;
+    width: 18px;
+    left: 3px;
+    top: 3px;
+    background-color: #ffffff;
+    border-radius: 50%;
+    transition: transform 0.2s ease;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+}
+
+.toggle-switch input:checked + .toggle-slider {
+    background-color: var(--accent-color);
+}
+
+.toggle-switch input:checked + .toggle-slider::before {
+    transform: translateX(20px);
+}
+
+.toggle-switch input:focus-visible + .toggle-slider {
+    outline: 2px solid var(--accent-color);
+    outline-offset: 2px;
+}
+
+/* Dim the options while sync is disabled (still visible for configuration) */
+.library-sync-options {
+    transition: opacity 0.2s ease;
+}
+
+.library-sync-options.library-disabled {
+    opacity: 0.55;
+}
+
+/* Provider card */
+.library-provider-card {
+    border: 1px solid var(--border-color);
+    border-radius: 10px;
+    background: var(--bg-secondary);
+    overflow: hidden;
+    margin-bottom: 20px;
+}
+
+.provider-card-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 15px;
+    padding: 14px 16px;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.provider-identity {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.provider-identity h3 {
+    margin: 0;
+    font-size: 1.05em;
+}
+
+.provider-logo {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 42px;
+    height: 42px;
+    border-radius: 10px;
+    background: linear-gradient(135deg, #1b2838 0%, #2a475e 100%);
+    color: #66c0f4;
+    flex-shrink: 0;
+}
+
+.provider-status {
+    font-size: 0.85em;
+    color: var(--text-secondary);
+    margin-top: 2px;
+}
+
+.provider-status.status-ok {
+    color: var(--success-color);
+}
+
+.provider-status.status-error {
+    color: #e53935;
+}
+
+.provider-card-body {
+    padding: 14px 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+}
+
+.library-field {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+}
+
+.library-field label {
+    display: block;
+    margin-bottom: 0 !important;
+    font-size: 0.85em;
+    font-weight: 600;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+
+.library-field input[type="text"],
+.library-field input[type="password"] {
+    width: 100%;
+    max-width: 420px;
+    margin-left: 0 !important;
+    padding: 9px 12px;
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    background: var(--bg-panel);
+    color: var(--text-primary);
+    transition: border-color 0.15s ease;
+}
+
+.library-field input:focus {
+    outline: none;
+    border-color: var(--accent-color);
+}
+
+.provider-card-footer {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+}
+
+.provider-card-footer .verify-result {
+    margin: 0;
+    flex: 1;
+    min-width: 200px;
+}
+
+/* Blocks */
+.library-block {
+    margin-bottom: 20px;
+}
+
+.library-block h3 {
+    margin: 0 0 10px;
+    font-size: 1em;
+}
+
+/* Segmented control */
+.segmented-control {
+    display: inline-flex;
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    background: var(--bg-secondary);
+    padding: 3px;
+    gap: 3px;
+    margin-bottom: 8px;
+}
+
+.segmented-control input[type="radio"] {
+    position: absolute;
+    opacity: 0;
+    pointer-events: none;
+}
+
+.segmented-control label {
+    display: inline-block;
+    margin: 0 !important;
+    padding: 6px 18px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 0.9em;
+    color: var(--text-secondary);
+    transition: background-color 0.15s ease, color 0.15s ease;
+    user-select: none;
+}
+
+.segmented-control input[type="radio"]:checked + label {
+    background: var(--accent-color);
+    color: #ffffff;
+    font-weight: 600;
+}
+
+.segmented-control input[type="radio"]:focus-visible + label {
+    outline: 2px solid var(--accent-color);
+    outline-offset: 2px;
+}
+
+/* Chips for listed games */
+.chips-container {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-bottom: 12px;
+}
+
+.chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 6px 4px 12px;
+    border-radius: 16px;
+    background: rgba(145, 70, 255, 0.12);
+    border: 1px solid rgba(145, 70, 255, 0.35);
+    color: var(--text-primary);
+    font-size: 0.85em;
+}
+
+.chip-remove {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 18px;
+    height: 18px;
+    border: none;
+    border-radius: 50%;
+    background: transparent;
+    color: var(--text-secondary);
+    cursor: pointer;
+    font-size: 0.8em;
+    line-height: 1;
+    padding: 0;
+}
+
+.chip-remove:hover {
+    background: var(--accent-color);
+    color: #ffffff;
+}
+
+/* Owned games picker */
+.library-picker input[type="text"] {
+    width: 100%;
+    max-width: 420px;
+    margin-left: 0 !important;
+    padding: 9px 12px;
+    border: 1px solid var(--border-color);
+    border-radius: 6px 6px 0 0;
+    border-bottom: none;
+    background: var(--bg-panel);
+    color: var(--text-primary);
+}
+
+.library-picker input[type="text"]:focus {
+    outline: none;
+    border-color: var(--accent-color);
+}
+
+.library-owned-list {
+    max-width: 420px;
+    max-height: 260px;
+    overflow-y: auto;
+    border: 1px solid var(--border-color);
+    border-radius: 0 0 6px 6px;
+    background: var(--bg-panel);
+}
+
+.library-game-row {
+    display: flex !important;
+    align-items: center;
+    gap: 10px;
+    padding: 7px 12px;
+    margin: 0 !important;
+    cursor: pointer;
+    border-bottom: 1px solid var(--border-color);
+    transition: background-color 0.1s ease;
+}
+
+.library-game-row:last-child {
+    border-bottom: none;
+}
+
+.library-game-row:hover {
+    background: var(--bg-secondary);
+}
+
+.library-game-row input[type="checkbox"] {
+    accent-color: var(--accent-color);
+    margin: 0 !important;
+}
+
+.library-game-name {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.library-game-played {
+    font-size: 0.78em;
+    color: var(--text-secondary);
+    flex-shrink: 0;
+}
+
+.library-owned-list .empty-message {
+    padding: 14px;
+    margin: 0;
+}
+
+/* Auto-added games list */
+.auto-watch-list {
+    max-width: 420px;
+    max-height: 220px;
+    overflow-y: auto;
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    background: var(--bg-panel);
+}
+
+.auto-watch-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 7px 12px;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.auto-watch-item:last-child {
+    border-bottom: none;
+}
+
+.auto-watch-list .empty-message {
+    padding: 14px;
+    margin: 0;
+}
+
 .list-manager {
     margin-top: 20px;
 }
@@ -1574,4 +1944,202 @@ header h1 {
 .footer-links a:hover {
     color: var(--text-primary);
     text-decoration: underline;
+}
+/* ==================== Animations & Polish ==================== */
+
+/* Tab switch: content fades and rises into place */
+@keyframes tab-fade-in {
+    from {
+        opacity: 0;
+        transform: translateY(8px);
+    }
+    to {
+        opacity: 1;
+        transform: none;
+    }
+}
+
+.tab-content.active {
+    animation: tab-fade-in 0.25s ease both;
+}
+
+/* Buttons: lift on hover, press on click */
+.action-button,
+.secondary-btn,
+.small-btn {
+    transition: background-color 0.15s ease, transform 0.15s ease, box-shadow 0.15s ease;
+    will-change: transform;
+}
+
+.action-button:hover,
+.secondary-btn:hover,
+.small-btn:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 4px 10px rgba(0, 0, 0, 0.15);
+}
+
+.action-button:active,
+.secondary-btn:active,
+.small-btn:active {
+    transform: translateY(0) scale(0.98);
+    box-shadow: none;
+}
+
+/* List items appear with a quick fade-up, lightly staggered */
+@keyframes item-fade-in {
+    from {
+        opacity: 0;
+        transform: translateY(5px);
+    }
+    to {
+        opacity: 1;
+        transform: none;
+    }
+}
+
+/* NOTE: the channels list re-renders on every websocket update, so it only
+   gets hover transitions - enter animations would replay constantly there */
+.wanted-game-group,
+.campaign-card,
+.library-game-row,
+.auto-watch-item,
+.sortable-item {
+    animation: item-fade-in 0.22s ease both;
+}
+
+.wanted-game-group:nth-child(1),
+.campaign-card:nth-child(1) { animation-delay: 0ms; }
+.wanted-game-group:nth-child(2),
+.campaign-card:nth-child(2) { animation-delay: 40ms; }
+.wanted-game-group:nth-child(3),
+.campaign-card:nth-child(3) { animation-delay: 80ms; }
+.wanted-game-group:nth-child(4),
+.campaign-card:nth-child(4) { animation-delay: 120ms; }
+.wanted-game-group:nth-child(n+5),
+.campaign-card:nth-child(n+5) { animation-delay: 160ms; }
+
+/* Cards and rows: gentle elevation on hover */
+.campaign-card,
+.wanted-card {
+    transition: transform 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease;
+}
+
+.campaign-card:hover,
+.wanted-card:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 6px 16px rgba(0, 0, 0, 0.12);
+}
+
+.channel-item {
+    transition: background-color 0.15s ease, transform 0.15s ease, border-color 0.15s ease;
+}
+
+.channel-item:hover {
+    transform: translateX(3px);
+}
+
+/* Watching channel: soft accent pulse to draw the eye without distracting */
+@keyframes watching-pulse {
+    0%, 100% {
+        box-shadow: 0 0 0 0 rgba(145, 70, 255, 0.35);
+    }
+    50% {
+        box-shadow: 0 0 0 5px rgba(145, 70, 255, 0);
+    }
+}
+
+.channel-item.watching {
+    animation: watching-pulse 2.4s ease-in-out infinite;
+}
+
+/* Drop progress: smoother fill + moving sheen while mining */
+.progress-fill {
+    transition: width 0.6s cubic-bezier(0.22, 1, 0.36, 1);
+    position: relative;
+    overflow: hidden;
+}
+
+@keyframes progress-sheen {
+    from {
+        transform: translateX(-100%);
+    }
+    to {
+        transform: translateX(250%);
+    }
+}
+
+.progress-fill::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    width: 40%;
+    background: linear-gradient(
+        105deg,
+        transparent 0%,
+        rgba(255, 255, 255, 0.25) 50%,
+        transparent 100%
+    );
+    animation: progress-sheen 2.8s ease-in-out infinite;
+}
+
+/* Chips pop in */
+@keyframes chip-pop {
+    from {
+        opacity: 0;
+        transform: scale(0.85);
+    }
+    to {
+        opacity: 1;
+        transform: scale(1);
+    }
+}
+
+.chip {
+    animation: chip-pop 0.18s ease both;
+    transition: border-color 0.15s ease, background-color 0.15s ease;
+}
+
+.chip:hover {
+    border-color: var(--accent-color);
+}
+
+/* Benefit pills and status feedback fade in */
+.wanted-benefit-pill {
+    transition: background-color 0.15s ease;
+}
+
+.verify-result {
+    animation: item-fade-in 0.2s ease both;
+}
+
+/* Inputs: smooth focus ring */
+input[type="text"],
+input[type="password"],
+input[type="number"],
+select,
+textarea {
+    transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+input[type="text"]:focus,
+input[type="password"]:focus,
+input[type="number"]:focus,
+select:focus {
+    box-shadow: 0 0 0 3px rgba(145, 70, 255, 0.15);
+}
+
+/* Tab buttons: animated underline */
+.tab-button {
+    transition: color 0.15s ease, background-color 0.15s ease;
+}
+
+/* Accessibility: users who prefer reduced motion get none of the above */
+@media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.01ms !important;
+    }
 }
