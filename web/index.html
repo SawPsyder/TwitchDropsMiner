@@ -181,7 +181,7 @@
         <!-- Settings Tab -->
         <div id="settings-tab" class="tab-content">
             <div class="settings-container">
-                <section class="settings-section">
+                <section class="settings-section settings-section-half settings-general">
                     <h2 id="settings-general-header">General</h2>
                     <label>
                         <input type="checkbox" id="dark-mode"> Dark Mode
@@ -207,7 +207,7 @@
                     <div id="proxy-verify-result" class="verify-result" style="display: none;"></div>
                 </section>
 
-                <section class="settings-section">
+                <section class="settings-section settings-section-half settings-benefits">
                     <h2 id="settings-benefits-header">Mining Benefits</h2>
                     <p id="settings-benefits-help" class="help-text">Select which types of drops you want to
                         mine.</p>
@@ -231,8 +231,8 @@
                     </div>
                 </section>
 
-                <section class="settings-section">
-                    <h2 id="settings-games-header">Games to Watch</h2>
+                <section class="settings-section settings-section-full settings-games">
+                    <h2 id="settings-games-header">Manual Tracklist</h2>
                     <p id="settings-games-help" class="help-text">Select games to watch. Order matters - drag to
                         reorder
                         priority (top = highest
@@ -260,10 +260,10 @@
                     </div>
                 </section>
 
-                <section class="settings-section library-section">
+                <section class="settings-section settings-section-full library-section">
                     <div class="library-header-row">
                         <div>
-                            <h2 id="settings-library-header">Game Library Sync</h2>
+                            <h2 id="settings-library-header">Automated Tracklist</h2>
                             <p id="settings-library-help" class="help-text">Connect your game libraries to
                                 automatically watch games you own whenever they have an active drop campaign.</p>
                         </div>
@@ -274,6 +274,8 @@
                     </div>
 
                     <div id="library-sync-options" class="library-sync-options">
+                    <div class="library-sync-split">
+                    <div class="library-config-col">
                         <div class="library-provider-card">
                             <div class="provider-card-header">
                                 <div class="provider-identity">
@@ -349,7 +351,11 @@
                             <button id="library-sync-now-btn" class="action-button">Sync Now</button>
                             <div id="library-sync-status" class="verify-result" style="display: none;"></div>
                         </div>
+                    </div>
 
+                    <div class="library-vsep" aria-hidden="true"></div>
+
+                    <div class="library-list-col">
                         <div class="library-block">
                             <h3 id="library-mode-header">Automation mode</h3>
                             <div class="segmented-control" id="library-mode-control" role="radiogroup">
@@ -375,14 +381,18 @@
                             <div id="auto-watch-list" class="auto-watch-list"></div>
                         </div>
                     </div>
+                    </div>
+                    </div>
                 </section>
 
-                <section class="settings-section">
+                <section class="settings-section settings-section-half settings-actions-section">
                     <h2 id="settings-actions-header">Actions</h2>
                     <div class="settings-actions">
                         <button id="reload-btn" class="action-button">Reload</button>
                     </div>
                 </section>
+
+                <div class="settings-spacer" aria-hidden="true"></div>
             </div>
         </div>
 

@@ -1022,7 +1022,11 @@ header h1 {
 
 /* Settings */
 .settings-container {
-    max-width: 800px;
+    max-width: 1360px;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 20px;
+    align-items: start;
 }
 
 .settings-section {
@@ -1030,7 +1034,30 @@ header h1 {
     border: 1px solid var(--border-color);
     border-radius: 8px;
     padding: 20px;
-    margin-bottom: 20px;
+    margin-bottom: 0;
+}
+
+.settings-section-half {
+    grid-column: span 1;
+}
+
+.settings-section-full {
+    grid-column: 1 / -1;
+}
+
+/* Visual order: General, Mining Benefits, Actions, spacer, then the two tracklists full-width */
+.settings-general { order: 1; }
+.settings-benefits { order: 2; }
+.settings-actions-section { order: 3; }
+.settings-spacer { order: 4; }
+.settings-games { order: 5; }
+.library-section { order: 6; }
+
+.settings-spacer {
+    grid-column: 1 / -1;
+    height: 1px;
+    background: var(--border-color);
+    margin: 4px 0;
 }
 
 .settings-section h2 {
@@ -1058,6 +1085,26 @@ header h1 {
 }
 
 /* ==================== Game Library Sync ==================== */
+
+/* Horizontal split: provider config on the left, black/whitelist on the right */
+.library-sync-split {
+    display: flex;
+    align-items: stretch;
+    gap: 20px;
+}
+
+.library-config-col,
+.library-list-col {
+    flex: 1 1 0;
+    min-width: 0;
+}
+
+.library-vsep {
+    flex-shrink: 0;
+    width: 1px;
+    align-self: stretch;
+    background: var(--border-color);
+}
 
 .library-header-row {
     display: flex;
@@ -1873,6 +1920,24 @@ header h1 {
 
     .inventory-grid {
         grid-template-columns: 1fr;
+    }
+
+    .settings-container {
+        grid-template-columns: 1fr;
+    }
+
+    .settings-section-half {
+        grid-column: 1 / -1;
+    }
+
+    .library-sync-split {
+        flex-direction: column;
+    }
+
+    .library-vsep {
+        width: auto;
+        height: 1px;
+        align-self: stretch;
     }
 }
 
