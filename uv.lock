@@ -1055,7 +1055,7 @@ wheels = [
 
 [[package]]
 name = "twitch-drops-miner"
-version = "1.4.1"
+version = "1.4.0"
 source = { editable = "." }
 dependencies = [
     { name = "aiohttp" },

@@ -1491,7 +1491,8 @@ body.reduce-motion .progress-fill::after {
     grid-column: 1 / -1;
 }
 
-/* Visual order: General, Appearance, Mining Benefits, Idle Behavior, Actions, spacer, then the two tracklists full-width */
+/* Visual order: General, Appearance, Mining Benefits, Idle Behavior, Actions, spacer,
+   then the two tracklists full-width, with Notifications last */
 .settings-general { order: 1; }
 .settings-appearance { order: 2; }
 .settings-benefits { order: 3; }
@@ -1500,6 +1501,7 @@ body.reduce-motion .progress-fill::after {
 .settings-spacer { order: 6; }
 .settings-games { order: 7; }
 .library-section { order: 8; }
+.notifications-section { order: 9; }
 
 .settings-spacer {
     grid-column: 1 / -1;
@@ -1834,6 +1836,25 @@ body.reduce-motion .progress-fill::after {
 /* the sync footer sits below the provider cards and applies to all of them */
 .library-sync-footer {
     margin-bottom: 20px;
+}
+
+/* Notification event-type toggles */
+.toggle-list {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.toggle-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.provider-logo.discord {
+    background: linear-gradient(135deg, #404eed 0%, #5865f2 100%);
+    color: #ffffff;
 }
 
 /* Blocks */

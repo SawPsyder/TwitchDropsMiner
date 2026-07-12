@@ -179,6 +179,29 @@
                 "owned_games": "owned games",
                 "added_games": "Added: {games}",
                 "no_new_games": "No new games to add."
+            },
+            "notifications": {
+                "name": "Notifications",
+                "help": "Get notified in Discord about mining events, even when you're not watching the web GUI.",
+                "cooldown_label": "Cooldown Between Repeat Notifications (minutes)",
+                "discord": "Discord",
+                "discord_bot_token": "Bot token",
+                "not_configured": "Not configured",
+                "connected": "Connected",
+                "verifying": "Verifying...",
+                "verify_button": "Verify & Get Invite Link",
+                "invite_label": "Invite Link",
+                "server_label": "Server",
+                "refresh_servers_button": "Refresh Servers",
+                "channel_label": "Channel",
+                "events_label": "Notify Me About",
+                "event_drop_received": "Drop received",
+                "event_unlinked_tracked_game": "Unlinked tracked game",
+                "event_auth_attention": "Auth needs attention",
+                "event_mining_stalled": "Mining stalled",
+                "event_new_campaign": "New campaign available",
+                "test_button": "Send Test Notification",
+                "sending_test": "Sending..."
             }
         },
         "header": {

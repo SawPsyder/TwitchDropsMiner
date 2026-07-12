@@ -97,11 +97,14 @@ if __name__ == "__main__":
             logger.error("Captcha required - cannot continue")
             exit_status = 1
             client.print(_.t["error"]["captcha"])
-        except Exception:
+            await client.notification_service.notify_auth_attention(_.t["error"]["captcha"])
+        except Exception as exc:
             logger.exception("Fatal error encountered during client run")
             exit_status = 1
             client.print("Fatal error encountered:\n")
             client.print(traceback.format_exc())
+            if isinstance(exc, RuntimeError) and "Login verification failure" in str(exc):
+                await client.notification_service.notify_auth_attention(str(exc))
         finally:
             logger.info("=== Starting shutdown sequence ===")
             if sys.platform == "linux":

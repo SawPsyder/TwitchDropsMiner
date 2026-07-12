@@ -26,6 +26,7 @@ from src.i18n import _
 from src.library_sync import LibrarySyncService
 from src.models.campaign import DropsCampaign
 from src.models.channel import Channel
+from src.notifications import NotificationService
 from src.services.channel_service import ChannelService
 from src.services.inventory_service import InventoryService
 from src.services.maintenance import MaintenanceService
@@ -93,6 +94,7 @@ class Twitch:
         self._watch_service: WatchService = WatchService(self)
         self._stream_selector: StreamSelector = StreamSelector()
         self.library_sync: LibrarySyncService = LibrarySyncService(settings)
+        self.notification_service: NotificationService = NotificationService(settings)
 
     def _ensure_api_clients(self) -> None:
         """Ensure API clients are initialized (called after GUI is set)."""
@@ -276,6 +278,11 @@ class Twitch:
                 )
                 logger.info("Wanted games list built")
 
+                # notify about campaigns that weren't around for watched games last cycle
+                await self.notification_service.track_new_campaigns(
+                    self.inventory, games_to_watch
+                )
+
                 if self.wanted_games:
                     logger.info(
                         "Wanted games: %s", ", ".join(game.name for game in self.wanted_games)
@@ -343,6 +350,9 @@ class Twitch:
                 else:
                     # with no games available, we switch to IDLE after cleanup
                     self.print(_.t["status"]["no_campaign"])
+                    await self.notification_service.notify_mining_stalled(
+                        _.t["status"]["no_campaign"]
+                    )
                     self.change_state(State.IDLE)
             elif self._state is State.CHANNELS_FETCH:
                 self.gui.status.update(_.t["gui"]["status"]["gathering"])
@@ -510,6 +520,9 @@ class Twitch:
                 else:
                     # No channels available to watch
                     self.print(_.t["status"]["no_channel"])
+                    await self.notification_service.notify_mining_stalled(
+                        _.t["status"]["no_channel"]
+                    )
                     self.change_state(State.IDLE)
             elif self._state is State.EXIT:
                 self.gui.status.update(_.t["gui"]["status"]["exiting"])

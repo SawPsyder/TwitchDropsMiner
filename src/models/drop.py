@@ -167,6 +167,9 @@ class BaseDrop:
                 self._twitch.gui.notify_drop_collected(
                     self.campaign.game.name, [benefit.name for benefit in self.benefits]
                 )
+            await self._twitch.notification_service.notify_drop_received(
+                self.campaign.game.name, [benefit.name for benefit in self.benefits]
+            )
         else:
             logger.error(f"Drop claim has potentially failed! Drop ID: {self.id}")
         return result

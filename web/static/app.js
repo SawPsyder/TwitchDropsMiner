@@ -1567,6 +1567,9 @@ function updateSettingsUI(settings) {
     // Restore library sync settings
     updateLibrarySyncUI(settings.library_sync);
 
+    // Restore notification settings
+    updateNotificationsUI(settings.notifications);
+
     // Update games to watch lists
     renderGamesToWatch();
 
@@ -2251,6 +2254,266 @@ async function syncLibraryNow() {
     }
 }
 
+// ==================== Notifications ====================
+
+const NOTIFICATION_EVENT_TYPES = [
+    'drop_received',
+    'unlinked_tracked_game',
+    'auth_attention',
+    'mining_stalled',
+    'new_campaign',
+];
+
+let discordGuilds = [];
+let discordChannels = [];
+
+function updateNotificationsUI(notifications) {
+    if (!notifications) return;
+
+    const enabledCheckbox = document.getElementById('notifications-enabled');
+    if (enabledCheckbox) enabledCheckbox.checked = notifications.enabled || false;
+    updateNotificationsOptionsVisibility();
+
+    const cooldownInput = document.getElementById('notifications-cooldown');
+    if (cooldownInput) {
+        cooldownInput.value = notifications.cooldown_minutes ?? 15;
+        updateSliderVisual(cooldownInput);
+    }
+
+    const discord = notifications.discord || {};
+    const discordEnabled = document.getElementById('discord-notifications-enabled');
+    if (discordEnabled) discordEnabled.checked = discord.enabled || false;
+    // don't clobber the token field while the user is currently typing in it
+    const botToken = document.getElementById('discord-bot-token');
+    if (botToken && document.activeElement !== botToken) botToken.value = discord.bot_token || '';
+
+    // keep the currently-saved server/channel selected until a refresh replaces the options
+    setSelectPlaceholder('discord-guild-select', discord.guild_id, 'discord-guild-placeholder');
+    setSelectPlaceholder('discord-channel-select', discord.channel_id, 'discord-channel-placeholder');
+
+    const events = discord.events || {};
+    NOTIFICATION_EVENT_TYPES.forEach(eventType => {
+        const checkbox = document.getElementById(`discord-event-${eventType}`);
+        if (checkbox) checkbox.checked = events[eventType] !== false;
+    });
+
+    fetchNotificationsStatus();
+}
+
+function setSelectPlaceholder(selectId, savedId, placeholderId) {
+    const select = document.getElementById(selectId);
+    if (!select || !savedId) return;
+    // only touch the placeholder option - real options come from a Refresh call
+    if (select.options.length === 1 && select.options[0].id === placeholderId) {
+        select.options[0].value = savedId;
+        select.options[0].textContent = `${savedId} (refresh to load names)`;
+    }
+}
+
+function updateNotificationsOptionsVisibility() {
+    const options = document.getElementById('notifications-options');
+    const enabled = document.getElementById('notifications-enabled')?.checked;
+    if (options) options.classList.toggle('library-disabled', !enabled);
+}
+
+function getNotificationsFromUI() {
+    const events = {};
+    NOTIFICATION_EVENT_TYPES.forEach(eventType => {
+        events[eventType] = document.getElementById(`discord-event-${eventType}`)?.checked !== false;
+    });
+    return {
+        enabled: document.getElementById('notifications-enabled')?.checked || false,
+        cooldown_minutes: parseInt(document.getElementById('notifications-cooldown')?.value, 10) || 0,
+        discord: {
+            enabled: document.getElementById('discord-notifications-enabled')?.checked || false,
+            bot_token: document.getElementById('discord-bot-token')?.value.trim() || '',
+            guild_id: document.getElementById('discord-guild-select')?.value || '',
+            channel_id: document.getElementById('discord-channel-select')?.value || '',
+            events,
+        },
+    };
+}
+
+async function fetchNotificationsStatus() {
+    try {
+        const response = await fetch('/api/notifications/status');
+        updateDiscordStatusLine(await response.json());
+    } catch (error) {
+        console.error('Failed to fetch notification status:', error);
+    }
+}
+
+function updateDiscordStatusLine(status) {
+    const line = document.getElementById('discord-status-line');
+    if (!line) return;
+    const notifications = state.translations.gui?.settings?.notifications || {};
+    const provider = status?.providers?.discord;
+
+    line.classList.remove('status-ok', 'status-error');
+    if (!provider || !provider.configured) {
+        line.textContent = notifications.not_configured || 'Not configured';
+        return;
+    }
+    if (provider.last_error) {
+        line.classList.add('status-error');
+        line.textContent = provider.last_error;
+        return;
+    }
+    line.classList.add('status-ok');
+    line.textContent = notifications.connected || 'Connected';
+}
+
+async function verifyDiscordBot() {
+    const resultDiv = document.getElementById('discord-verify-result');
+    const inviteRow = document.getElementById('discord-invite-row');
+    const inviteContainer = document.getElementById('discord-invite-link-container');
+    const t = state.translations;
+
+    if (resultDiv) {
+        resultDiv.style.display = 'block';
+        resultDiv.className = 'verify-result loading';
+        resultDiv.textContent = t.gui?.settings?.notifications?.verifying || 'Verifying...';
+    }
+    if (inviteRow) inviteRow.style.display = 'none';
+
+    try {
+        // make sure the backend verifies the freshest token
+        await saveSettings();
+        const response = await fetch('/api/notifications/discord/verify', { method: 'POST' });
+        const data = await response.json();
+
+        if (!data.success) {
+            if (resultDiv) {
+                resultDiv.className = 'verify-result error';
+                resultDiv.textContent = `✗ ${data.message || 'Verification failed.'}`;
+            }
+            return;
+        }
+
+        if (resultDiv) {
+            resultDiv.className = 'verify-result success';
+            resultDiv.textContent = `✓ Connected as ${data.bot_username || 'bot'}`;
+        }
+        if (inviteRow && inviteContainer && data.invite_url) {
+            inviteContainer.innerHTML = '';
+            inviteContainer.appendChild(makeElement(
+                'a',
+                { href: data.invite_url, target: '_blank', rel: 'noopener noreferrer' },
+                data.invite_url,
+            ));
+            inviteRow.style.display = 'flex';
+        }
+        fetchNotificationsStatus();
+    } catch (error) {
+        if (resultDiv) {
+            resultDiv.className = 'verify-result error';
+            resultDiv.textContent = `Error: ${error.message}`;
+        }
+    }
+}
+
+function populateDiscordGuildSelect() {
+    const select = document.getElementById('discord-guild-select');
+    if (!select) return;
+    const currentValue = select.value;
+    select.innerHTML = '';
+    if (discordGuilds.length === 0) {
+        select.appendChild(makeElement('option', { value: '' }, 'No servers found - invite the bot first'));
+        return;
+    }
+    select.appendChild(makeElement('option', { value: '' }, 'Select a server...'));
+    discordGuilds.forEach(guild => {
+        select.appendChild(makeElement('option', { value: guild.id }, guild.name));
+    });
+    if (discordGuilds.some(guild => guild.id === currentValue)) {
+        select.value = currentValue;
+    }
+}
+
+function populateDiscordChannelSelect() {
+    const select = document.getElementById('discord-channel-select');
+    if (!select) return;
+    const currentValue = select.value;
+    select.innerHTML = '';
+    if (discordChannels.length === 0) {
+        select.appendChild(makeElement('option', { value: '' }, 'No text channels found'));
+        return;
+    }
+    select.appendChild(makeElement('option', { value: '' }, 'Select a channel...'));
+    discordChannels.forEach(channel => {
+        select.appendChild(makeElement('option', { value: channel.id }, `#${channel.name}`));
+    });
+    if (discordChannels.some(channel => channel.id === currentValue)) {
+        select.value = currentValue;
+    }
+}
+
+async function refreshDiscordGuilds() {
+    try {
+        const response = await fetch('/api/notifications/discord/guilds');
+        if (!response.ok) throw new Error((await response.json()).detail || 'Failed to load servers');
+        const data = await response.json();
+        discordGuilds = data.guilds || [];
+        populateDiscordGuildSelect();
+        const guildId = document.getElementById('discord-guild-select')?.value;
+        if (guildId) await refreshDiscordChannels(guildId);
+    } catch (error) {
+        console.error('Failed to fetch Discord guilds:', error);
+        discordGuilds = [];
+        populateDiscordGuildSelect();
+    }
+}
+
+async function refreshDiscordChannels(guildId) {
+    if (!guildId) {
+        discordChannels = [];
+        populateDiscordChannelSelect();
+        return;
+    }
+    try {
+        const response = await fetch(`/api/notifications/discord/guilds/${guildId}/channels`);
+        if (!response.ok) throw new Error((await response.json()).detail || 'Failed to load channels');
+        const data = await response.json();
+        discordChannels = data.channels || [];
+        populateDiscordChannelSelect();
+    } catch (error) {
+        console.error('Failed to fetch Discord channels:', error);
+        discordChannels = [];
+        populateDiscordChannelSelect();
+    }
+}
+
+async function sendTestNotification() {
+    const resultDiv = document.getElementById('discord-test-result');
+    const t = state.translations;
+
+    if (resultDiv) {
+        resultDiv.style.display = 'block';
+        resultDiv.className = 'verify-result loading';
+        resultDiv.textContent = t.gui?.settings?.notifications?.sending_test || 'Sending...';
+    }
+
+    try {
+        // make sure the backend tests against the freshest configuration
+        await saveSettings();
+        const response = await fetch('/api/notifications/test', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ provider: 'discord' }),
+        });
+        const data = await response.json();
+        if (resultDiv) {
+            resultDiv.className = data.success ? 'verify-result success' : 'verify-result error';
+            resultDiv.textContent = `${data.success ? '✓' : '✗'} ${data.message}`;
+        }
+    } catch (error) {
+        if (resultDiv) {
+            resultDiv.className = 'verify-result error';
+            resultDiv.textContent = `Error: ${error.message}`;
+        }
+    }
+}
+
 function flashTitle() {
     const originalTitle = document.title;
     let count = 0;
@@ -2399,9 +2662,11 @@ async function saveSettings() {
             "EMOTE": document.getElementById('mining-benefit-emote')?.checked,
             "UNKNOWN": document.getElementById('mining-benefit-unknown')?.checked
         },
-        library_sync: getLibrarySyncFromUI()
+        library_sync: getLibrarySyncFromUI(),
+        notifications: getNotificationsFromUI()
     };
     state.settings.library_sync = settings.library_sync;
+    state.settings.notifications = settings.notifications;
 
     try {
         await fetch('/api/settings', {
@@ -2675,6 +2940,36 @@ function applyTranslations(t) {
             // re-render lists with translated empty messages
             renderLibraryPicker();
             renderAutoWatchList();
+        }
+
+        // Notifications section
+        const notifications = t.gui.settings.notifications;
+        if (notifications) {
+            const setNotificationsText = (id, value) => {
+                const el = document.getElementById(id);
+                if (el && value) el.textContent = value;
+            };
+            setNotificationsText('settings-notifications-header', notifications.name);
+            setNotificationsText('settings-notifications-help', notifications.help);
+            setNotificationsText('notifications-cooldown-label-text', notifications.cooldown_label);
+            setNotificationsText('notifications-discord-header', notifications.discord);
+            setNotificationsText('discord-bot-token-label', notifications.discord_bot_token);
+            setNotificationsText('discord-verify-btn', notifications.verify_button);
+            setNotificationsText('discord-invite-label', notifications.invite_label);
+            setNotificationsText('discord-guild-label', notifications.server_label);
+            setNotificationsText('discord-refresh-guilds-btn', notifications.refresh_servers_button);
+            setNotificationsText('discord-channel-label', notifications.channel_label);
+            setNotificationsText('notifications-events-label', notifications.events_label);
+            setNotificationsText('discord-test-btn', notifications.test_button);
+            setNotificationsText('discord-event-drop_received-label', notifications.event_drop_received);
+            setNotificationsText(
+                'discord-event-unlinked_tracked_game-label', notifications.event_unlinked_tracked_game
+            );
+            setNotificationsText('discord-event-auth_attention-label', notifications.event_auth_attention);
+            setNotificationsText('discord-event-mining_stalled-label', notifications.event_mining_stalled);
+            setNotificationsText('discord-event-new_campaign-label', notifications.event_new_campaign);
+            // discord-bot-token-hint stays untranslated HTML - it contains the developer portal link
+            fetchNotificationsStatus();
         }
 
         // Re-render games to watch with translated empty messages
@@ -3168,6 +3463,30 @@ document.addEventListener('DOMContentLoaded', () => {
     // Load library data for the picker and provider status
     fetchOwnedGames();
     fetchLibraryStatus();
+
+    // Notifications
+    document.getElementById('notifications-enabled').addEventListener('change', () => {
+        updateNotificationsOptionsVisibility();
+        saveSettings();
+    });
+    const notificationsCooldownSlider = document.getElementById('notifications-cooldown');
+    notificationsCooldownSlider.addEventListener('input', (e) => updateSliderVisual(e.target));
+    notificationsCooldownSlider.addEventListener('change', saveSettings);
+    updateSliderVisual(notificationsCooldownSlider);
+    document.getElementById('discord-notifications-enabled').addEventListener('change', saveSettings);
+    document.getElementById('discord-bot-token').addEventListener('change', saveSettings);
+    document.getElementById('discord-verify-btn').addEventListener('click', verifyDiscordBot);
+    document.getElementById('discord-refresh-guilds-btn').addEventListener('click', refreshDiscordGuilds);
+    document.getElementById('discord-guild-select').addEventListener('change', (e) => {
+        refreshDiscordChannels(e.target.value);
+        saveSettings();
+    });
+    document.getElementById('discord-channel-select').addEventListener('change', saveSettings);
+    document.getElementById('discord-test-btn').addEventListener('click', sendTestNotification);
+    NOTIFICATION_EVENT_TYPES.forEach(eventType => {
+        document.getElementById(`discord-event-${eventType}`)?.addEventListener('change', saveSettings);
+    });
+    fetchNotificationsStatus();
 
 
     // Inventory game search dropdown

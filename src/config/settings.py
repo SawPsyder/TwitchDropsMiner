@@ -31,6 +31,32 @@ class LibrarySyncSettings(TypedDict):
     ubisoft: UbisoftLibrarySettings
 
 
+class NotificationEventSettings(TypedDict):
+    drop_received: bool
+    unlinked_tracked_game: bool
+    auth_attention: bool
+    mining_stalled: bool
+    new_campaign: bool
+
+
+class DiscordNotificationSettings(TypedDict):
+    enabled: bool
+    # bot token from a Discord Application the user owns (Developer Portal), used to
+    # list guilds/channels and post messages - never a shared/TDM-owned bot identity
+    bot_token: str
+    guild_id: str
+    channel_id: str
+    events: NotificationEventSettings
+
+
+class NotificationSettings(TypedDict):
+    enabled: bool
+    # minimum minutes between two notifications of the same (provider, event type),
+    # to avoid spam from a flapping condition (e.g. repeatedly stalled mining)
+    cooldown_minutes: int
+    discord: DiscordNotificationSettings
+
+
 class IdleBehaviorSettings(TypedDict):
     # when the manual and automated tracklists are both empty/exhausted, mine
     # drops for every actively-campaigned game instead of sitting idle
@@ -88,6 +114,23 @@ default_settings = {
         },
     },
     "minimum_refresh_interval_minutes": 30,
+    "notifications": {
+        "enabled": False,
+        "cooldown_minutes": 15,
+        "discord": {
+            "enabled": False,
+            "bot_token": "",
+            "guild_id": "",
+            "channel_id": "",
+            "events": {
+                "drop_received": True,
+                "unlinked_tracked_game": True,
+                "auth_attention": True,
+                "mining_stalled": True,
+                "new_campaign": True,
+            },
+        },
+    },
     "mining_benefits": {
         "BADGE": True,
         "DIRECT_ENTITLEMENT": True,
@@ -110,6 +153,7 @@ class Settings:
     inventory_filters: InventoryFilters
     library_sync: LibrarySyncSettings
     minimum_refresh_interval_minutes: int
+    notifications: NotificationSettings
     mining_benefits: dict[str, bool]
     proxy: str
 

@@ -454,6 +454,147 @@
                     </div>
                 </section>
 
+                <section class="settings-section settings-section-full notifications-section">
+                    <div class="library-header-row">
+                        <div>
+                            <h2 id="settings-notifications-header">Notifications</h2>
+                            <p id="settings-notifications-help" class="help-text">Get notified in Discord about
+                                mining events, even when you're not watching the web GUI.</p>
+                        </div>
+                        <label class="toggle-switch" title="Enable notifications">
+                            <input type="checkbox" id="notifications-enabled">
+                            <span class="toggle-slider"></span>
+                        </label>
+                    </div>
+                    <br>
+                    <div id="notifications-options" class="library-sync-options">
+                    <div class="library-sync-split">
+                    <div class="library-config-col">
+                        <div class="library-provider-card">
+                            <div class="provider-card-header">
+                                <div class="provider-identity">
+                                    <span class="provider-logo discord" aria-hidden="true">
+                                        <svg viewBox="0 0 24 24" width="28" height="28" fill="currentColor">
+                                            <path d="M20.317 4.37a19.791 19.791 0 00-4.885-1.515.074.074 0 00-.079.037c-.21.375-.444.865-.608 1.25a18.27 18.27 0 00-5.487 0 12.64 12.64 0 00-.617-1.25.077.077 0 00-.079-.037A19.736 19.736 0 003.677 4.37a.07.07 0 00-.032.027C.533 9.046-.32 13.58.099 18.057a.082.082 0 00.031.057 19.9 19.9 0 005.993 3.03.078.078 0 00.084-.028 14.09 14.09 0 001.226-1.994.076.076 0 00-.041-.106 13.107 13.107 0 01-1.872-.892.077.077 0 01-.008-.128 10.2 10.2 0 00.372-.292.074.074 0 01.077-.01c3.928 1.793 8.18 1.793 12.062 0a.074.074 0 01.078.01c.12.098.246.198.373.292a.077.077 0 01-.006.127 12.299 12.299 0 01-1.873.892.076.076 0 00-.04.107c.36.698.772 1.362 1.225 1.993a.076.076 0 00.084.028 19.839 19.839 0 006.002-3.03.077.077 0 00.032-.054c.5-5.177-.838-9.674-3.549-13.66a.061.061 0 00-.031-.03zM8.02 15.33c-1.183 0-2.157-1.085-2.157-2.419 0-1.333.956-2.419 2.157-2.419 1.21 0 2.176 1.096 2.157 2.42 0 1.333-.956 2.418-2.157 2.418zm7.975 0c-1.183 0-2.157-1.085-2.157-2.419 0-1.333.955-2.419 2.157-2.419 1.21 0 2.176 1.096 2.157 2.42 0 1.333-.946 2.418-2.157 2.418z"/>
+                                        </svg>
+                                    </span>
+                                    <div>
+                                        <h3 id="notifications-discord-header">Discord</h3>
+                                        <div id="discord-status-line" class="provider-status">Not configured</div>
+                                    </div>
+                                </div>
+                                <label class="toggle-switch" title="Enable Discord">
+                                    <input type="checkbox" id="discord-notifications-enabled">
+                                    <span class="toggle-slider"></span>
+                                </label>
+                            </div>
+                            <div class="provider-card-body">
+                                <div class="library-field">
+                                    <label for="discord-bot-token" id="discord-bot-token-label">Bot token</label>
+                                    <input type="password" id="discord-bot-token" autocomplete="off" data-1p-ignore
+                                        data-lpignore="true" data-bwignore
+                                        placeholder="Bot token from your Discord Application">
+                                    <small id="discord-bot-token-hint" class="help-text-inline">Create an
+                                        Application + Bot at the
+                                        <a href="https://discord.com/developers/applications" target="_blank"
+                                            rel="noopener">Discord Developer Portal</a> (no privileged intents
+                                        needed), then paste its token here. TDM never shares a bot identity across
+                                        users - this bot is yours alone.</small>
+                                </div>
+                                <div class="provider-card-footer">
+                                    <button id="discord-verify-btn" class="action-button" type="button">Verify &amp;
+                                        Get Invite Link</button>
+                                    <div id="discord-verify-result" class="verify-result" style="display: none;"></div>
+                                </div>
+                                <div id="discord-invite-row" class="library-field" style="display: none;">
+                                    <label id="discord-invite-label">Invite Link</label>
+                                    <div id="discord-invite-link-container"></div>
+                                </div>
+                                <div class="library-field">
+                                    <label for="discord-guild-select" id="discord-guild-label">Server</label>
+                                    <select id="discord-guild-select">
+                                        <option value="" id="discord-guild-placeholder">Click "Refresh Servers" after
+                                            inviting the bot…</option>
+                                    </select>
+                                </div>
+                                <div class="provider-card-footer">
+                                    <button id="discord-refresh-guilds-btn" class="action-button"
+                                        type="button">Refresh Servers</button>
+                                </div>
+                                <div class="library-field">
+                                    <label for="discord-channel-select" id="discord-channel-label">Channel</label>
+                                    <select id="discord-channel-select">
+                                        <option value="" id="discord-channel-placeholder">Select a server first…</option>
+                                    </select>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="library-vsep" aria-hidden="true"></div>
+
+                    <div class="library-list-col">
+                        <div class="library-block">
+                            <h3 id="notifications-cooldown-label-text">Cooldown Between Repeat Notifications
+                                (minutes)</h3>
+                            <div class="value-slider">
+                                <div class="value-slider-fill" aria-hidden="true"></div>
+                                <span id="notifications-cooldown-value" class="value-slider-value">15</span>
+                                <input type="range" id="notifications-cooldown" min="0" max="120" step="5" value="15">
+                            </div>
+                        </div>
+
+                        <div class="library-block">
+                            <h3 id="notifications-events-label">Notify Me About</h3>
+                            <div class="toggle-list" id="discord-events-list">
+                                <div class="toggle-row">
+                                    <span id="discord-event-drop_received-label">Drop received</span>
+                                    <label class="toggle-switch">
+                                        <input type="checkbox" id="discord-event-drop_received">
+                                        <span class="toggle-slider"></span>
+                                    </label>
+                                </div>
+                                <div class="toggle-row">
+                                    <span id="discord-event-unlinked_tracked_game-label">Unlinked tracked game</span>
+                                    <label class="toggle-switch">
+                                        <input type="checkbox" id="discord-event-unlinked_tracked_game">
+                                        <span class="toggle-slider"></span>
+                                    </label>
+                                </div>
+                                <div class="toggle-row">
+                                    <span id="discord-event-auth_attention-label">Auth needs attention</span>
+                                    <label class="toggle-switch">
+                                        <input type="checkbox" id="discord-event-auth_attention">
+                                        <span class="toggle-slider"></span>
+                                    </label>
+                                </div>
+                                <div class="toggle-row">
+                                    <span id="discord-event-mining_stalled-label">Mining stalled</span>
+                                    <label class="toggle-switch">
+                                        <input type="checkbox" id="discord-event-mining_stalled">
+                                        <span class="toggle-slider"></span>
+                                    </label>
+                                </div>
+                                <div class="toggle-row">
+                                    <span id="discord-event-new_campaign-label">New campaign available</span>
+                                    <label class="toggle-switch">
+                                        <input type="checkbox" id="discord-event-new_campaign">
+                                        <span class="toggle-slider"></span>
+                                    </label>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="provider-card-footer">
+                            <button id="discord-test-btn" class="action-button" type="button">Send Test
+                                Notification</button>
+                            <div id="discord-test-result" class="verify-result" style="display: none;"></div>
+                        </div>
+                    </div>
+                    </div>
+                    </div>
+                </section>
+
                 <div class="settings-spacer" aria-hidden="true"></div>
             </div>
         </div>

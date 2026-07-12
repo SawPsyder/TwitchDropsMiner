@@ -12,6 +12,8 @@ from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
+from src.notifications import DiscordProvider, NotificationError
+
 
 if TYPE_CHECKING:
     import uvicorn
@@ -79,6 +81,7 @@ class SettingsUpdate(BaseModel):
     inventory_filters: dict | None = None
     mining_benefits: dict[str, bool] | None = None
     library_sync: dict | None = None
+    notifications: dict | None = None
 
 
 class ProxyVerifyRequest(BaseModel):
@@ -364,6 +367,74 @@ async def trigger_library_sync():
         "auto_watch_games": twitch_client.auto_watch_games,
         "status": twitch_client.library_sync.get_status(),
     }
+
+
+class NotificationTestRequest(BaseModel):
+    provider: str = "discord"
+
+
+def _get_discord_provider() -> DiscordProvider:
+    if not twitch_client:
+        raise HTTPException(status_code=503, detail="Twitch client not initialized")
+    provider = twitch_client.notification_service.get_provider("discord")
+    if not isinstance(provider, DiscordProvider):
+        raise HTTPException(status_code=500, detail="Discord provider not registered")
+    return provider
+
+
+@app.get("/api/notifications/status")
+async def get_notifications_status():
+    """Get notification settings/connection status"""
+    if not twitch_client:
+        raise HTTPException(status_code=503, detail="Twitch client not initialized")
+
+    return twitch_client.notification_service.get_status()
+
+
+@app.post("/api/notifications/discord/verify")
+async def verify_discord_bot():
+    """Verify the configured Discord bot token and build its invite link"""
+    provider = _get_discord_provider()
+    try:
+        result = await provider.connect()
+    except NotificationError as exc:
+        return {"success": False, "message": str(exc)}
+    return {"success": True, **result}
+
+
+@app.get("/api/notifications/discord/guilds")
+async def get_discord_guilds():
+    """List guilds (servers) the configured Discord bot has been invited to"""
+    provider = _get_discord_provider()
+    try:
+        guilds = await provider.list_guilds()
+    except NotificationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"guilds": guilds}
+
+
+@app.get("/api/notifications/discord/guilds/{guild_id}/channels")
+async def get_discord_channels(guild_id: str):
+    """List text channels of a guild the configured Discord bot can post in"""
+    provider = _get_discord_provider()
+    try:
+        channels = await provider.list_channels(guild_id)
+    except NotificationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"channels": channels}
+
+
+@app.post("/api/notifications/test")
+async def send_test_notification(request: NotificationTestRequest):
+    """Send a one-off test notification through the given provider"""
+    if not twitch_client:
+        raise HTTPException(status_code=503, detail="Twitch client not initialized")
+
+    try:
+        await twitch_client.notification_service.send_test(request.provider)
+    except NotificationError as exc:
+        return {"success": False, "message": str(exc)}
+    return {"success": True, "message": "Test notification sent"}
 
 
 @app.post("/api/login")

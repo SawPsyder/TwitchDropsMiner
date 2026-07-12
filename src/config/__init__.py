@@ -38,6 +38,7 @@ from .paths import (
     DATA_DIR,
     LANG_PATH,
     LIBRARY_CACHE_PATH,
+    NOTIFICATIONS_STATE_PATH,
     SETTINGS_PATH,
     UBISOFT_AUTH_PATH,
     _merge_vars,
@@ -78,6 +79,7 @@ __all__ = [
     "SETTINGS_PATH",
     "LIBRARY_CACHE_PATH",
     "UBISOFT_AUTH_PATH",
+    "NOTIFICATIONS_STATE_PATH",
     "_merge_vars",
     # client_info.py
     "ClientInfo",

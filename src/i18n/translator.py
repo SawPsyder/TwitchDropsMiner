@@ -262,6 +262,30 @@ class GUISettingsLibrary(TypedDict):
     no_new_games: str
 
 
+class GUISettingsNotifications(TypedDict):
+    name: str
+    help: str
+    cooldown_label: str
+    discord: str
+    discord_bot_token: str
+    not_configured: str
+    connected: str
+    verifying: str
+    verify_button: str
+    invite_label: str
+    server_label: str
+    refresh_servers_button: str
+    channel_label: str
+    events_label: str
+    event_drop_received: str
+    event_unlinked_tracked_game: str
+    event_auth_attention: str
+    event_mining_stalled: str
+    event_new_campaign: str
+    test_button: str
+    sending_test: str
+
+
 class GUISettings(TypedDict):
     general: GUISettingsGeneral
     appearance: GUISettingsAppearance
@@ -287,6 +311,7 @@ class GUISettings(TypedDict):
     proxy: GUISettingsProxy
     idle_behavior: GUISettingsIdleBehavior
     library: GUISettingsLibrary
+    notifications: GUISettingsNotifications
 
 
 class GUIHeader(TypedDict):

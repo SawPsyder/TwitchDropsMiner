@@ -176,8 +176,10 @@ class WebGUIManager:
         """Broadcast the list of wanted items to connected clients."""
         tree = self.get_wanted_game_tree()
         asyncio.create_task(self._broadcaster.emit("wanted_items_update", tree))
+        unlinked_tree = self.get_unlinked_auto_tracked_items()
+        asyncio.create_task(self._broadcaster.emit("unlinked_auto_items_update", unlinked_tree))
         asyncio.create_task(
-            self._broadcaster.emit("unlinked_auto_items_update", self.get_unlinked_auto_tracked_items())
+            self._twitch.notification_service.track_unlinked_tracked_games(unlinked_tree)
         )
 
     def broadcast_auto_watch(self, games: list[str]):

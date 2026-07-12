@@ -146,6 +146,23 @@ class SettingsManager:
                 # never log provider credentials (API keys, account tokens)
                 log_value=self._strip_library_credentials(sanitized_library_sync),
             )
+        if settings_data.get("notifications") is not None:
+            sanitized_notifications = self._sanitize_notifications(settings_data["notifications"])
+            current_notifications: dict[str, Any] = getattr(self._settings, "notifications", {})
+            previous_token = str(current_notifications.get("discord", {}).get("bot_token", ""))
+            new_token = str(sanitized_notifications.get("discord", {}).get("bot_token", ""))
+            if previous_token and new_token != previous_token:
+                # a changed bot token invalidates any previously verified guild/channel
+                sanitized_notifications["discord"]["guild_id"] = ""
+                sanitized_notifications["discord"]["channel_id"] = ""
+            # notifications never affect the mining loop, so this never triggers a restart
+            should_trigger_update |= self.check_and_update_setting(
+                "notifications",
+                sanitized_notifications,
+                False,
+                # never log the bot token
+                log_value=self._strip_notification_credentials(sanitized_notifications),
+            )
 
         self._settings.save()
         asyncio.create_task(self._broadcaster.emit("settings_updated", self.get_settings()))
@@ -207,6 +224,37 @@ class SettingsManager:
         """A copy of a library_sync settings object without provider credentials."""
         stripped = dict(value)
         for provider_key, credential_keys in cls._LIBRARY_CREDENTIAL_KEYS.items():
+            provider = dict(stripped.get(provider_key, {}))
+            for credential_key in credential_keys:
+                provider.pop(credential_key, None)
+            stripped[provider_key] = provider
+        return stripped
+
+    def _sanitize_notifications(self, value: dict[str, Any]) -> dict[str, Any]:
+        """Validate an incoming notifications settings object against the current one.
+
+        Unknown keys are dropped, missing keys are filled in from the current
+        settings, and invalid values are replaced with their current ones.
+        """
+        sanitized: dict[str, Any] = dict(value)
+        current: dict[str, Any] = dict(self._settings.notifications)
+        merge_json(sanitized, current)
+        try:
+            sanitized["cooldown_minutes"] = max(0, int(sanitized["cooldown_minutes"]))
+        except (TypeError, ValueError):
+            sanitized["cooldown_minutes"] = current["cooldown_minutes"]
+        return sanitized
+
+    # per-provider settings keys that hold credentials rather than connection config
+    _NOTIFICATION_CREDENTIAL_KEYS: dict[str, tuple[str, ...]] = {
+        "discord": ("bot_token",),
+    }
+
+    @classmethod
+    def _strip_notification_credentials(cls, value: dict[str, Any]) -> dict[str, Any]:
+        """A copy of a notifications settings object without provider credentials."""
+        stripped = dict(value)
+        for provider_key, credential_keys in cls._NOTIFICATION_CREDENTIAL_KEYS.items():
             provider = dict(stripped.get(provider_key, {}))
             for credential_key in credential_keys:
                 provider.pop(credential_key, None)
