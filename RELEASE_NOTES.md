@@ -1,3 +1,17 @@
+# Release Notes - v1.4.1
+
+This release polishes the Inventory tree added in 1.4.0 and pulls in a batch of dependency updates.
+
+### 🎨 Inventory Polish
+- **All Benefit Icons Shown**: Drop rows now show an icon for every benefit a drop grants, not just
+  the first one, each with a hover tooltip giving its name and type (Item/Badge/Emote).
+- **Aligned Columns**: Campaign and drop rows now share a grid layout, so campaign dates line up
+  cleanly above the drop names and icons underneath them.
+
+### ⚙️ Infrastructure
+- **Dependency Updates**: Bumped `aiohttp`, `starlette`, `python-socketio`, and `python-engineio` to
+  their latest patch releases.
+
 # Release Notes - v1.4.0
 
 This release reworks the Inventory tab into a collapsible, status-grouped tree and gives the
