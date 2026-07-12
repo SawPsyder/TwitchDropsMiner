@@ -1,7 +1,6 @@
 # Release Notes - v1.5.0
 
-This release adds Discord notifications and favourite drop markers, plus an inventory display
-polish pass.
+This release adds Discord notifications and favourite drop markers.
 
 ### 🔔 Discord Notifications (New)
 - **Bring Your Own Bot**: Connect a Discord bot application you own to get notified about drops
@@ -16,11 +15,19 @@ polish pass.
 - **Favourite Filter & Badge**: Filter the inventory view by favourite, and see a dedicated
   "Favourite" source badge in the Drops Queue.
 
-### 🎨 Inventory Display Polish
-- **All Benefit Icons Shown**: Drop rows now render every benefit icon with a hover tooltip (name
-  and type), instead of only the first icon plus a truncated "name (+N)" text summary.
-- **Grid-Aligned Rows**: Campaign and drop rows now share a common grid column width so dates,
-  names, and icons line up vertically.
+# Release Notes - v1.4.1
+
+This release polishes the Inventory tree added in 1.4.0 and pulls in a batch of dependency updates.
+
+### 🎨 Inventory Polish
+- **All Benefit Icons Shown**: Drop rows now show an icon for every benefit a drop grants, not just
+  the first one, each with a hover tooltip giving its name and type (Item/Badge/Emote).
+- **Aligned Columns**: Campaign and drop rows now share a grid layout, so campaign dates line up
+  cleanly above the drop names and icons underneath them.
+
+### ⚙️ Infrastructure
+- **Dependency Updates**: Bumped `aiohttp`, `starlette`, `python-socketio`, and `python-engineio` to
+  their latest patch releases.
 
 # Release Notes - v1.4.0
 
