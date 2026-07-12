@@ -1,3 +1,15 @@
+# Release Notes - v1.6.0
+
+This release fixes a bug in the favourite drops feature added in 1.5.0.
+
+### 🐛 Bug Fixes
+- **Favourite Drops No Longer Black Out Sibling Campaigns**: Favouriting a drop whose own campaign
+  wasn't earnable yet (not linked, not started, etc.) used to silently remove the game's *other*,
+  perfectly mineable campaigns from the wanted queue as well, since the whole game was reassigned to
+  the favourite tier before checking whether that tier actually produced anything. A favourited game
+  now only claims the favourite tier once its favourite tree resolves to something; otherwise it falls
+  back to being tracked normally, same as before you favourited anything.
+
 # Release Notes - v1.5.0
 
 This release adds Discord notifications and favourite drop markers.
