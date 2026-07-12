@@ -864,6 +864,9 @@ body.reduce-motion .progress-fill::after {
     display: flex;
     flex-direction: column;
     gap: 16px;
+    /* Shared first-column width for .inventory-campaign-row and .inventory-drop-row so a
+       campaign's date range and its drops' names/icons line up vertically underneath it. */
+    --inventory-first-col: 40%;
 }
 
 .inventory-view-mode-control {
@@ -990,12 +993,21 @@ body.reduce-motion .progress-fill::after {
 }
 
 .inventory-campaign-row {
-    display: flex;
+    display: grid;
+    grid-template-columns: var(--inventory-first-col) minmax(0, 1fr) auto;
     align-items: center;
     gap: 10px;
     height: 44px;
     padding: 0 16px 0 40px;
     font-size: 12px;
+    background: var(--bg-tertiary);
+}
+
+.inventory-campaign-title {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-width: 0;
 }
 
 .inventory-status-badge {
@@ -1060,7 +1072,7 @@ body.reduce-motion .progress-fill::after {
 }
 
 .campaign-name-link {
-    flex: 2;
+    flex: 1;
     min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -1083,7 +1095,6 @@ body.reduce-motion .progress-fill::after {
 }
 
 .inventory-campaign-dates {
-    flex: 2;
     min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -1091,6 +1102,14 @@ body.reduce-motion .progress-fill::after {
     font-size: 11px;
     color: var(--text-secondary);
     font-style: italic;
+    text-align: left;
+}
+
+.inventory-campaign-actions {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    justify-self: end;
 }
 
 .inventory-campaign-progress {
@@ -1134,11 +1153,12 @@ body.reduce-motion .progress-fill::after {
 }
 
 .inventory-drop-row {
-    display: flex;
+    display: grid;
+    grid-template-columns: var(--inventory-first-col) minmax(0, 1fr) auto;
     align-items: center;
     gap: 10px;
-    height: 36px;
-    padding: 0 16px 0 64px;
+    min-height: 36px;
+    padding: 6px 16px 6px 64px;
     font-size: 11px;
     border-top: 1px solid var(--border-color);
     background: var(--bg-secondary);
@@ -1153,6 +1173,17 @@ body.reduce-motion .progress-fill::after {
     background: color-mix(in srgb, var(--accent-color) 6%, var(--bg-secondary));
 }
 
+.inventory-drop-icons {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 4px;
+}
+
+.inventory-drop-icon-wrap {
+    display: inline-flex;
+}
+
 .inventory-drop-icon {
     width: 22px;
     height: 22px;
@@ -1161,21 +1192,12 @@ body.reduce-motion .progress-fill::after {
 }
 
 .inventory-drop-name {
-    flex: 1.2;
     min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
     font-weight: 500;
-}
-
-.inventory-drop-benefit {
-    flex: 1;
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    color: var(--text-secondary);
+    text-align: left;
 }
 
 .inventory-drop-progress {
@@ -1367,6 +1389,52 @@ body.reduce-motion .progress-fill::after {
     height: 32px;
     border-radius: 4px;
     object-fit: cover;
+}
+
+/* Custom tooltips: styled bubble on hover instead of the native browser title tooltip.
+   Add class "tooltip-target" plus a "data-tooltip" attribute to any element. */
+.tooltip-target {
+    position: relative;
+}
+
+.tooltip-target::after,
+.tooltip-target::before {
+    opacity: 0;
+    visibility: hidden;
+    pointer-events: none;
+    position: absolute;
+    left: 50%;
+    z-index: 60;
+    transition: opacity 0.12s ease, transform 0.12s ease;
+}
+
+.tooltip-target::after {
+    content: attr(data-tooltip);
+    bottom: calc(100% + 9px);
+    transform: translateX(-50%) translateY(4px);
+    background: #1a1a1a;
+    color: #f0f0f0;
+    padding: 4px 8px;
+    border-radius: 4px;
+    font-size: 11px;
+    font-weight: 500;
+    white-space: nowrap;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+}
+
+.tooltip-target::before {
+    content: '';
+    bottom: 100%;
+    transform: translateX(-50%) translateY(4px);
+    border: 5px solid transparent;
+    border-top-color: #1a1a1a;
+}
+
+.tooltip-target:hover::after,
+.tooltip-target:hover::before {
+    opacity: 1;
+    visibility: visible;
+    transform: translateX(-50%) translateY(0);
 }
 
 /* Settings */
