@@ -236,22 +236,30 @@
         },
         "inventory": {
             "no_campaigns": "No campaigns loaded yet...",
+            "no_matches": "No campaigns match the current filters.",
             "status": {
-                "active": "Active ✔",
-                "upcoming": "Upcoming ⏳",
-                "expired": "Expired ❌",
-                "claimed": "Claimed ✔"
+                "active": "Linked",
+                "upcoming": "Upcoming",
+                "expired": "Expired",
+                "finished": "Collected",
+                "claimed": "Claimed"
             },
             "starts": "Starts: {time}",
             "ends": "Ends: {time}",
             "claimed_drops": "claimed",
+            "campaign_count": "campaign",
+            "campaign_count_plural": "campaigns",
+            "view_mode": {
+                "game": "By Game",
+                "category": "By Category"
+            },
             "refresh_status": "Refresh Status",
             "filters": {
-                "active": "Active",
+                "active": "Linked",
                 "not_linked": "Not Linked",
                 "upcoming": "Upcoming",
                 "expired": "Expired",
-                "finished": "Finished",
+                "finished": "Collected",
                 "item": "Item",
                 "badge": "Badge",
                 "emote": "Emote",

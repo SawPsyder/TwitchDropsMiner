@@ -15,7 +15,9 @@ const state = {
     linkClickedCampaigns: new Set(),  // Campaign IDs where "Link Account" was clicked; shows a "Refresh Status" trigger
     linkClickedAutoGames: new Set(),  // Game names where "Link Account" was clicked in the unlinked auto-tracked panel
     unlinkedAutoItems: [],  // Latest "Games Awaiting Link" tree (kept in sync for post-refresh link checks)
-    pendingLinkCheck: null  // { kind: 'campaign'|'auto_game', campaignId?, gameName } - set right before a "Refresh Status" reload
+    pendingLinkCheck: null,  // { kind: 'campaign'|'auto_game', campaignId?, gameName } - set right before a "Refresh Status" reload
+    // Inventory section collapse state (Categories view) - active/not_linked/upcoming expanded by default
+    inventorySections: { active: true, not_linked: true, upcoming: true, finished: false, expired: false }
 };
 
 // ==================== Animations / Reduced Motion ====================
@@ -73,6 +75,16 @@ function setDarkModeUI(mode) {
     const radio = document.getElementById(`dark-mode-${value}`);
     if (radio) radio.checked = true;
     applyDarkMode(value);
+}
+
+function getInventoryViewModeFromUI() {
+    return document.getElementById('inventory-view-mode-category')?.checked ? 'category' : 'game';
+}
+
+function setInventoryViewModeUI(mode) {
+    const value = mode === 'category' ? 'category' : 'game';
+    const radio = document.getElementById(`inventory-view-mode-${value}`);
+    if (radio) radio.checked = true;
 }
 
 // Live-react to OS-level changes while left on "auto", and apply a sane
@@ -738,74 +750,34 @@ function getInventoryFilters() {
 }
 
 
-function campaignMatchesFilters(campaign, filters) {
-    // Calculate "finished" status: all drops claimed
-    const isFinished = campaign.total_drops > 0 && campaign.claimed_drops === campaign.total_drops;
+// Filtering now happens per DROP (matching the bucket it lands in), not per whole
+// campaign - otherwise unchecking e.g. "Collected" wouldn't hide already-claimed drops
+// that belong to a campaign which is still "Active" overall.
+function dropMatchesStatusFilter(bucket, filters) {
+    const anyStatusFilter = filters.show_active || filters.show_not_linked ||
+        filters.show_upcoming || filters.show_expired || filters.show_finished;
+    if (!anyStatusFilter) return true;
+    return !!filters[`show_${bucket}`];
+}
 
-    // Check if any filter is enabled
-    const hasGameFilter = filters.game_name_search && filters.game_name_search.length > 0;
-    const anyFilterEnabled = filters.show_active || filters.show_not_linked ||
-        filters.show_upcoming || filters.show_expired ||
-        filters.show_finished || hasGameFilter;
-
-    // If no filters enabled, show all campaigns
-    if (!anyFilterEnabled) {
-        return true;
-    }
-
-    // Check status filters (OR logic - campaign matches if ANY checked filter applies)
-    let statusMatch = false;
-
-    if (filters.show_active && campaign.active) statusMatch = true;
-    if (filters.show_not_linked && !campaign.linked) statusMatch = true;
-    if (filters.show_upcoming && campaign.upcoming) statusMatch = true;
-    if (filters.show_expired && campaign.expired) statusMatch = true;
-    if (filters.show_finished && isFinished) statusMatch = true;
-
-    // If status filters are enabled but campaign doesn't match any, filter it out
-    const hasStatusFilters = filters.show_active || filters.show_not_linked ||
-        filters.show_upcoming || filters.show_expired ||
-        filters.show_finished;
-    if (hasStatusFilters && !statusMatch) {
-        return false;
-    }
-
-    // Check game name filter (AND logic with status filters, OR logic among selected games)
-    if (hasGameFilter) {
-        const gameName = campaign.game_name;
-        // Campaign must match at least ONE of the selected games
-        const gameMatch = filters.game_name_search.includes(gameName);
-        if (!gameMatch) {
-            return false;
-        }
-    }
-
-    // Check benefit type filter - campaign must have at least one drop with a matching benefit type
-    // Only filter if at least one benefit type is UNCHECKED (otherwise show all)
+function dropMatchesBenefitFilter(drop, filters) {
     const allBenefitsEnabled = filters.show_benefit_item && filters.show_benefit_badge &&
         filters.show_benefit_emote && filters.show_benefit_other;
+    if (allBenefitsEnabled) return true;
+    if (!drop.benefits || drop.benefits.length === 0) return false;
+    return drop.benefits.some(benefit => {
+        const benefitType = (benefit.type || '').toUpperCase();
+        if (filters.show_benefit_item && benefitType === 'DIRECT_ENTITLEMENT') return true;
+        if (filters.show_benefit_badge && benefitType === 'BADGE') return true;
+        if (filters.show_benefit_emote && benefitType === 'EMOTE') return true;
+        if (filters.show_benefit_other && benefitType === 'UNKNOWN') return true;
+        return false;
+    });
+}
 
-    if (!allBenefitsEnabled && campaign.drops) {
-        let benefitMatch = false;
-        for (const drop of campaign.drops) {
-            if (drop.benefits && drop.benefits.length > 0) {
-                for (const benefit of drop.benefits) {
-                    const benefitType = (benefit.type || '').toUpperCase();
-                    // Map filter checkboxes to actual API benefit types
-                    if (filters.show_benefit_item && benefitType === 'DIRECT_ENTITLEMENT') benefitMatch = true;
-                    if (filters.show_benefit_badge && benefitType === 'BADGE') benefitMatch = true;
-                    if (filters.show_benefit_emote && benefitType === 'EMOTE') benefitMatch = true;
-                    if (filters.show_benefit_other && benefitType === 'UNKNOWN') benefitMatch = true;
-                }
-            }
-        }
-        if (!benefitMatch) {
-            return false;
-        }
-    }
-
-
-    return true;
+function campaignMatchesGameFilter(campaign, filters) {
+    if (!filters.game_name_search || filters.game_name_search.length === 0) return true;
+    return filters.game_name_search.includes(campaign.game_name);
 }
 
 
@@ -815,11 +787,29 @@ function onInventoryFilterChange() {
     renderInventory();
 }
 
+// Smart-expand: checking a status filter forces its section open once (never auto-collapses
+// another). Only wired to the 5 status checkboxes, not every render, so a section the user
+// manually collapses afterwards stays collapsed instead of snapping back open.
+function applyStatusFilterSmartExpand() {
+    const filters = getInventoryFilters();
+    INVENTORY_SECTION_ORDER.forEach(key => {
+        if (filters[`show_${key}`]) {
+            state.inventorySections[key] = true;
+        }
+    });
+}
+
+function onInventoryStatusFilterChange() {
+    applyStatusFilterSmartExpand();
+    onInventoryFilterChange();
+}
+
 function clearInventoryFilters() {
-    // Uncheck all filter checkboxes
-    document.getElementById('filter-active').checked = false;
-    document.getElementById('filter-not-linked').checked = false;
-    document.getElementById('filter-upcoming').checked = false;
+    // Reset status filters to the standard default view (Active + Not Linked + Upcoming
+    // shown, Expired/Collected hidden) - not the Categories toggle, which is untouched.
+    document.getElementById('filter-active').checked = true;
+    document.getElementById('filter-not-linked').checked = true;
+    document.getElementById('filter-upcoming').checked = true;
     document.getElementById('filter-expired').checked = false;
     document.getElementById('filter-finished').checked = false;
     document.getElementById('inventory-game-search').value = '';
@@ -835,6 +825,7 @@ function clearInventoryFilters() {
     updateGameTagsDisplay();
 
     // Save and re-render
+    applyStatusFilterSmartExpand();
     saveSettings();
     renderInventory();
 }
@@ -1022,16 +1013,319 @@ function handleGameSearchKeydown(event) {
     }
 }
 
+// ==================== Inventory Tree (Game > Campaign > Drop) ====================
+
+// Section order top-to-bottom; default expand state lives in state.inventorySections.
+const INVENTORY_SECTION_ORDER = ['active', 'not_linked', 'upcoming', 'finished', 'expired'];
+
+function isCampaignFinished(campaign) {
+    return campaign.total_drops > 0 && campaign.claimed_drops === campaign.total_drops;
+}
+
+// Groups already-filtered { campaign, drops } entries by game name, sorting games
+// alphabetically and campaigns within a game by start date.
+function groupEntriesByGame(entries) {
+    const byGame = {};
+    entries.forEach(entry => {
+        const key = entry.campaign.game_name;
+        if (!byGame[key]) {
+            byGame[key] = { game_name: key, game_box_art_url: entry.campaign.game_box_art_url, campaigns: [] };
+        }
+        byGame[key].campaigns.push(entry);
+    });
+    const games = Object.values(byGame);
+    games.forEach(game => game.campaigns.sort((a, b) => new Date(a.campaign.starts_at) - new Date(b.campaign.starts_at)));
+    games.sort((a, b) => a.game_name.localeCompare(b.game_name));
+    return games;
+}
+
+// Bucketing happens per DROP, not per campaign: a single campaign's drops can land in
+// different sections at once (one already claimed, another still counting down, another
+// not unlocked yet), so the same game/campaign can appear under several sections
+// simultaneously - each instance listing only the drops that belong there.
+function inventoryBucketForDrop(drop, campaign, now) {
+    if (drop.is_claimed) return 'finished';
+    const startsAt = new Date(drop.starts_at).getTime();
+    const endsAt = new Date(drop.ends_at).getTime();
+    const inActiveWindow = now >= startsAt && now <= endsAt;
+    const inUpcomingWindow = now < startsAt;
+    if (!campaign.linked && (inActiveWindow || inUpcomingWindow)) return 'not_linked';
+    if (inActiveWindow) return 'active';
+    if (inUpcomingWindow) return 'upcoming';
+    return 'expired';
+}
+
+// Categories-off view: pools every bucket's matching drops back into one entry per
+// campaign (instead of splitting them across sections), still filtered per-drop by the
+// current status/benefit filters.
+function collectFilteredEntries(campaigns, filters) {
+    const now = Date.now();
+    const byCampaignId = {};
+    const order = [];
+    campaigns.forEach(campaign => {
+        if (!campaignMatchesGameFilter(campaign, filters)) return;
+        campaign.drops.forEach(drop => {
+            const bucket = inventoryBucketForDrop(drop, campaign, now);
+            if (!dropMatchesStatusFilter(bucket, filters)) return;
+            if (!dropMatchesBenefitFilter(drop, filters)) return;
+            let entry = byCampaignId[campaign.id];
+            if (!entry) {
+                entry = { campaign, drops: [] };
+                byCampaignId[campaign.id] = entry;
+                order.push(entry);
+            }
+            entry.drops.push(drop);
+        });
+    });
+    return order;
+}
+
+// Returns { [sectionKey]: [{ game_name, game_box_art_url, campaigns: [{ campaign, drops }] }] }
+// - "campaigns" here only carries the drops relevant to both that section's bucket and
+// the current status/benefit/game filters.
+function buildInventoryTree(campaigns, filters) {
+    const now = Date.now();
+    const bucketEntries = { active: [], not_linked: [], upcoming: [], finished: [], expired: [] };
+    const seenByBucket = { active: {}, not_linked: {}, upcoming: {}, finished: {}, expired: {} };
+
+    campaigns.forEach(campaign => {
+        if (!campaignMatchesGameFilter(campaign, filters)) return;
+        campaign.drops.forEach(drop => {
+            const bucket = inventoryBucketForDrop(drop, campaign, now);
+            if (!dropMatchesStatusFilter(bucket, filters)) return;
+            if (!dropMatchesBenefitFilter(drop, filters)) return;
+
+            const seen = seenByBucket[bucket];
+            let entry = seen[campaign.id];
+            if (!entry) {
+                entry = { campaign, drops: [] };
+                seen[campaign.id] = entry;
+                bucketEntries[bucket].push(entry);
+            }
+            entry.drops.push(drop);
+        });
+    });
+
+    const tree = {};
+    INVENTORY_SECTION_ORDER.forEach(key => {
+        tree[key] = groupEntriesByGame(bucketEntries[key]);
+    });
+    return tree;
+}
+
+function formatCampaignDateRange(campaign, t) {
+    const start = campaign.starts_at ? new Date(campaign.starts_at).toLocaleString() : null;
+    const end = campaign.ends_at ? new Date(campaign.ends_at).toLocaleString() : null;
+    if (start && end) return `${start} – ${end}`;
+    if (start) return (t.gui?.inventory?.starts || 'Starts: {time}').replace('{time}', start);
+    if (end) return (t.gui?.inventory?.ends || 'Ends: {time}').replace('{time}', end);
+    return '';
+}
+
+function buildInventoryDropRow(drop, campaign, t) {
+    const benefits = drop.benefits || [];
+    const firstBenefit = benefits[0] || null;
+    const extraCount = benefits.length - 1;
+    const isExpired = inventoryBucketForDrop(drop, campaign, Date.now()) === 'expired';
+
+    const rowClass = [
+        'inventory-drop-row',
+        drop.is_claimed ? 'claimed' : '',
+        drop.can_claim ? 'active' : '',
+        isExpired ? 'uncollectible' : ''
+    ].filter(Boolean).join(' ');
+
+    return makeElement('div', { class: rowClass }, '', row => {
+        if (firstBenefit) {
+            row.appendChild(makeImageElement(firstBenefit.image_url, firstBenefit.name, 'benefit-icon inventory-drop-icon'));
+        }
+        row.appendChild(makeElement('span', { class: 'inventory-drop-name', title: drop.name }, drop.name));
+        if (firstBenefit) {
+            const benefitText = `${firstBenefit.name} (${firstBenefit.type})`;
+            const extraNames = extraCount > 0 ? benefits.slice(1).map(b => `${b.name} (${b.type})`).join(', ') : '';
+            row.appendChild(makeElement('span', {
+                class: 'inventory-drop-benefit',
+                title: extraCount > 0 ? `${benefitText}; ${extraNames}` : benefitText
+            }, extraCount > 0 ? `${benefitText} +${extraCount}` : benefitText));
+        }
+        row.appendChild(makeElement('span', { class: `inventory-drop-progress${drop.is_claimed ? ' claimed' : ''}` },
+            `${drop.current_minutes} / ${drop.required_minutes} min (${Math.round(drop.progress * 100)}%)`));
+    });
+}
+
+// Shared by both campaign-row variants below: link badge, name link, date range,
+// claimed/total progress, and the Link Account / Refresh Status buttons.
+function appendCampaignRowCommonParts(el, campaign, t) {
+    const claimedCountText = t.gui?.inventory?.claimed_drops || 'claimed';
+
+    el.appendChild(makeElement('a', {
+        href: campaign.campaign_url, target: '_blank', rel: 'noopener noreferrer',
+        class: 'campaign-name-link inventory-campaign-name', title: campaign.name
+    }, campaign.name, link =>
+        link.appendChild(makeElement('span', { class: 'external-link-icon' }, '🔗'))
+    ));
+
+    const dateRange = formatCampaignDateRange(campaign, t);
+    if (dateRange) {
+        el.appendChild(makeElement('span', { class: 'inventory-campaign-dates', title: dateRange }, dateRange));
+    }
+
+    el.appendChild(makeElement('span', { class: 'inventory-campaign-progress' },
+        `${campaign.claimed_drops} / ${campaign.total_drops} ${claimedCountText}`));
+
+    if (!campaign.linked && campaign.link_url) {
+        el.appendChild(makeElement('button', { class: 'link-account-btn inventory-link-btn' }, 'Link Account', btn => {
+            btn.addEventListener('click', () => {
+                window.open(campaign.link_url, '_blank');
+                if (!state.linkClickedCampaigns.has(campaign.id)) {
+                    state.linkClickedCampaigns.add(campaign.id);
+                    renderInventory();
+                }
+            });
+        }));
+        if (state.linkClickedCampaigns.has(campaign.id)) {
+            const refreshStatusText = t.gui?.inventory?.refresh_status || 'Refresh Status';
+            el.appendChild(makeElement('button', { class: 'link-account-btn refresh-status-btn inventory-link-btn' }, refreshStatusText, btn => {
+                btn.addEventListener('click', () => reloadCampaigns({
+                    kind: 'campaign',
+                    campaignId: campaign.id,
+                    gameName: campaign.game_name
+                }));
+            }));
+        }
+    }
+}
+
+// Categories-off view: still filtered per-drop (see collectFilteredEntries), just pooled
+// into one campaign instance instead of split across sections. Status badge is computed
+// from the campaign's own active/upcoming/expired/finished state (there's no single
+// section context here to derive it from).
+function buildFlatCampaignGroup(entry, t) {
+    const { campaign, drops } = entry;
+    let statusClass = 'expired';
+    let statusText = t.gui?.inventory?.status?.expired || 'Expired';
+    if (!campaign.linked && (campaign.active || campaign.upcoming)) {
+        // Matches inventoryBucketForDrop's priority: an unlinked campaign's drops are always
+        // bucketed as "not_linked" while in their window, never "active" - so the aggregate
+        // badge here must agree, or it would falsely claim "Linked" for an unlinked campaign.
+        statusClass = 'not_linked';
+        statusText = t.gui?.inventory?.filters?.not_linked || 'Not Linked';
+    } else if (campaign.active) {
+        statusClass = 'active';
+        statusText = t.gui?.inventory?.status?.active || 'Linked';
+    } else if (campaign.upcoming) {
+        statusClass = 'upcoming';
+        statusText = t.gui?.inventory?.status?.upcoming || 'Upcoming';
+    } else if (isCampaignFinished(campaign)) {
+        statusClass = 'finished';
+        statusText = t.gui?.inventory?.status?.finished || 'Collected';
+    }
+
+    const campaignRow = makeElement('div', { class: 'inventory-campaign-row' }, '', el => {
+        el.appendChild(makeElement('span', { class: `inventory-status-badge ${statusClass}` }, statusText));
+        appendCampaignRowCommonParts(el, campaign, t);
+    });
+
+    const dropsContainer = makeElement('div', { class: 'inventory-drops' });
+    drops.forEach(drop => dropsContainer.appendChild(buildInventoryDropRow(drop, campaign, t)));
+
+    return makeElement('div', { class: 'inventory-campaign-group' }, '', el => {
+        el.appendChild(campaignRow);
+        el.appendChild(dropsContainer);
+    });
+}
+
+// Sectioned view: one campaign instance per section it has drops in, showing only
+// that section's subset of drops. Status badge reflects the section itself (skipped
+// for "not_linked" since the account-link badge already says as much).
+function buildSectionCampaignGroup(entry, sectionKey, t) {
+    const { campaign, drops } = entry;
+    const sectionLabel = t.gui?.inventory?.filters?.[sectionKey] || sectionKey;
+
+    const campaignRow = makeElement('div', { class: 'inventory-campaign-row' }, '', el => {
+        if (sectionKey !== 'not_linked') {
+            el.appendChild(makeElement('span', { class: `inventory-status-badge ${sectionKey}` }, sectionLabel));
+        }
+        appendCampaignRowCommonParts(el, campaign, t);
+    });
+
+    const dropsContainer = makeElement('div', { class: 'inventory-drops' });
+    drops.forEach(drop => dropsContainer.appendChild(buildInventoryDropRow(drop, campaign, t)));
+
+    return makeElement('div', { class: 'inventory-campaign-group' }, '', el => {
+        el.appendChild(campaignRow);
+        el.appendChild(dropsContainer);
+    });
+}
+
+function buildInventoryGameRow(game, t) {
+    const countText = game.campaigns.length === 1
+        ? (t.gui?.inventory?.campaign_count || 'campaign')
+        : (t.gui?.inventory?.campaign_count_plural || 'campaigns');
+
+    return makeElement('div', { class: 'inventory-game-row' }, '', el => {
+        if (game.game_box_art_url) {
+            const iconUrl = game.game_box_art_url.replace('{width}', '52').replace('{height}', '70');
+            el.appendChild(makeImageElement(iconUrl, game.game_name, 'game-icon inventory-game-icon'));
+        }
+        el.appendChild(makeElement('span', { class: 'inventory-game-name', title: game.game_name }, game.game_name));
+        el.appendChild(makeElement('span', { class: 'inventory-game-count' }, `${game.campaigns.length} ${countText}`));
+    });
+}
+
+function buildFlatGameGroup(game, t) {
+    return makeElement('div', { class: 'inventory-game-group' }, '', group => {
+        group.appendChild(buildInventoryGameRow(game, t));
+        const campaignsContainer = makeElement('div', { class: 'inventory-campaigns' });
+        game.campaigns.forEach(entry => campaignsContainer.appendChild(buildFlatCampaignGroup(entry, t)));
+        group.appendChild(campaignsContainer);
+    });
+}
+
+function buildSectionGameGroup(game, sectionKey, t) {
+    return makeElement('div', { class: 'inventory-game-group' }, '', group => {
+        group.appendChild(buildInventoryGameRow(game, t));
+        const campaignsContainer = makeElement('div', { class: 'inventory-campaigns' });
+        game.campaigns.forEach(entry => campaignsContainer.appendChild(buildSectionCampaignGroup(entry, sectionKey, t)));
+        group.appendChild(campaignsContainer);
+    });
+}
+
+// Toggles the collapsed class directly on the already-built section element instead of
+// triggering a full renderInventory() - a full rebuild would recreate every row in every
+// section (images included), replaying entrance animations and causing a visible flash
+// just to collapse/expand one section whose content hasn't actually changed.
+function toggleInventorySection(key, sectionEl) {
+    const expanded = !state.inventorySections[key];
+    state.inventorySections[key] = expanded;
+    if (sectionEl) sectionEl.classList.toggle('collapsed', !expanded);
+    saveSettings();
+}
+
+function buildInventorySection(key, games, t) {
+    const label = t.gui?.inventory?.filters?.[key] || key;
+    const expanded = !!state.inventorySections[key];
+    const dropCount = games.reduce((sum, game) =>
+        sum + game.campaigns.reduce((s, entry) => s + entry.drops.length, 0), 0);
+
+    return makeElement('section', { class: `inventory-section${expanded ? '' : ' collapsed'}` }, '', section => {
+        section.appendChild(makeElement('div', { class: 'inventory-section-header' }, '', header => {
+            header.appendChild(makeElement('span', { class: 'inventory-section-chevron' }, '▸'));
+            header.appendChild(makeElement('span', { class: 'inventory-section-title' }, label));
+            header.appendChild(makeElement('span', { class: 'inventory-section-count' }, `(${dropCount})`));
+            header.addEventListener('click', () => toggleInventorySection(key, section));
+        }));
+
+        const body = makeElement('div', { class: 'inventory-section-body' });
+        games.forEach(game => body.appendChild(buildSectionGameGroup(game, key, t)));
+        section.appendChild(body);
+    });
+}
+
 function renderInventory() {
     const container = document.getElementById('inventory-grid');
-    container.innerHTML = '';
-
     const t = state.translations;
     const allCampaigns = Object.values(state.campaigns);
-
-    // Apply filters
-    const filters = getInventoryFilters();
-    const campaigns = allCampaigns.filter(campaign => campaignMatchesFilters(campaign, filters));
 
     if (allCampaigns.length === 0) {
         const emptyMsg = t.gui?.inventory?.no_campaigns || 'No campaigns loaded yet...';
@@ -1039,137 +1333,37 @@ function renderInventory() {
         return;
     }
 
-    if (campaigns.length === 0) {
-        container.replaceChildren(makeElement('p', { class: 'empty-message' }, 'No campaigns match the current filters.'));
-        return;
+    const filters = getInventoryFilters();
+    const noMatchesMsg = t.gui?.inventory?.no_matches || 'No campaigns match the current filters.';
+
+    const categoriesEnabled = getInventoryViewModeFromUI() === 'category';
+    const fragment = document.createDocumentFragment();
+
+    if (categoriesEnabled) {
+        const tree = buildInventoryTree(allCampaigns, filters);
+        let anySection = false;
+        INVENTORY_SECTION_ORDER.forEach(key => {
+            const games = tree[key];
+            if (games.length === 0) return;
+            anySection = true;
+            fragment.appendChild(buildInventorySection(key, games, t));
+        });
+        if (!anySection) {
+            container.replaceChildren(makeElement('p', { class: 'empty-message' }, noMatchesMsg));
+            return;
+        }
+    } else {
+        const games = groupEntriesByGame(collectFilteredEntries(allCampaigns, filters));
+        if (games.length === 0) {
+            container.replaceChildren(makeElement('p', { class: 'empty-message' }, noMatchesMsg));
+            return;
+        }
+        const flatList = makeElement('div', { class: 'inventory-flat-list' });
+        games.forEach(game => flatList.appendChild(buildFlatGameGroup(game, t)));
+        fragment.appendChild(flatList);
     }
 
-    campaigns.forEach(campaign => {
-        const card = document.createElement('div');
-        card.className = 'campaign-card';
-
-        let statusClass = '';
-        let statusText = '';
-        if (campaign.active) {
-            statusClass = 'active';
-            statusText = t.gui?.inventory?.status?.active || 'Active';
-        } else if (campaign.upcoming) {
-            statusClass = 'upcoming';
-            statusText = t.gui?.inventory?.status?.upcoming || 'Upcoming';
-        } else if (campaign.expired) {
-            statusClass = 'expired';
-            statusText = t.gui?.inventory?.status?.expired || 'Expired';
-        }
-
-        const claimedText = t.gui?.inventory?.status?.claimed || 'Claimed';
-        const claimedCountText = t.gui?.inventory?.claimed_drops || 'claimed';
-
-        // Build drops elements
-        const dropsEl = makeElement('div', { class: 'campaign-drops' });
-        campaign.drops.forEach(drop => {
-            const dropItem = makeElement('div', { class: `drop-item${drop.is_claimed ? ' claimed' : ''}${drop.can_claim ? ' active' : ''}` });
-            dropItem.appendChild(
-                makeElement('div', { class: 'drop-item-header' }, '', el =>
-                    el.appendChild(makeElement('div', { class: 'drop-item-info' }, '', el2 =>
-                        el2.appendChild(makeElement('div', {}, '', el3 =>
-                            el3.appendChild(makeElement('strong', {}, drop.name))
-                        ))
-                    ))
-                )
-            );
-            const benefitsList = makeElement('div', { class: 'benefits-list' });
-            if (drop.benefits && drop.benefits.length > 0) {
-                drop.benefits.forEach(benefit => {
-                    benefitsList.appendChild(
-                        makeElement('div', { class: 'benefit-item' }, '', el => {
-                            el.appendChild(makeImageElement(benefit.image_url, benefit.name, 'benefit-icon'));
-                            el.appendChild(makeElement('div', { class: 'benefit-info' }, '', el2 => {
-                                el2.appendChild(makeElement('span', { class: 'benefit-name' }, benefit.name));
-                                el2.appendChild(makeElement('span', { class: 'benefit-type' }, `(${benefit.type})`));
-                            }));
-                        })
-                    );
-                });
-            }
-            dropItem.appendChild(benefitsList);
-            dropItem.appendChild(makeElement('div', {}, `${drop.current_minutes} / ${drop.required_minutes} minutes (${Math.round(drop.progress * 100)}%)`));
-            if (drop.is_claimed) {
-                dropItem.appendChild(makeElement('div', {}, `✓ ${claimedText}`));
-            }
-            dropsEl.appendChild(dropItem);
-        });
-
-        // Campaign name link
-        const campaignNameLink = makeElement('a', { href: campaign.campaign_url, target: '_blank', rel: 'noopener noreferrer', class: 'campaign-name-link' }, campaign.name, el =>
-            el.appendChild(makeElement('span', { class: 'external-link-icon' }, '🔗'))
-        );
-
-        // Linked/not linked badge
-        const linkStatusBadge = campaign.linked
-            ? makeElement('span', { class: 'campaign-badge linked', title: 'Account is linked' }, 'LINKED')
-            : makeElement('span', { class: 'campaign-badge not-linked', title: 'Click to link your account' }, 'NOT LINKED', el => {
-                el.addEventListener('click', () => window.open(campaign.link_url, '_blank'));
-            });
-
-        // Link account button
-        const campaignGameDiv = makeElement('div', { class: 'campaign-game' }, '', el => {
-            if (campaign.game_box_art_url) {
-                const iconUrl = campaign.game_box_art_url.replace('{width}', '52').replace('{height}', '70');
-                el.appendChild(makeImageElement(iconUrl, campaign.game_name, 'game-icon'));
-            }
-            el.appendChild(makeElement('span', { class: 'campaign-game-name' }, campaign.game_name));
-            el.appendChild(linkStatusBadge);
-        });
-
-        const campaignHeader = makeElement('div', { class: 'campaign-header' }, '', el => {
-            el.appendChild(campaignGameDiv);
-            el.appendChild(campaignNameLink);
-            if (!campaign.linked && campaign.link_url) {
-                el.appendChild(makeElement('button', { class: 'link-account-btn' }, 'Link Account', btn => {
-                    btn.addEventListener('click', () => {
-                        window.open(campaign.link_url, '_blank');
-                        if (!state.linkClickedCampaigns.has(campaign.id)) {
-                            state.linkClickedCampaigns.add(campaign.id);
-                            renderInventory();
-                        }
-                    });
-                }));
-                if (state.linkClickedCampaigns.has(campaign.id)) {
-                    const refreshStatusText = t.gui?.inventory?.refresh_status || 'Refresh Status';
-                    el.appendChild(makeElement('button', { class: 'link-account-btn refresh-status-btn' }, refreshStatusText, btn => {
-                        btn.addEventListener('click', () => reloadCampaigns({
-                            kind: 'campaign',
-                            campaignId: campaign.id,
-                            gameName: campaign.game_name
-                        }));
-                    }));
-                }
-            }
-        });
-
-        const campaignStatus = makeElement('div', { class: 'campaign-status' }, '', el => {
-            el.appendChild(makeElement('span', {}, statusText));
-            el.appendChild(makeElement('span', {}, `${campaign.claimed_drops} / ${campaign.total_drops} ${claimedCountText}`));
-        });
-
-        card.replaceChildren(campaignHeader, campaignStatus);
-
-        // Campaign timing
-        if (campaign.active && campaign.ends_at) {
-            const endsLabel = t.gui?.inventory?.ends || 'Ends: {time}';
-            card.appendChild(makeElement('div', { class: 'campaign-timing' }, endsLabel.replace('{time}', new Date(campaign.ends_at).toLocaleString())));
-        } else if (campaign.upcoming && campaign.starts_at) {
-            const startsLabel = t.gui?.inventory?.starts || 'Starts: {time}';
-            card.appendChild(makeElement('div', { class: 'campaign-timing' }, startsLabel.replace('{time}', new Date(campaign.starts_at).toLocaleString())));
-        } else if (campaign.expired && campaign.ends_at) {
-            const endsLabel = t.gui?.inventory?.ends || 'Ends: {time}';
-            card.appendChild(makeElement('div', { class: 'campaign-timing' }, endsLabel.replace('{time}', new Date(campaign.ends_at).toLocaleString())));
-        }
-
-        card.appendChild(dropsEl);
-
-        container.appendChild(card);
-    });
+    container.replaceChildren(fragment);
 }
 
 function showLoginForm() {
@@ -1260,6 +1454,14 @@ function updateSettingsUI(settings) {
         if (document.getElementById('filter-benefit-badge')) document.getElementById('filter-benefit-badge').checked = settings.inventory_filters.show_benefit_badge !== false;
         if (document.getElementById('filter-benefit-emote')) document.getElementById('filter-benefit-emote').checked = settings.inventory_filters.show_benefit_emote !== false;
         if (document.getElementById('filter-benefit-other')) document.getElementById('filter-benefit-other').checked = settings.inventory_filters.show_benefit_other !== false;
+    }
+
+    // Restore inventory view mode (by game / by category) + per-section collapse state
+    if (settings.inventory_ui) {
+        setInventoryViewModeUI(settings.inventory_ui.categories_enabled ? 'category' : 'game');
+        if (settings.inventory_ui.sections) {
+            Object.assign(state.inventorySections, settings.inventory_ui.sections);
+        }
     }
 
     // Restore mining benefit filters
@@ -2102,6 +2304,10 @@ async function saveSettings() {
             mine_all_when_idle: document.getElementById('idle-mine-all-when-idle')?.checked !== false
         },
         inventory_filters: getInventoryFilters(),
+        inventory_ui: {
+            categories_enabled: getInventoryViewModeFromUI() === 'category',
+            sections: { ...state.inventorySections }
+        },
         mining_benefits: {
             "DIRECT_ENTITLEMENT": document.getElementById('mining-benefit-item')?.checked,
             "BADGE": document.getElementById('mining-benefit-badge')?.checked,
@@ -2459,6 +2665,14 @@ function applyTranslations(t) {
 
         const clearBtn = document.getElementById('clear-filters-btn');
         if (clearBtn) clearBtn.textContent = f.clear;
+
+        const viewMode = t.gui.inventory.view_mode;
+        if (viewMode) {
+            const gameLabel = document.getElementById('inventory-view-mode-game-label');
+            if (gameLabel && viewMode.game) gameLabel.textContent = viewMode.game;
+            const categoryLabel = document.getElementById('inventory-view-mode-category-label');
+            if (categoryLabel && viewMode.category) categoryLabel.textContent = viewMode.category;
+        }
 
         const searchInput = document.getElementById('games-filter');
         if (searchInput) searchInput.placeholder = f.search_placeholder;
@@ -2830,16 +3044,18 @@ document.addEventListener('DOMContentLoaded', () => {
     setupGamesDragAndDrop();
 
     // Inventory filters
-    document.getElementById('filter-active').addEventListener('change', onInventoryFilterChange);
-    document.getElementById('filter-not-linked').addEventListener('change', onInventoryFilterChange);
-    document.getElementById('filter-upcoming').addEventListener('change', onInventoryFilterChange);
-    document.getElementById('filter-expired').addEventListener('change', onInventoryFilterChange);
-    document.getElementById('filter-finished').addEventListener('change', onInventoryFilterChange);
+    document.getElementById('filter-active').addEventListener('change', onInventoryStatusFilterChange);
+    document.getElementById('filter-not-linked').addEventListener('change', onInventoryStatusFilterChange);
+    document.getElementById('filter-upcoming').addEventListener('change', onInventoryStatusFilterChange);
+    document.getElementById('filter-expired').addEventListener('change', onInventoryStatusFilterChange);
+    document.getElementById('filter-finished').addEventListener('change', onInventoryStatusFilterChange);
     // Benefit type filters
     document.getElementById('filter-benefit-item').addEventListener('change', onInventoryFilterChange);
     document.getElementById('filter-benefit-badge').addEventListener('change', onInventoryFilterChange);
     document.getElementById('filter-benefit-emote').addEventListener('change', onInventoryFilterChange);
     document.getElementById('filter-benefit-other').addEventListener('change', onInventoryFilterChange);
+    document.getElementById('inventory-view-mode-game').addEventListener('change', onInventoryFilterChange);
+    document.getElementById('inventory-view-mode-category').addEventListener('change', onInventoryFilterChange);
     document.getElementById('clear-filters-btn').addEventListener('click', clearInventoryFilters);
 
     // Mining benefit settings

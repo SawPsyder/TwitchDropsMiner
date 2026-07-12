@@ -170,15 +170,25 @@ class GUIInvStatus(TypedDict):
     active: str
     expired: str
     upcoming: str
+    finished: str
     claimed: str
+
+
+class GUIInvViewMode(TypedDict):
+    game: str
+    category: str
 
 
 class GUIInventory(TypedDict):
     no_campaigns: str
+    no_matches: str
     status: GUIInvStatus
     starts: str
     ends: str
     claimed_drops: str
+    campaign_count: str
+    campaign_count_plural: str
+    view_mode: GUIInvViewMode
     refresh_status: str
     filters: GUIInvFilters
 

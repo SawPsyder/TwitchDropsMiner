@@ -126,8 +126,8 @@
                 <div class="filter-controls">
                     <div class="filter-checkboxes">
                         <label class="filter-checkbox">
-                            <input type="checkbox" id="filter-active" />
-                            <span>Active</span>
+                            <input type="checkbox" id="filter-active" checked />
+                            <span>Linked</span>
                         </label>
                         <label class="filter-checkbox">
                             <input type="checkbox" id="filter-not-linked" checked />
@@ -143,7 +143,7 @@
                         </label>
                         <label class="filter-checkbox">
                             <input type="checkbox" id="filter-finished" />
-                            <span>Finished</span>
+                            <span>Collected</span>
                         </label>
                         <div class="filter-separator"
                             style="width: 1px; height: 24px; background: var(--border-color); margin: 0 10px;">
@@ -177,6 +177,13 @@
                             </div>
                         </div>
                         <button id="clear-filters-btn" class="small-btn">Clear Filters</button>
+                        <div class="segmented-control inventory-view-mode-control" id="inventory-view-mode-control"
+                            role="radiogroup" title="Group campaigns into collapsible sections by status">
+                            <input type="radio" name="inventory-view-mode" id="inventory-view-mode-game" value="game" checked>
+                            <label for="inventory-view-mode-game" id="inventory-view-mode-game-label">By Game</label>
+                            <input type="radio" name="inventory-view-mode" id="inventory-view-mode-category" value="category">
+                            <label for="inventory-view-mode-category" id="inventory-view-mode-category-label">By Category</label>
+                        </div>
                     </div>
                 </div>
             </div>

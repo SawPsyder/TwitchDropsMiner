@@ -51,7 +51,7 @@ body.dark-mode {
 
 *::-webkit-scrollbar-thumb {
     background-color: var(--scrollbar-thumb);
-    border-radius: 8px;
+    border-radius: 6px;
     border: 2px solid transparent;
     background-clip: padding-box;
 }
@@ -71,6 +71,10 @@ body {
     line-height: 1.6;
 }
 
+input {
+    outline: none!important;
+}
+
 .container {
     max-width: 1400px;
     margin: 0 auto;
@@ -81,7 +85,7 @@ body {
 header {
     background: var(--bg-panel);
     border: 1px solid var(--border-color);
-    border-radius: 8px;
+    border-radius: 6px;
     padding: 20px;
     margin-bottom: 20px;
     box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
@@ -126,7 +130,7 @@ a {
 .language-selector select {
     padding: 6px 10px;
     border: 1px solid var(--border-color);
-    border-radius: 4px;
+    border-radius: 6px;
     background: var(--bg-secondary);
     color: var(--text-primary);
     font-size: 14px;
@@ -167,7 +171,7 @@ a {
     background: #4a90e2;
     color: white;
     padding: 2px 8px;
-    border-radius: 4px;
+    border-radius: 6px;
     font-size: 11px;
     font-weight: bold;
     display: inline-flex;
@@ -245,7 +249,7 @@ a {
     padding: 12px;
     background: var(--bg-panel);
     border: 1px solid var(--border-color);
-    border-radius: 8px 8px;
+    border-radius: 6px;
     cursor: pointer;
     font-size: 16px;
     color: var(--text-primary);
@@ -275,7 +279,7 @@ a {
 .panel {
     background: var(--bg-panel);
     border: 1px solid var(--border-color);
-    border-radius: 8px;
+    border-radius: 6px;
     padding: 20px;
     box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
 }
@@ -330,7 +334,7 @@ a {
     padding: 10px;
     margin-bottom: 10px;
     border: 1px solid var(--border-color);
-    border-radius: 4px;
+    border-radius: 6px;
     background: var(--bg-secondary);
     color: var(--text-primary);
 }
@@ -342,7 +346,7 @@ a {
     background: var(--accent-color);
     color: white;
     border: none;
-    border-radius: 4px;
+    border-radius: 6px;
     cursor: pointer;
     font-size: 16px;
     font-weight: bold;
@@ -359,7 +363,7 @@ a {
     text-align: center;
     padding: 20px;
     background: var(--bg-secondary);
-    border-radius: 8px;
+    border-radius: 6px;
     margin: 15px 0;
     letter-spacing: 4px;
 }
@@ -392,7 +396,7 @@ a {
     height: 30px;
     background: var(--progress-bg);
     border: 1px solid color-mix(in srgb, var(--accent-color) 25%, transparent);
-    border-radius: 15px;
+    border-radius: 6px;
     overflow: hidden;
     margin-bottom: 10px;
     box-shadow: inset 0 2px 5px rgba(0, 0, 0, 0.2);
@@ -491,7 +495,7 @@ body.reduce-motion .progress-fill::after {
     font-size: 12px;
     background: var(--bg-secondary);
     border: 1px solid var(--border-color);
-    border-radius: 4px;
+    border-radius: 6px;
     padding: 10px;
 }
 
@@ -514,7 +518,7 @@ body.reduce-motion .progress-fill::after {
     margin-bottom: 8px;
     margin-top: 12px;
     background: var(--accent-gradient-color);
-    border-radius: 8px;
+    border-radius: 6px;
     color: white;
     font-weight: bold;
     position: sticky;
@@ -530,7 +534,7 @@ body.reduce-motion .progress-fill::after {
 .game-icon {
     width: 40px;
     height: 53px;
-    border-radius: 4px;
+    border-radius: 6px;
     object-fit: cover;
     box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
 }
@@ -597,7 +601,7 @@ body.reduce-motion .progress-fill::after {
 .channel-badge {
     display: inline-block;
     padding: 2px 6px;
-    border-radius: 3px;
+    border-radius: 6px;
     font-size: 10px;
     margin-left: 5px;
 }
@@ -618,7 +622,7 @@ body.reduce-motion .progress-fill::after {
     padding: 15px;
     background: var(--bg-panel);
     border: 1px solid var(--border-color);
-    border-radius: 8px;
+    border-radius: 6px;
 }
 
 .filter-controls {
@@ -640,7 +644,7 @@ body.reduce-motion .progress-fill::after {
     align-items: center;
     gap: 8px;
     padding: 6px 14px 6px 48px;
-    border-radius: 20px;
+    border-radius: 6px;
     border: 1px solid var(--border-color);
     background: var(--bg-tertiary);
     cursor: pointer;
@@ -670,7 +674,7 @@ body.reduce-motion .progress-fill::after {
     top: 50%;
     width: 30px;
     height: 16px;
-    border-radius: 999px;
+    border-radius: 5px;
     background: var(--border-color);
     transform: translateY(-50%);
     transition: background-color 0.15s ease;
@@ -684,7 +688,7 @@ body.reduce-motion .progress-fill::after {
     top: 50%;
     width: 12px;
     height: 12px;
-    border-radius: 50%;
+    border-radius: 5px;
     background: #ffffff;
     box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
     transform: translateY(-50%) translateX(0);
@@ -722,11 +726,12 @@ body.reduce-motion .progress-fill::after {
 
 .filter-search .small-btn {
     margin-top: auto;
-    height: 38px;
+    height: 42px;
 }
 
 .game-dropdown-container {
     position: relative;
+    margin-top:auto;
     flex: 1;
     min-width: 0;
 }
@@ -746,7 +751,7 @@ body.reduce-motion .progress-fill::after {
     padding: 4px 8px;
     background: var(--accent-color);
     color: white;
-    border-radius: 16px;
+    border-radius: 6px;
     font-size: 13px;
     transition: all 0.2s;
 }
@@ -773,7 +778,7 @@ body.reduce-motion .progress-fill::after {
     display: flex;
     align-items: center;
     justify-content: center;
-    border-radius: 50%;
+    border-radius: 6px;
     transition: background 0.2s;
 }
 
@@ -785,10 +790,11 @@ body.reduce-motion .progress-fill::after {
     width: 100%;
     padding: 10px;
     border: 1px solid var(--border-color);
-    border-radius: 4px;
+    border-radius: 6px;
     background: var(--bg-secondary);
     color: var(--text-primary);
     font-size: 14px;
+    height: 42px;
 }
 
 .game-dropdown-list {
@@ -800,7 +806,7 @@ body.reduce-motion .progress-fill::after {
     overflow-y: auto;
     background: var(--bg-panel);
     border: 1px solid var(--border-color);
-    border-radius: 4px;
+    border-radius: 6px;
     box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
     z-index: 1000;
     display: none;
@@ -853,76 +859,185 @@ body.reduce-motion .progress-fill::after {
     background: none;
 }
 
-/* Inventory Grid */
+/* Inventory Tree (Game > Campaign > Drop), sectioned by status */
 .inventory-grid {
-    column-width: 350px;
-    column-gap: 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
 }
 
-.campaign-card {
+.inventory-view-mode-control {
+    margin-top: auto;
+    margin-bottom: 0!important;
+    height: 42px;
+}
+
+.inventory-section {
     background: var(--bg-panel);
     border: 1px solid var(--border-color);
-    border-radius: 8px;
+    border-radius: 6px;
     overflow: hidden;
-    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
-    position: relative;
-    break-inside: avoid;
-    margin-bottom: 20px;
 }
 
-.campaign-header {
-    padding: 15px;
-    background: var(--bg-secondary);
-}
-
-.campaign-game {
+.inventory-section-header {
     display: flex;
     align-items: center;
-    gap: 12px;
-    font-weight: bold;
-    font-size: 16px;
+    gap: 10px;
+    padding: 12px 16px;
+    background: var(--bg-secondary);
+    cursor: pointer;
+    user-select: none;
+    font-weight: 700;
+    font-size: 15px;
 }
 
-.campaign-game .game-icon {
-    width: 52px;
-    height: 70px;
-    flex-shrink: 0;
-}
-
-.campaign-name {
-    font-size: 14px;
+.inventory-section-chevron {
+    display: inline-block;
+    transition: transform 0.15s ease;
     color: var(--text-secondary);
 }
 
-.campaign-name-link {
-    font-size: 14px;
-    text-decoration: none;
-    transition: all 0.2s;
-    cursor: pointer;
-    display: inline-flex;
-    align-items: center;
+.inventory-section.collapsed .inventory-section-chevron {
+    transform: rotate(0deg);
+}
+
+.inventory-section:not(.collapsed) .inventory-section-chevron {
+    transform: rotate(90deg);
+}
+
+.inventory-section-title {
+    flex: 1;
+}
+
+.inventory-section-count {
+    font-weight: 400;
+    font-size: 12px;
+    color: var(--text-secondary);
+}
+
+.inventory-section-body {
+    display: flex;
+    flex-direction: column;
+}
+
+.inventory-section.collapsed .inventory-section-body {
+    display: none;
+}
+
+.inventory-flat-list {
+    display: flex;
+    flex-direction: column;
     gap: 4px;
 }
 
-.campaign-name-link:hover {
-    text-decoration: underline;
+.inventory-game-group {
+    border-top: 1px solid var(--border-color);
 }
 
-.external-link-icon {
+.inventory-section-body > .inventory-game-group:first-child,
+.inventory-flat-list > .inventory-game-group:first-child {
+    border-top: none;
+}
+
+.inventory-flat-list > .inventory-game-group {
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    margin-bottom: 4px;
+    overflow: hidden;
+}
+
+.inventory-game-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    height: 48px;
+    padding: 0 16px;
+    background: var(--bg-secondary);
+    font-weight: 700;
+    font-size: 14px;
+}
+
+.inventory-game-icon {
+    width: 26px;
+    height: 35px;
+    object-fit: cover;
+    border-radius: 4px;
+    flex-shrink: 0;
+}
+
+.inventory-game-name {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.inventory-game-count {
+    font-weight: 400;
     font-size: 12px;
+    color: var(--text-secondary);
+    flex-shrink: 0;
+}
+
+.inventory-campaigns {
+    display: flex;
+    flex-direction: column;
+}
+
+.inventory-campaign-group {
+    border-top: 1px solid var(--border-color);
+}
+
+.inventory-campaign-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    height: 44px;
+    padding: 0 16px 0 40px;
+    font-size: 12px;
+}
+
+.inventory-status-badge {
+    flex-shrink: 0;
+    padding: 3px 8px;
+    border-radius: 6px;
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    color: white;
+    background: var(--text-secondary);
+}
+
+.inventory-status-badge.active {
+    background: var(--success-color);
+}
+
+.inventory-status-badge.upcoming {
+    background: var(--accent-color);
+}
+
+.inventory-status-badge.finished {
+    background: var(--success-color);
     opacity: 0.7;
 }
 
+.inventory-status-badge.expired {
+    background: var(--bg-secondary);
+}
+
+.inventory-status-badge.not_linked {
+    background: var(--warning-color);
+}
+
 .campaign-badge {
-    position: absolute;
-    right: 15px;
-    padding: 4px 10px;
-    border-radius: 4px;
-    font-size: 11px;
+    flex-shrink: 0;
+    padding: 3px 8px;
+    border-radius: 6px;
+    font-size: 10px;
     font-weight: 600;
     cursor: pointer;
     transition: all 0.2s;
-    z-index: 10;
 }
 
 .campaign-badge.linked {
@@ -944,61 +1059,134 @@ body.reduce-motion .progress-fill::after {
     box-shadow: 0 3px 6px rgba(255, 167, 38, 0.4);
 }
 
-.link-account-btn {
-    margin-top: 8px;
-    padding: 8px 16px;
-    background: var(--warning-color);
-    color: white;
-    border: none;
-    border-radius: 6px;
-    font-size: 13px;
-    font-weight: 600;
+.campaign-name-link {
+    flex: 2;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    text-decoration: none;
+    transition: color 0.2s;
     cursor: pointer;
-    transition: all 0.2s;
-    box-shadow: 0 2px 4px rgba(255, 167, 38, 0.3);
-    width: 100%;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
 }
 
-.link-account-btn:hover {
-    background: #ff9800;
-    transform: translateY(-1px);
-    box-shadow: 0 3px 6px rgba(255, 167, 38, 0.4);
+.campaign-name-link:hover {
+    text-decoration: none;
 }
 
-.link-account-btn:active {
-    transform: translateY(0);
-    box-shadow: 0 1px 2px rgba(255, 167, 38, 0.3);
-}
-
-.refresh-status-btn {
-    margin-top: 8px;
-    background: var(--accent-color);
-    box-shadow: 0 2px 4px color-mix(in srgb, var(--accent-color) 30%, transparent);
-}
-
-.refresh-status-btn:hover {
-    background: var(--accent-color-dark);
-    box-shadow: 0 3px 6px color-mix(in srgb, var(--accent-color) 40%, transparent);
-}
-
-.campaign-status {
-    padding: 10px 15px;
+.external-link-icon {
     font-size: 12px;
-    display: flex;
-    justify-content: space-between;
+    opacity: 0.7;
 }
 
-.campaign-timing {
-    padding: 5px 15px 10px;
+.inventory-campaign-dates {
+    flex: 2;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
     font-size: 11px;
     color: var(--text-secondary);
     font-style: italic;
 }
 
-.campaign-drops {
-    padding: 15px;
+.inventory-campaign-progress {
+    flex-shrink: 0;
+    color: var(--text-secondary);
 }
 
+.link-account-btn {
+    flex-shrink: 0;
+    padding: 4px 10px;
+    background: var(--warning-color);
+    color: white;
+    border: none;
+    border-radius: 6px;
+    font-size: 11px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.link-account-btn:hover {
+    background: #ff9800;
+    transform: translateY(-1px);
+}
+
+.link-account-btn:active {
+    transform: translateY(0);
+}
+
+.refresh-status-btn {
+    background: var(--accent-color);
+}
+
+.refresh-status-btn:hover {
+    background: var(--accent-color-dark);
+}
+
+.inventory-drops {
+    display: flex;
+    flex-direction: column;
+}
+
+.inventory-drop-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    height: 36px;
+    padding: 0 16px 0 64px;
+    font-size: 11px;
+    border-top: 1px solid var(--border-color);
+    background: var(--bg-secondary);
+}
+
+.inventory-drop-row.claimed,
+.inventory-drop-row.uncollectible {
+    opacity: 0.65;
+}
+
+.inventory-drop-row.active {
+    background: color-mix(in srgb, var(--accent-color) 6%, var(--bg-secondary));
+}
+
+.inventory-drop-icon {
+    width: 22px;
+    height: 22px;
+    flex-shrink: 0;
+    border-width: 1px;
+}
+
+.inventory-drop-name {
+    flex: 1.2;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-weight: 500;
+}
+
+.inventory-drop-benefit {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--text-secondary);
+}
+
+.inventory-drop-progress {
+    flex-shrink: 0;
+    color: var(--text-secondary);
+}
+
+.inventory-drop-progress.claimed {
+    color: var(--success-color);
+    font-weight: 600;
+}
 
 .empty-message-small {
     color: var(--text-secondary);
@@ -1027,7 +1215,7 @@ body.reduce-motion .progress-fill::after {
     min-width: 314px;
     background: var(--bg-secondary);
     border: 1px solid var(--border-color);
-    border-radius: 8px;
+    border-radius: 6px;
     break-inside: avoid;
     overflow: hidden;
     position: relative;
@@ -1050,7 +1238,7 @@ body.reduce-motion .progress-fill::after {
     font-size: 11px;
     font-weight: 700;
     padding: 2px 6px;
-    border-radius: 4px;
+    border-radius: 6px;
     min-width: 20px;
     text-align: center;
 }
@@ -1059,7 +1247,7 @@ body.reduce-motion .progress-fill::after {
     width: 30px;
     height: 40px;
     object-fit: cover;
-    border-radius: 3px;
+    border-radius: 6px;
     background: #000;
 }
 
@@ -1089,7 +1277,7 @@ body.reduce-motion .progress-fill::after {
     flex-shrink: 0;
     display: inline-block;
     padding: 2px 8px;
-    border-radius: 3px;
+    border-radius: 6px;
     font-size: 10px;
     font-weight: 700;
     text-transform: uppercase;
@@ -1156,7 +1344,7 @@ body.reduce-motion .progress-fill::after {
     gap: 6px;
     padding: 4px;
     background: var(--bg-secondary);
-    border-radius: 4px;
+    border-radius: 6px;
 }
 
 .wanted-drop-name {
@@ -1168,87 +1356,17 @@ body.reduce-motion .progress-fill::after {
     background: rgba(145, 70, 255, 0.15);
     color: var(--accent-color);
     padding: 1px 5px;
-    border-radius: 8px;
+    border-radius: 6px;
     font-size: 10px;
     font-weight: 500;
 }
 
 
-.drop-item {
-    padding: 10px;
-    margin-bottom: 8px;
-    background: var(--bg-secondary);
-    border-radius: 4px;
-    border-left: 3px solid var(--border-color);
-}
-
-.drop-item.claimed {
-    border-left-color: var(--success-color);
-    opacity: 0.7;
-}
-
-.drop-item.active {
-    border-left-color: var(--accent-color);
-}
-
-.drop-item-header {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    margin-bottom: 8px;
-}
-
-.drop-item-info {
-    flex: 1;
-    min-width: 0;
-}
-
-.benefits-list {
-    margin-top: 8px;
-    margin-bottom: 8px;
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-}
-
-.benefit-item {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    padding: 8px;
-    background: var(--bg-panel);
-    border-radius: 4px;
-    border: 1px solid var(--border-color);
-}
-
 .benefit-icon {
-    width: 40px;
-    height: 40px;
+    width: 32px;
+    height: 32px;
     border-radius: 4px;
     object-fit: cover;
-    border: 2px solid var(--border-color);
-    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
-    flex-shrink: 0;
-}
-
-.benefit-info {
-    flex: 1;
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    min-width: 0;
-}
-
-.benefit-name {
-    font-weight: 500;
-    font-size: 14px;
-    color: var(--text-primary);
-}
-
-.benefit-type {
-    font-size: 12px;
-    color: var(--text-secondary);
-    font-style: italic;
 }
 
 /* Settings */
@@ -1263,7 +1381,7 @@ body.reduce-motion .progress-fill::after {
 .settings-section {
     background: var(--bg-panel);
     border: 1px solid var(--border-color);
-    border-radius: 8px;
+    border-radius: 6px;
     padding: 20px;
     margin-bottom: 0;
 }
@@ -1349,7 +1467,7 @@ body.reduce-motion .progress-fill::after {
     height: 30px;
     background: var(--progress-bg);
     border: 1px solid color-mix(in srgb, var(--accent-color) 25%, transparent);
-    border-radius: 15px;
+    border-radius: 6px;
     overflow: hidden;
     box-shadow: inset 0 2px 5px rgba(0, 0, 0, 0.2);
 }
@@ -1462,7 +1580,7 @@ body.reduce-motion .progress-fill::after {
     inset: 0;
     cursor: pointer;
     background-color: var(--border-color);
-    border-radius: 24px;
+    border-radius: 6px;
     transition: background-color 0.2s ease;
 }
 
@@ -1474,7 +1592,7 @@ body.reduce-motion .progress-fill::after {
     left: 3px;
     top: 3px;
     background-color: #ffffff;
-    border-radius: 50%;
+    border-radius: 5px;
     transition: transform 0.2s ease;
     box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
 }
@@ -1504,7 +1622,7 @@ body.reduce-motion .progress-fill::after {
 /* Provider card */
 .library-provider-card {
     border: 1px solid var(--border-color);
-    border-radius: 10px;
+    border-radius: 6px;
     background: var(--bg-secondary);
     overflow: hidden;
     margin-bottom: 20px;
@@ -1536,7 +1654,7 @@ body.reduce-motion .progress-fill::after {
     justify-content: center;
     width: 42px;
     height: 42px;
-    border-radius: 10px;
+    border-radius: 6px;
     background: linear-gradient(135deg, #1b2838 0%, #2a475e 100%);
     color: #66c0f4;
     flex-shrink: 0;
@@ -1635,7 +1753,7 @@ body.reduce-motion .progress-fill::after {
 .segmented-control {
     display: inline-flex;
     border: 1px solid var(--border-color);
-    border-radius: 8px;
+    border-radius: 6px;
     background: var(--bg-secondary);
     padding: 3px;
     gap: 3px;
@@ -1652,7 +1770,7 @@ body.reduce-motion .progress-fill::after {
     display: inline-block;
     margin: 0 !important;
     padding: 6px 18px;
-    border-radius: 6px;
+    border-radius: 4px;
     cursor: pointer;
     font-size: 0.9em;
     color: var(--text-secondary);
@@ -1684,7 +1802,7 @@ body.reduce-motion .progress-fill::after {
     align-items: center;
     gap: 6px;
     padding: 4px 6px 4px 12px;
-    border-radius: 16px;
+    border-radius: 6px;
     background: rgba(145, 70, 255, 0.12);
     border: 1px solid rgba(145, 70, 255, 0.35);
     color: var(--text-primary);
@@ -1698,7 +1816,7 @@ body.reduce-motion .progress-fill::after {
     width: 18px;
     height: 18px;
     border: none;
-    border-radius: 50%;
+    border-radius: 6px;
     background: transparent;
     color: var(--text-secondary);
     cursor: pointer;
@@ -1862,7 +1980,7 @@ body.reduce-motion .progress-fill::after {
     max-height: 200px;
     overflow-y: auto;
     border: 1px solid var(--border-color);
-    border-radius: 4px;
+    border-radius: 6px;
     padding: 10px;
     margin-bottom: 10px;
     background: var(--bg-secondary);
@@ -1872,7 +1990,7 @@ body.reduce-motion .progress-fill::after {
     padding: 8px;
     margin-bottom: 5px;
     background: var(--bg-panel);
-    border-radius: 4px;
+    border-radius: 6px;
     display: flex;
     justify-content: space-between;
     align-items: center;
@@ -1883,7 +2001,7 @@ body.reduce-motion .progress-fill::after {
     background: var(--error-color);
     color: white;
     border: none;
-    border-radius: 3px;
+    border-radius: 6px;
     cursor: pointer;
     font-size: 12px;
 }
@@ -1893,7 +2011,7 @@ body.reduce-motion .progress-fill::after {
     margin-right: 10px;
     background: var(--bg-secondary);
     border: 1px solid var(--border-color);
-    border-radius: 4px;
+    border-radius: 6px;
     cursor: pointer;
     font-size: 14px;
     color: var(--text-primary);
@@ -1903,10 +2021,6 @@ body.reduce-motion .progress-fill::after {
     background: var(--accent-color);
     color: white;
     border-color: var(--accent-color);
-}
-
-.action-button:hover {
-    opacity: 0.9;
 }
 
 /* Games to Watch Styles */
@@ -1948,7 +2062,8 @@ body.reduce-motion .progress-fill::after {
     transition: all 0.2s;
 }
 
-.small-btn:hover {
+.small-btn:hover,
+.action-button:hover {
     background: var(--accent-color);
     color: white;
     border-color: var(--accent-color);
@@ -2031,7 +2146,7 @@ body.dnd-active .sortable-item.dragging {
     height: 24px;
     background: var(--accent-color);
     color: white;
-    border-radius: 50%;
+    border-radius: 6px;
     font-size: 12px;
     font-weight: bold;
 }
@@ -2051,7 +2166,7 @@ body.dnd-active .sortable-item.dragging {
     padding: 0;
     color: white;
     border: none;
-    border-radius: 3px;
+    border-radius: 6px;
     cursor: pointer;
     font-size: 14px;
     font-weight: bold;
@@ -2112,7 +2227,7 @@ body.dnd-active .sortable-item.dragging {
 
 .loading-content {
     background: var(--bg-panel);
-    border-radius: 12px;
+    border-radius: 6px;
     padding: 40px;
     text-align: center;
     box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
@@ -2165,7 +2280,7 @@ body.dnd-active .sortable-item.dragging {
     background: var(--bg-panel);
     border: 1px solid var(--border-color);
     border-left: 4px solid var(--accent-color);
-    border-radius: 8px;
+    border-radius: 6px;
     box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
     overflow: hidden;
     animation: toast-in 0.25s ease-out;
@@ -2218,7 +2333,7 @@ body.dnd-active .sortable-item.dragging {
     line-height: 1;
     cursor: pointer;
     padding: 4px;
-    border-radius: 4px;
+    border-radius: 6px;
     transition: color 0.15s, background 0.15s;
 }
 
@@ -2288,7 +2403,7 @@ body.dnd-active .sortable-item.dragging {
 .mode-badge {
     display: inline-block;
     padding: 4px 12px;
-    border-radius: 12px;
+    border-radius: 6px;
     font-size: 11px;
     font-weight: bold;
     letter-spacing: 0.5px;
@@ -2326,7 +2441,7 @@ body.dnd-active .sortable-item.dragging {
 .manual-mode-controls {
     background: rgba(255, 167, 38, 0.1);
     border: 2px solid var(--warning-color);
-    border-radius: 8px;
+    border-radius: 6px;
     padding: 12px;
     margin-bottom: 15px;
     display: flex;
@@ -2418,7 +2533,7 @@ body.dnd-active .sortable-item.dragging {
 .footer {
     background: var(--bg-panel);
     border: 1px solid var(--border-color);
-    border-radius: 8px;
+    border-radius: 6px;
     margin-top: 20px;
     padding: 15px 20px;
     font-size: 13px;
@@ -2452,7 +2567,7 @@ body.dnd-active .sortable-item.dragging {
     padding: 4px 10px;
     background: var(--warning-color);
     color: white;
-    border-radius: 4px;
+    border-radius: 6px;
     animation: pulse 2s infinite;
 }
 
@@ -2545,35 +2660,30 @@ body.dnd-active .sortable-item.dragging {
     }
 }
 
-/* NOTE: the channels list re-renders on every websocket update, so it only
-   gets hover transitions - enter animations would replay constantly there */
+/* NOTE: the channels list and inventory tree re-render on every websocket update /
+   filter change / section toggle, so they only get hover transitions - enter
+   animations would replay constantly (visible as flashing/jitter) there */
 .wanted-game-group,
-.campaign-card,
 .library-game-row,
 .auto-watch-item,
 .sortable-item {
     animation: item-fade-in 0.22s ease both;
 }
 
-.wanted-game-group:nth-child(1),
-.campaign-card:nth-child(1) { animation-delay: 0ms; }
-.wanted-game-group:nth-child(2),
-.campaign-card:nth-child(2) { animation-delay: 40ms; }
-.wanted-game-group:nth-child(3),
-.campaign-card:nth-child(3) { animation-delay: 80ms; }
-.wanted-game-group:nth-child(4),
-.campaign-card:nth-child(4) { animation-delay: 120ms; }
-.wanted-game-group:nth-child(n+5),
-.campaign-card:nth-child(n+5) { animation-delay: 160ms; }
+.wanted-game-group:nth-child(1) { animation-delay: 0ms; }
+.wanted-game-group:nth-child(2) { animation-delay: 40ms; }
+.wanted-game-group:nth-child(3) { animation-delay: 80ms; }
+.wanted-game-group:nth-child(4) { animation-delay: 120ms; }
+.wanted-game-group:nth-child(n+5) { animation-delay: 160ms; }
 
 /* Cards and rows: gentle elevation on hover */
-.campaign-card,
+.inventory-game-row,
 .wanted-card {
     transition: transform 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease;
 }
 
-.campaign-card:hover {
-    box-shadow: 0 6px 16px rgba(0, 0, 0, 0.12);
+.inventory-game-row:hover {
+    background: color-mix(in srgb, var(--accent-color) 5%, var(--bg-secondary));
 }
 
 .channel-item {
