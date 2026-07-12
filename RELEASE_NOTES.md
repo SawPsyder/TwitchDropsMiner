@@ -1,3 +1,36 @@
+# Release Notes - v1.4.0
+
+This release reworks the Inventory tab into a collapsible, status-grouped tree and gives the
+Settings tab a design pass, including a proper three-way Dark Mode toggle and a redesigned
+Appearance/Proxy layout.
+
+### 📦 Inventory Overhaul
+- **Game > Campaign > Drop Tree**: Campaigns are no longer a flat card grid — they're now grouped
+  into collapsible sections (Active, Not Linked, Upcoming, Collected, Expired), each showing only
+  the games and drops relevant to that status.
+- **By Game / By Category View**: Toggle between the new sectioned view and a flatter by-game list,
+  whichever you prefer for scanning your campaigns.
+- **Per-Drop Filtering**: Status and benefit-type filters now apply per drop instead of per whole
+  campaign, so a campaign with a mix of claimed and still-counting drops shows up correctly in every
+  relevant section instead of being filtered as a single unit.
+
+### 🎨 Settings & Appearance
+- **Three-Way Dark Mode**: Dark Mode is now an Auto/On/Off toggle (matching the existing Animations
+  control) instead of a plain checkbox, so it can follow your system theme automatically.
+- **Appearance Section**: Split out a dedicated Appearance section from General settings, and
+  redesigned Connection Quality / Refresh Interval as sliders and Proxy as an inline set/verify row.
+- **Password Manager Hints**: Steam/Ubisoft credential fields now tell browser password managers to
+  leave them alone, instead of prompting to save your API key or login ticket as a password.
+
+### 🐛 Bug Fixes
+- **Release Tooling on Windows**: Fixed `grep -P` failing under Git Bash's locale when parsing
+  versions during a release, which surfaced as a misleading "not valid SemVer format" error.
+
+### ⚙️ Infrastructure
+- **Release Process Cleanup**: Removed dead upstream-only release tooling (Docker Hub / Gemini-based
+  release notes / release branches) that this fork can't run, keeping only the GHCR-only pipeline
+  this fork actually uses.
+
 # Release Notes - v1.3.0
 
 This release introduces automatic game library syncing from Steam and Ubisoft Connect, smarter idle-time mining, and a batch of UI polish — plus a fix for watch-time tracking after Twitch changed how it counts minutes watched.
