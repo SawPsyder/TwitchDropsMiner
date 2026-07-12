@@ -760,19 +760,29 @@ function dropMatchesStatusFilter(bucket, filters) {
     return !!filters[`show_${bucket}`];
 }
 
+// Maps a raw Twitch benefit "type" string to the filter/label key used throughout
+// the inventory UI (checkboxes, settings, and drop tooltips all share this vocabulary).
+const BENEFIT_TYPE_FILTER_KEY = {
+    DIRECT_ENTITLEMENT: 'item',
+    BADGE: 'badge',
+    EMOTE: 'emote'
+};
+
+function benefitTypeFilterKey(type) {
+    return BENEFIT_TYPE_FILTER_KEY[(type || '').toUpperCase()] || 'other';
+}
+
+function benefitTypeLabel(type, t) {
+    const key = benefitTypeFilterKey(type);
+    return t.gui?.inventory?.filters?.[key] || key;
+}
+
 function dropMatchesBenefitFilter(drop, filters) {
     const allBenefitsEnabled = filters.show_benefit_item && filters.show_benefit_badge &&
         filters.show_benefit_emote && filters.show_benefit_other;
     if (allBenefitsEnabled) return true;
     if (!drop.benefits || drop.benefits.length === 0) return false;
-    return drop.benefits.some(benefit => {
-        const benefitType = (benefit.type || '').toUpperCase();
-        if (filters.show_benefit_item && benefitType === 'DIRECT_ENTITLEMENT') return true;
-        if (filters.show_benefit_badge && benefitType === 'BADGE') return true;
-        if (filters.show_benefit_emote && benefitType === 'EMOTE') return true;
-        if (filters.show_benefit_other && benefitType === 'UNKNOWN') return true;
-        return false;
-    });
+    return drop.benefits.some(benefit => filters[`show_benefit_${benefitTypeFilterKey(benefit.type)}`]);
 }
 
 function campaignMatchesGameFilter(campaign, filters) {
@@ -1124,8 +1134,6 @@ function formatCampaignDateRange(campaign, t) {
 
 function buildInventoryDropRow(drop, campaign, t) {
     const benefits = drop.benefits || [];
-    const firstBenefit = benefits[0] || null;
-    const extraCount = benefits.length - 1;
     const isExpired = inventoryBucketForDrop(drop, campaign, Date.now()) === 'expired';
 
     const rowClass = [
@@ -1136,64 +1144,69 @@ function buildInventoryDropRow(drop, campaign, t) {
     ].filter(Boolean).join(' ');
 
     return makeElement('div', { class: rowClass }, '', row => {
-        if (firstBenefit) {
-            row.appendChild(makeImageElement(firstBenefit.image_url, firstBenefit.name, 'benefit-icon inventory-drop-icon'));
-        }
+        row.appendChild(makeElement('div', { class: 'inventory-drop-icons' }, '', icons => {
+            benefits.forEach(benefit => {
+                icons.appendChild(makeElement('span', {
+                    class: 'inventory-drop-icon-wrap tooltip-target',
+                    'data-tooltip': `${benefit.name} (${benefitTypeLabel(benefit.type, t)})`
+                }, '', wrap => {
+                    wrap.appendChild(makeImageElement(benefit.image_url, benefit.name, 'benefit-icon inventory-drop-icon'));
+                }));
+            });
+        }));
         row.appendChild(makeElement('span', { class: 'inventory-drop-name', title: drop.name }, drop.name));
-        if (firstBenefit) {
-            const benefitText = `${firstBenefit.name} (${firstBenefit.type})`;
-            const extraNames = extraCount > 0 ? benefits.slice(1).map(b => `${b.name} (${b.type})`).join(', ') : '';
-            row.appendChild(makeElement('span', {
-                class: 'inventory-drop-benefit',
-                title: extraCount > 0 ? `${benefitText}; ${extraNames}` : benefitText
-            }, extraCount > 0 ? `${benefitText} +${extraCount}` : benefitText));
-        }
         row.appendChild(makeElement('span', { class: `inventory-drop-progress${drop.is_claimed ? ' claimed' : ''}` },
             `${drop.current_minutes} / ${drop.required_minutes} min (${Math.round(drop.progress * 100)}%)`));
     });
 }
 
-// Shared by both campaign-row variants below: link badge, name link, date range,
-// claimed/total progress, and the Link Account / Refresh Status buttons.
-function appendCampaignRowCommonParts(el, campaign, t) {
+// Shared by both campaign-row variants below. Renders the row's 3 grid cells - [badge +
+// name link] | [date range] | [progress + Link Account/Refresh Status buttons] - so that
+// .inventory-campaign-row lines up with .inventory-drop-row underneath it (both share the
+// --inventory-first-col grid column width). All 3 cells are always appended, even when
+// empty, since CSS Grid auto-places children into columns by DOM order.
+function appendCampaignRowCommonParts(el, badgeEl, campaign, t) {
     const claimedCountText = t.gui?.inventory?.claimed_drops || 'claimed';
 
-    el.appendChild(makeElement('a', {
-        href: campaign.campaign_url, target: '_blank', rel: 'noopener noreferrer',
-        class: 'campaign-name-link inventory-campaign-name', title: campaign.name
-    }, campaign.name, link =>
-        link.appendChild(makeElement('span', { class: 'external-link-icon' }, '🔗'))
-    ));
+    el.appendChild(makeElement('div', { class: 'inventory-campaign-title' }, '', title => {
+        if (badgeEl) title.appendChild(badgeEl);
+        title.appendChild(makeElement('a', {
+            href: campaign.campaign_url, target: '_blank', rel: 'noopener noreferrer',
+            class: 'campaign-name-link inventory-campaign-name', title: campaign.name
+        }, campaign.name, link =>
+            link.appendChild(makeElement('span', { class: 'external-link-icon' }, '🔗'))
+        ));
+    }));
 
     const dateRange = formatCampaignDateRange(campaign, t);
-    if (dateRange) {
-        el.appendChild(makeElement('span', { class: 'inventory-campaign-dates', title: dateRange }, dateRange));
-    }
+    el.appendChild(makeElement('span', { class: 'inventory-campaign-dates', title: dateRange }, dateRange));
 
-    el.appendChild(makeElement('span', { class: 'inventory-campaign-progress' },
-        `${campaign.claimed_drops} / ${campaign.total_drops} ${claimedCountText}`));
+    el.appendChild(makeElement('div', { class: 'inventory-campaign-actions' }, '', actions => {
+        actions.appendChild(makeElement('span', { class: 'inventory-campaign-progress' },
+            `${campaign.claimed_drops} / ${campaign.total_drops} ${claimedCountText}`));
 
-    if (!campaign.linked && campaign.link_url) {
-        el.appendChild(makeElement('button', { class: 'link-account-btn inventory-link-btn' }, 'Link Account', btn => {
-            btn.addEventListener('click', () => {
-                window.open(campaign.link_url, '_blank');
-                if (!state.linkClickedCampaigns.has(campaign.id)) {
-                    state.linkClickedCampaigns.add(campaign.id);
-                    renderInventory();
-                }
-            });
-        }));
-        if (state.linkClickedCampaigns.has(campaign.id)) {
-            const refreshStatusText = t.gui?.inventory?.refresh_status || 'Refresh Status';
-            el.appendChild(makeElement('button', { class: 'link-account-btn refresh-status-btn inventory-link-btn' }, refreshStatusText, btn => {
-                btn.addEventListener('click', () => reloadCampaigns({
-                    kind: 'campaign',
-                    campaignId: campaign.id,
-                    gameName: campaign.game_name
-                }));
+        if (!campaign.linked && campaign.link_url) {
+            actions.appendChild(makeElement('button', { class: 'link-account-btn inventory-link-btn' }, 'Link Account', btn => {
+                btn.addEventListener('click', () => {
+                    window.open(campaign.link_url, '_blank');
+                    if (!state.linkClickedCampaigns.has(campaign.id)) {
+                        state.linkClickedCampaigns.add(campaign.id);
+                        renderInventory();
+                    }
+                });
             }));
+            if (state.linkClickedCampaigns.has(campaign.id)) {
+                const refreshStatusText = t.gui?.inventory?.refresh_status || 'Refresh Status';
+                actions.appendChild(makeElement('button', { class: 'link-account-btn refresh-status-btn inventory-link-btn' }, refreshStatusText, btn => {
+                    btn.addEventListener('click', () => reloadCampaigns({
+                        kind: 'campaign',
+                        campaignId: campaign.id,
+                        gameName: campaign.game_name
+                    }));
+                }));
+            }
         }
-    }
+    }));
 }
 
 // Categories-off view: still filtered per-drop (see collectFilteredEntries), just pooled
@@ -1222,8 +1235,8 @@ function buildFlatCampaignGroup(entry, t) {
     }
 
     const campaignRow = makeElement('div', { class: 'inventory-campaign-row' }, '', el => {
-        el.appendChild(makeElement('span', { class: `inventory-status-badge ${statusClass}` }, statusText));
-        appendCampaignRowCommonParts(el, campaign, t);
+        const badgeEl = makeElement('span', { class: `inventory-status-badge ${statusClass}` }, statusText);
+        appendCampaignRowCommonParts(el, badgeEl, campaign, t);
     });
 
     const dropsContainer = makeElement('div', { class: 'inventory-drops' });
@@ -1243,10 +1256,10 @@ function buildSectionCampaignGroup(entry, sectionKey, t) {
     const sectionLabel = t.gui?.inventory?.filters?.[sectionKey] || sectionKey;
 
     const campaignRow = makeElement('div', { class: 'inventory-campaign-row' }, '', el => {
-        if (sectionKey !== 'not_linked') {
-            el.appendChild(makeElement('span', { class: `inventory-status-badge ${sectionKey}` }, sectionLabel));
-        }
-        appendCampaignRowCommonParts(el, campaign, t);
+        const badgeEl = sectionKey !== 'not_linked'
+            ? makeElement('span', { class: `inventory-status-badge ${sectionKey}` }, sectionLabel)
+            : null;
+        appendCampaignRowCommonParts(el, badgeEl, campaign, t);
     });
 
     const dropsContainer = makeElement('div', { class: 'inventory-drops' });
