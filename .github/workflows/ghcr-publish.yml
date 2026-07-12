@@ -2,9 +2,6 @@ name: Publish to GHCR
 
 on:
   push:
-    branches:
-      - main
-      - develop
     tags:
       - 'v*.*.*'
   workflow_dispatch:
@@ -54,14 +51,12 @@ jobs:
               TAGS="$TAGS,$IMAGE:$MAJOR.$MINOR,$IMAGE:$MAJOR,$IMAGE:latest"
             fi
           else
+            # Only reachable via manual workflow_dispatch (this workflow no longer
+            # triggers on branch pushes) - tag with branch + short SHA, no ":latest".
             BRANCH="${{ github.ref_name }}"
             SHA_SHORT="${GITHUB_SHA::7}"
 
-            TAGS="$IMAGE:$BRANCH-$SHA_SHORT,$IMAGE:$BRANCH"
-
-            if [ "$BRANCH" = "main" ]; then
-              TAGS="$TAGS,$IMAGE:latest"
-            fi
+            TAGS="$IMAGE:$BRANCH-$SHA_SHORT"
           fi
 
           echo "tags=$TAGS" >> "$GITHUB_OUTPUT"
