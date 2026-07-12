@@ -210,6 +210,7 @@
             "name": "Drops Queue",
             "none": "No drops queued...",
             "source": {
+                "favorite": "Favourite",
                 "manual": "Manual",
                 "auto": "Auto",
                 "idle": "Idle"
@@ -254,18 +255,21 @@
                 "category": "By Category"
             },
             "refresh_status": "Refresh Status",
+            "manual_progress": "Manual",
             "filters": {
                 "active": "Linked",
                 "not_linked": "Not Linked",
                 "upcoming": "Upcoming",
                 "expired": "Expired",
+                "favorite": "Favourite",
                 "finished": "Collected",
                 "item": "Item",
                 "badge": "Badge",
                 "emote": "Emote",
                 "other": "Other",
                 "clear": "Clear Filters",
-                "search_placeholder": "Type to search games..."
+                "search_placeholder": "Type to search games...",
+                "favorite_toggle": "Toggle favorite"
             }
         }
     }

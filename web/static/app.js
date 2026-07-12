@@ -488,8 +488,10 @@ function renderChannels() {
         return;
     }
 
-    // Get the effective watch list: user picks + library-detected games
-    const gamesToWatch = (state.settings.games_to_watch || []).concat(state.autoWatchGames || []);
+    // Get the effective watch list: user picks + library-detected games + favorited games
+    // (favorited games are tracked/mined just like manual/auto ones - see StreamSelector)
+    const gamesToWatch = (state.settings.games_to_watch || [])
+        .concat(state.autoWatchGames || [], getFavoriteGameNames());
     const gamesToWatchSet = new Set(gamesToWatch);
 
     // Filter channels to only include those playing games in the watch list
@@ -737,9 +739,9 @@ function getInventoryFilters() {
     return {
         show_active: document.getElementById('filter-active')?.checked || false,
         show_not_linked: document.getElementById('filter-not-linked')?.checked || false,
-        show_upcoming: document.getElementById('filter-upcoming')?.checked || false,
         show_expired: document.getElementById('filter-expired')?.checked || false,
         show_finished: document.getElementById('filter-finished')?.checked || false,
+        show_favorites: document.getElementById('filter-favorites')?.checked || false,
         game_name_search: [...selectedInventoryGames],  // Array of selected game names
         // Benefit type filters (default to true if checkbox doesn't exist)
         show_benefit_item: document.getElementById('filter-benefit-item')?.checked !== false,
@@ -753,11 +755,59 @@ function getInventoryFilters() {
 // Filtering now happens per DROP (matching the bucket it lands in), not per whole
 // campaign - otherwise unchecking e.g. "Collected" wouldn't hide already-claimed drops
 // that belong to a campaign which is still "Active" overall.
+// "upcoming" has no checkbox of its own anymore - it always passes, same as if every
+// other status checkbox were unchecked (i.e. "show everything").
 function dropMatchesStatusFilter(bucket, filters) {
+    if (bucket === 'upcoming') return true;
     const anyStatusFilter = filters.show_active || filters.show_not_linked ||
-        filters.show_upcoming || filters.show_expired || filters.show_finished;
+        filters.show_expired || filters.show_finished;
     if (!anyStatusFilter) return true;
     return !!filters[`show_${bucket}`];
+}
+
+// Favorite is an orthogonal AND-filter (like the benefit-type checkboxes), not part of
+// the OR'd status-bucket group: checking it narrows down to favorited drops only,
+// on top of whatever the status/benefit filters already allow through.
+function isDropFavorite(campaignId, dropId) {
+    const favorites = state.settings.favorite_drops || [];
+    return favorites.includes(`${campaignId}#${dropId}`);
+}
+
+function dropMatchesFavoriteFilter(drop, campaign, filters) {
+    if (!filters.show_favorites) return true;
+    return isDropFavorite(campaign.id, drop.id);
+}
+
+// Mirrors the backend's StreamSelector._get_favorite_games: a game counts as
+// favorited (for channel-list filtering, same as manual/auto games) only while
+// at least one of its favorited drops is still unclaimed.
+function getFavoriteGameNames() {
+    const favorites = state.settings.favorite_drops || [];
+    if (favorites.length === 0) return [];
+    const favoriteSet = new Set(favorites);
+    const games = new Set();
+    Object.values(state.campaigns).forEach(campaign => {
+        (campaign.drops || []).forEach(drop => {
+            if (!drop.is_claimed && favoriteSet.has(`${campaign.id}#${drop.id}`)) {
+                games.add(campaign.game_name);
+            }
+        });
+    });
+    return Array.from(games);
+}
+
+function toggleDropFavorite(campaignId, dropId, favorite) {
+    const key = `${campaignId}#${dropId}`;
+    const favorites = new Set(state.settings.favorite_drops || []);
+    if (favorite) favorites.add(key); else favorites.delete(key);
+    state.settings.favorite_drops = Array.from(favorites);
+    renderInventory();
+
+    fetch('/api/favorites/toggle', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ campaign_id: campaignId, drop_id: dropId, favorite })
+    }).catch(error => console.error('Failed to toggle favorite:', error));
 }
 
 // Maps a raw Twitch benefit "type" string to the filter/label key used throughout
@@ -815,13 +865,14 @@ function onInventoryStatusFilterChange() {
 }
 
 function clearInventoryFilters() {
-    // Reset status filters to the standard default view (Active + Not Linked + Upcoming
-    // shown, Expired/Collected hidden) - not the Categories toggle, which is untouched.
+    // Reset status filters to the standard default view (Active + Not Linked shown,
+    // Expired/Collected hidden, Favourite-only off; Upcoming has no checkbox and is
+    // always shown) - not the Categories toggle, which is untouched.
     document.getElementById('filter-active').checked = true;
     document.getElementById('filter-not-linked').checked = true;
-    document.getElementById('filter-upcoming').checked = true;
     document.getElementById('filter-expired').checked = false;
     document.getElementById('filter-finished').checked = false;
+    document.getElementById('filter-favorites').checked = false;
     document.getElementById('inventory-game-search').value = '';
 
     // Reset benefit type filters to checked (show all)
@@ -1078,6 +1129,7 @@ function collectFilteredEntries(campaigns, filters) {
             const bucket = inventoryBucketForDrop(drop, campaign, now);
             if (!dropMatchesStatusFilter(bucket, filters)) return;
             if (!dropMatchesBenefitFilter(drop, filters)) return;
+            if (!dropMatchesFavoriteFilter(drop, campaign, filters)) return;
             let entry = byCampaignId[campaign.id];
             if (!entry) {
                 entry = { campaign, drops: [] };
@@ -1104,6 +1156,7 @@ function buildInventoryTree(campaigns, filters) {
             const bucket = inventoryBucketForDrop(drop, campaign, now);
             if (!dropMatchesStatusFilter(bucket, filters)) return;
             if (!dropMatchesBenefitFilter(drop, filters)) return;
+            if (!dropMatchesFavoriteFilter(drop, campaign, filters)) return;
 
             const seen = seenByBucket[bucket];
             let entry = seen[campaign.id];
@@ -1135,6 +1188,11 @@ function formatCampaignDateRange(campaign, t) {
 function buildInventoryDropRow(drop, campaign, t) {
     const benefits = drop.benefits || [];
     const isExpired = inventoryBucketForDrop(drop, campaign, Date.now()) === 'expired';
+    // Drops with no watch-time requirement (Twitch doesn't tell us how they're actually
+    // earned) can't be prioritized by mining, so they can't be favorited either.
+    const hasWatchTime = drop.required_minutes > 0;
+    const isFavorite = isDropFavorite(campaign.id, drop.id);
+    const favoriteLabel = t.gui?.inventory?.filters?.favorite_toggle || 'Toggle favorite';
 
     const rowClass = [
         'inventory-drop-row',
@@ -1145,6 +1203,17 @@ function buildInventoryDropRow(drop, campaign, t) {
 
     return makeElement('div', { class: rowClass }, '', row => {
         row.appendChild(makeElement('div', { class: 'inventory-drop-icons' }, '', icons => {
+            if (hasWatchTime) {
+                icons.appendChild(makeElement('button', {
+                    type: 'button',
+                    class: `inventory-favorite-star${isFavorite ? ' favorited' : ''}`,
+                    title: favoriteLabel,
+                    'aria-label': favoriteLabel,
+                    'aria-pressed': String(isFavorite)
+                }, isFavorite ? '★' : '☆', btn => {
+                    btn.addEventListener('click', () => toggleDropFavorite(campaign.id, drop.id, !isFavorite));
+                }));
+            }
             benefits.forEach(benefit => {
                 icons.appendChild(makeElement('span', {
                     class: 'inventory-drop-icon-wrap tooltip-target',
@@ -1155,8 +1224,11 @@ function buildInventoryDropRow(drop, campaign, t) {
             });
         }));
         row.appendChild(makeElement('span', { class: 'inventory-drop-name', title: drop.name }, drop.name));
+        const progressText = hasWatchTime
+            ? `${drop.current_minutes} / ${drop.required_minutes} min (${Math.round(drop.progress * 100)}%)`
+            : (t.gui?.inventory?.manual_progress || 'Manual');
         row.appendChild(makeElement('span', { class: `inventory-drop-progress${drop.is_claimed ? ' claimed' : ''}` },
-            `${drop.current_minutes} / ${drop.required_minutes} min (${Math.round(drop.progress * 100)}%)`));
+            progressText));
     });
 }
 
@@ -1452,9 +1524,9 @@ function updateSettingsUI(settings) {
     if (settings.inventory_filters) {
         document.getElementById('filter-active').checked = settings.inventory_filters.show_active || false;
         document.getElementById('filter-not-linked').checked = settings.inventory_filters.show_not_linked || false;
-        document.getElementById('filter-upcoming').checked = settings.inventory_filters.show_upcoming || false;
         document.getElementById('filter-expired').checked = settings.inventory_filters.show_expired || false;
         document.getElementById('filter-finished').checked = settings.inventory_filters.show_finished || false;
+        document.getElementById('filter-favorites').checked = settings.inventory_filters.show_favorites || false;
 
         // Restore selected games array
         selectedInventoryGames = Array.isArray(settings.inventory_filters.game_name_search)
@@ -2668,7 +2740,7 @@ function applyTranslations(t) {
         };
         updateLabel('filter-active', f.active);
         updateLabel('filter-not-linked', f.not_linked);
-        updateLabel('filter-upcoming', f.upcoming);
+        updateLabel('filter-favorites', f.favorite);
         updateLabel('filter-expired', f.expired);
         updateLabel('filter-finished', f.finished);
         updateLabel('filter-benefit-item', f.item);
@@ -3059,9 +3131,10 @@ document.addEventListener('DOMContentLoaded', () => {
     // Inventory filters
     document.getElementById('filter-active').addEventListener('change', onInventoryStatusFilterChange);
     document.getElementById('filter-not-linked').addEventListener('change', onInventoryStatusFilterChange);
-    document.getElementById('filter-upcoming').addEventListener('change', onInventoryStatusFilterChange);
     document.getElementById('filter-expired').addEventListener('change', onInventoryStatusFilterChange);
     document.getElementById('filter-finished').addEventListener('change', onInventoryStatusFilterChange);
+    // Favorite is not a status "section", so it just re-renders/saves - no smart-expand
+    document.getElementById('filter-favorites').addEventListener('change', onInventoryFilterChange);
     // Benefit type filters
     document.getElementById('filter-benefit-item').addEventListener('change', onInventoryFilterChange);
     document.getElementById('filter-benefit-badge').addEventListener('change', onInventoryFilterChange);

@@ -18,6 +18,7 @@
     --accent-gradient-color: linear-gradient(135deg, var(--accent-color) 0%, var(--accent-color-dark) 100%);
     --success-color: #00c853;
     --warning-color: #ffa726;
+    --favorite-color: #ffca28;
     --error-color: #e2584e;
     --progress-bg: #e0e0e0;
     --scrollbar-thumb: color-mix(in srgb, var(--accent-color) 50%, transparent);
@@ -1184,6 +1185,30 @@ body.reduce-motion .progress-fill::after {
     display: inline-flex;
 }
 
+.inventory-favorite-star {
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 22px;
+    padding: 0;
+    background: none;
+    border: none;
+    cursor: pointer;
+    font-size: 16px;
+    line-height: 1;
+    color: var(--text-secondary);
+}
+
+.inventory-favorite-star:hover {
+    color: var(--favorite-color);
+}
+
+.inventory-favorite-star.favorited {
+    color: var(--favorite-color);
+}
+
 .inventory-drop-icon {
     width: 22px;
     height: 22px;
@@ -1304,6 +1329,10 @@ body.reduce-motion .progress-fill::after {
     font-weight: 700;
     text-transform: uppercase;
     color: white;
+}
+
+.wanted-source-badge.favorite {
+    background: var(--favorite-color);
 }
 
 .wanted-source-badge.manual {

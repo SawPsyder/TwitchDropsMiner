@@ -133,6 +133,7 @@ class GUIBadges(TypedDict):
 
 
 class GUIWantedSource(TypedDict):
+    favorite: str
     manual: str
     auto: str
     idle: str
@@ -157,6 +158,7 @@ class GUIInvFilters(TypedDict):
     not_linked: str
     upcoming: str
     expired: str
+    favorite: str
     finished: str
     item: str
     badge: str
@@ -164,6 +166,7 @@ class GUIInvFilters(TypedDict):
     other: str
     clear: str
     search_placeholder: str
+    favorite_toggle: str
 
 
 class GUIInvStatus(TypedDict):
@@ -191,6 +194,7 @@ class GUIInventory(TypedDict):
     view_mode: GUIInvViewMode
     refresh_status: str
     filters: GUIInvFilters
+    manual_progress: str
 
 
 # shared shape for the "auto"/"on"/"off" tri-state toggles (dark mode, animations)

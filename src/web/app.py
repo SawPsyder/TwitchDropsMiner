@@ -85,6 +85,12 @@ class ProxyVerifyRequest(BaseModel):
     proxy: str
 
 
+class FavoriteToggleRequest(BaseModel):
+    campaign_id: str
+    drop_id: str
+    favorite: bool
+
+
 # ==================== REST API Endpoints ====================
 
 
@@ -210,6 +216,28 @@ async def update_settings(settings: SettingsUpdate):
     settings_dict = settings.dict(exclude_unset=True)
     gui_manager.settings.update_settings(settings_dict)
     return {"success": True, "settings": gui_manager.settings.get_settings()}
+
+
+@app.post("/api/favorites/toggle")
+async def toggle_favorite(request: FavoriteToggleRequest):
+    """Mark or unmark a single drop as favorite"""
+    if not gui_manager or not twitch_client:
+        raise HTTPException(status_code=503, detail="GUI not initialized")
+
+    if request.favorite:
+        # Only drops earned through watch time can be prioritized by mining
+        # (favoriting anything else wouldn't do anything - see StreamSelector).
+        campaign = next(
+            (c for c in twitch_client.inventory if c.id == request.campaign_id), None
+        )
+        drop = campaign.timed_drops.get(request.drop_id) if campaign else None
+        if drop is None or drop.required_minutes <= 0:
+            raise HTTPException(
+                status_code=400, detail="Only drops that require watch time can be marked favorite"
+            )
+
+    gui_manager.settings.set_favorite_drop(request.campaign_id, request.drop_id, request.favorite)
+    return {"success": True}
 
 
 @app.post("/api/settings/verify-proxy")

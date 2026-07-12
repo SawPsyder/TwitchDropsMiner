@@ -11,6 +11,7 @@ class TestWantedGamesFilter(unittest.TestCase):
         # Mock Settings
         self.settings = MagicMock()
         self.settings.games_to_watch = ["Game1", "Game2"]
+        self.settings.favorite_drops = []
         self.settings.mining_benefits = {
             "BADGE": True,
             "DIRECT_ENTITLEMENT": True,
@@ -130,6 +131,7 @@ class TestIdleBehaviorFallback(unittest.TestCase):
 
     def setUp(self):
         self.settings = MagicMock()
+        self.settings.favorite_drops = []
         self.settings.mining_benefits = {"BADGE": True, "DIRECT_ENTITLEMENT": True}
         self.stream_selector = StreamSelector()
 
@@ -216,6 +218,7 @@ class TestUnlinkedAutoTrackedTree(unittest.TestCase):
         self.settings.games_to_watch = []
         self.settings.idle_behavior = {"mine_all_when_idle": False}
         self.settings.mining_benefits = {"BADGE": True, "DIRECT_ENTITLEMENT": True}
+        self.settings.favorite_drops = []
         self.stream_selector = StreamSelector()
 
     def test_empty_when_no_games(self):
@@ -328,6 +331,216 @@ class TestUnlinkedAutoTrackedTree(unittest.TestCase):
         campaigns = tree[0]["campaigns"]
         self.assertEqual(len(campaigns), 1)
         self.assertEqual(campaigns[0]["name"], "Unlinked Campaign")
+
+    def _make_favorited_campaign(self, game_id: int, game_name: str, linked: bool = False) -> MagicMock:
+        """A single-drop campaign (via _make_campaign) with its drop wired up
+        with a real id + timed_drops, so it can be matched by favorite_drops."""
+        campaign = _make_campaign(game_id, game_name, linked=linked)
+        campaign.id = f"{game_name}_fav_campaign"
+        drop = campaign.drops[0]
+        drop.id = f"{game_name}_drop"
+        drop.precondition_drops = []
+        campaign.timed_drops = {drop.id: drop}
+        return campaign
+
+    def test_favorited_unlinked_game_is_surfaced_even_off_watch_list(self):
+        campaign = self._make_favorited_campaign(1, "FavGame")
+        self.settings.favorite_drops = [f"{campaign.id}#FavGame_drop"]
+
+        tree = self.stream_selector.get_unlinked_auto_tracked_tree(
+            self.settings, [campaign], manual_games=[], auto_games=[]
+        )
+
+        self.assertEqual(len(tree), 1)
+        self.assertEqual(tree[0]["game_name"], "FavGame")
+        self.assertEqual(tree[0]["source"], "favorite")
+
+    def test_favorite_games_listed_before_manual_and_auto(self):
+        fav_campaign = self._make_favorited_campaign(1, "FavGame")
+        manual_campaign = _make_campaign(2, "ManualGame", linked=False)
+        auto_campaign = _make_campaign(3, "AutoGame", linked=False)
+        self.settings.favorite_drops = [f"{fav_campaign.id}#FavGame_drop"]
+
+        tree = self.stream_selector.get_unlinked_auto_tracked_tree(
+            self.settings,
+            [fav_campaign, manual_campaign, auto_campaign],
+            manual_games=["ManualGame"],
+            auto_games=["AutoGame"],
+        )
+
+        self.assertEqual(
+            [entry["game_name"] for entry in tree], ["FavGame", "ManualGame", "AutoGame"]
+        )
+        self.assertEqual(tree[0]["source"], "favorite")
+        self.assertEqual(tree[1]["source"], "manual")
+        self.assertEqual(tree[2]["source"], "auto")
+
+    def test_linked_favorite_campaign_is_excluded(self):
+        campaign = self._make_favorited_campaign(1, "FavGame", linked=True)
+        self.settings.favorite_drops = [f"{campaign.id}#FavGame_drop"]
+
+        tree = self.stream_selector.get_unlinked_auto_tracked_tree(
+            self.settings, [campaign], manual_games=[], auto_games=[]
+        )
+
+        self.assertEqual(tree, [])
+
+
+def _make_drop(
+    drop_id: str, name: str, is_claimed: bool = False, precondition_drops: list[str] | None = None
+) -> MagicMock:
+    drop = MagicMock()
+    drop.id = drop_id
+    drop.name = name
+    drop.is_claimed = is_claimed
+    drop.precondition_drops = precondition_drops or []
+    drop.get_wanted_unclaimed_benefits.return_value = ["Benefit"]
+    return drop
+
+
+def _make_campaign_with_drops(
+    campaign_id: str, game_id: int, game_name: str, drops: list[MagicMock], linked: bool = True
+) -> MagicMock:
+    campaign = MagicMock(spec=DropsCampaign)
+    campaign.id = campaign_id
+    campaign.name = f"{game_name} Campaign"
+    campaign.campaign_url = f"http://test.url/{game_name}"
+    campaign.game = Game({"id": game_id, "name": game_name})
+    campaign.can_earn_within.return_value = True
+    campaign.linked = linked
+    campaign.link_url = f"http://link.url/{game_name}"
+    campaign.expired = False
+    campaign.drops = drops
+    campaign.timed_drops = {drop.id: drop for drop in drops}
+    return campaign
+
+
+class TestFavoriteTier(unittest.TestCase):
+    """
+    Coverage for the "favorite" priority tier: a single drop marked favorite
+    (settings.favorite_drops, keyed "{campaign_id}#{drop_id}") should force
+    its game to the front of the mining queue - ahead of manual and auto -
+    regardless of whether that game is on any watch list at all, and only
+    for as long as that specific drop remains unclaimed.
+    """
+
+    def setUp(self):
+        self.settings = MagicMock()
+        self.settings.mining_benefits = {"BADGE": True, "DIRECT_ENTITLEMENT": True}
+        self.settings.idle_behavior = {"mine_all_when_idle": False}
+        self.stream_selector = StreamSelector()
+
+    def test_favorite_drop_forces_unwatched_game_into_queue(self):
+        self.settings.games_to_watch = []
+        campaign = _make_campaign_with_drops("c1", 1, "FavGame", [_make_drop("d1", "Drop1")])
+        self.settings.favorite_drops = ["c1#d1"]
+
+        wanted_games = self.stream_selector.get_wanted_games(self.settings, [campaign], [], [])
+
+        self.assertEqual([g.name for g in wanted_games], ["FavGame"])
+
+    def test_favorite_game_prioritized_ahead_of_manual_and_auto(self):
+        self.settings.games_to_watch = ["ManualGame"]
+        fav_campaign = _make_campaign_with_drops("c_fav", 1, "FavGame", [_make_drop("d1", "Drop1")])
+        manual_campaign = _make_campaign_with_drops(
+            "c_manual", 2, "ManualGame", [_make_drop("d2", "Drop2")]
+        )
+        auto_campaign = _make_campaign_with_drops("c_auto", 3, "AutoGame", [_make_drop("d3", "Drop3")])
+        self.settings.favorite_drops = ["c_fav#d1"]
+
+        tree = self.stream_selector.get_wanted_game_tree(
+            self.settings,
+            [fav_campaign, manual_campaign, auto_campaign],
+            ["ManualGame"],
+            ["AutoGame"],
+        )
+
+        self.assertEqual([entry["game_name"] for entry in tree], ["FavGame", "ManualGame", "AutoGame"])
+        self.assertEqual(tree[0]["source"], "favorite")
+        self.assertEqual(tree[1]["source"], "manual")
+        self.assertEqual(tree[2]["source"], "auto")
+
+    def test_favorite_tier_ends_once_the_favorited_drop_is_claimed(self):
+        # A 3-drop campaign (e.g. 30/60/90 minute drops) with only the middle
+        # drop favorited: claiming just that drop should drop the whole game
+        # out of the favorite tier, even though the other drops are untouched.
+        self.settings.games_to_watch = []
+        drops = [
+            _make_drop("d30", "Drop30"),
+            _make_drop("d60", "Drop60", is_claimed=True),
+            _make_drop("d90", "Drop90"),
+        ]
+        campaign = _make_campaign_with_drops("c1", 1, "FavGame", drops)
+        self.settings.favorite_drops = ["c1#d60"]
+
+        # Not on any watch list, and its favorited drop is already claimed -> nothing wanted
+        wanted_games = self.stream_selector.get_wanted_games(self.settings, [campaign], [], [])
+        self.assertEqual(wanted_games, [])
+
+    def test_favorite_tier_active_while_favorited_drop_still_unclaimed(self):
+        self.settings.games_to_watch = []
+        drops = [
+            _make_drop("d30", "Drop30"),
+            _make_drop("d60", "Drop60", is_claimed=False),
+            _make_drop("d90", "Drop90"),
+        ]
+        campaign = _make_campaign_with_drops("c1", 1, "FavGame", drops)
+        self.settings.favorite_drops = ["c1#d60"]
+
+        tree = self.stream_selector.get_wanted_game_tree(self.settings, [campaign], [], [])
+
+        self.assertEqual([entry["game_name"] for entry in tree], ["FavGame"])
+        self.assertEqual(tree[0]["source"], "favorite")
+
+    def test_falls_back_to_manual_source_once_favorited_drop_is_claimed(self):
+        self.settings.games_to_watch = ["FavGame"]
+        drops = [_make_drop("d1", "Drop1", is_claimed=True), _make_drop("d2", "Drop2")]
+        campaign = _make_campaign_with_drops("c1", 1, "FavGame", drops)
+        self.settings.favorite_drops = ["c1#d1"]
+
+        tree = self.stream_selector.get_wanted_game_tree(self.settings, [campaign], ["FavGame"], [])
+
+        self.assertEqual(len(tree), 1)
+        self.assertEqual(tree[0]["source"], "manual")
+
+    def test_favorite_tree_only_includes_path_to_favorited_drop(self):
+        # A 30/60/90 minute chain (each gated on the previous) plus an unrelated
+        # parallel drop. Favoriting the 60-minute (middle) drop should only
+        # surface it and its precondition ancestor (30) - not the 90-minute
+        # drop that depends on it, and not the unrelated side drop.
+        self.settings.games_to_watch = []
+        drop30 = _make_drop("d30", "Drop30")
+        drop60 = _make_drop("d60", "Drop60", precondition_drops=["d30"])
+        drop90 = _make_drop("d90", "Drop90", precondition_drops=["d60"])
+        side_drop = _make_drop("d_side", "SideDrop")
+        campaign = _make_campaign_with_drops(
+            "c1", 1, "FavGame", [drop30, drop60, drop90, side_drop]
+        )
+        self.settings.favorite_drops = ["c1#d60"]
+
+        tree = self.stream_selector.get_wanted_game_tree(self.settings, [campaign], [], [])
+
+        self.assertEqual(len(tree), 1)
+        drop_names = {d["name"] for d in tree[0]["campaigns"][0]["drops"]}
+        self.assertEqual(drop_names, {"Drop30", "Drop60"})
+
+    def test_favorite_tree_excludes_unrelated_campaigns_of_the_same_game(self):
+        self.settings.games_to_watch = []
+        favorited_campaign = _make_campaign_with_drops(
+            "c_fav", 1, "FavGame", [_make_drop("d1", "Drop1")]
+        )
+        other_campaign = _make_campaign_with_drops(
+            "c_other", 1, "FavGame", [_make_drop("d2", "Drop2")]
+        )
+        self.settings.favorite_drops = ["c_fav#d1"]
+
+        tree = self.stream_selector.get_wanted_game_tree(
+            self.settings, [favorited_campaign, other_campaign], [], []
+        )
+
+        self.assertEqual(len(tree), 1)
+        campaign_ids = {c["id"] for c in tree[0]["campaigns"]}
+        self.assertEqual(campaign_ids, {"c_fav"})
 
 
 if __name__ == "__main__":

@@ -218,6 +218,31 @@ class SettingsManager:
         # Notify clients that translations need to be reloaded
         asyncio.create_task(self._broadcaster.emit("language_changed", {"language": language}))
 
+    def set_favorite_drop(self, campaign_id: str, drop_id: str, favorite: bool) -> None:
+        """Mark (or unmark) a single drop as favorite, prioritizing its game in the
+        mining queue (see StreamSelector.SOURCE_FAVORITE) until that drop is claimed.
+
+        Args:
+            campaign_id: The drop's campaign id
+            drop_id: The drop id, scoped to its campaign (not globally unique)
+            favorite: Whether the drop should be marked favorite
+        """
+        key = f"{campaign_id}#{drop_id}"
+        favorites = set(self._settings.favorite_drops)
+        already_favorite = key in favorites
+        if favorite == already_favorite:
+            return
+        if favorite:
+            favorites.add(key)
+        else:
+            favorites.discard(key)
+        self._settings.favorite_drops = sorted(favorites)
+        self._log_change(f"Setting changed: favorite {'added' if favorite else 'removed'} for drop {key}")
+        self._settings.save()
+        asyncio.create_task(self._broadcaster.emit("settings_updated", self.get_settings()))
+        if self._on_change:
+            self._on_change()
+
     def set_games(self, games: set[Game]):
         """Update the list of available games for settings panel.
 

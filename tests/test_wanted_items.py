@@ -17,6 +17,7 @@ class TestWantedItems(unittest.TestCase):
         # idle_behavior preview isn't what these filtering tests exercise -
         # keep it off so extra games with campaigns don't show up unexpectedly
         self.twitch.settings.idle_behavior = {"mine_all_when_idle": False}
+        self.twitch.settings.favorite_drops = []
         self.twitch.get_change_state_callable.return_value = lambda: None
         # the effective watch list combines user picks with library auto-detected games
         self.twitch.auto_watch_games = []
@@ -193,6 +194,7 @@ class TestUnlinkedAutoTrackedItems(unittest.TestCase):
         self.twitch.get_change_state_callable.return_value = lambda: None
         self.twitch.settings.games_to_watch = []
         self.twitch.settings.mining_benefits = {"BADGE": True, "DIRECT_ENTITLEMENT": True}
+        self.twitch.settings.favorite_drops = []
 
         self.gui = WebGUIManager(self.twitch)
         self.gui._broadcaster = MagicMock()

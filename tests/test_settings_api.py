@@ -55,6 +55,33 @@ class TestSettingsAPI(unittest.IsolatedAsyncioTestCase):
         manager.update_settings({"games_to_watch": games})
         mock_callback.assert_called_once()
 
+    async def test_set_favorite_drop_toggle(self):
+        mock_broadcaster = AsyncMock()
+        mock_settings = MagicMock(spec=Settings)
+        mock_settings.favorite_drops = []
+        mock_console = MagicMock()
+        mock_callback = MagicMock()
+
+        manager = SettingsManager(
+            mock_broadcaster, mock_settings, mock_console, on_change=mock_callback
+        )
+
+        manager.set_favorite_drop("camp1", "drop1", True)
+        self.assertEqual(mock_settings.favorite_drops, ["camp1#drop1"])
+        mock_callback.assert_called_once()
+        mock_settings.save.assert_called_once()
+        mock_callback.reset_mock()
+        mock_settings.save.reset_mock()
+
+        # Re-applying the same value is a no-op: no save, no broadcast, no restart trigger
+        manager.set_favorite_drop("camp1", "drop1", True)
+        mock_callback.assert_not_called()
+        mock_settings.save.assert_not_called()
+
+        manager.set_favorite_drop("camp1", "drop1", False)
+        self.assertEqual(mock_settings.favorite_drops, [])
+        mock_callback.assert_called_once()
+
     async def test_animations_setting_validation(self):
         mock_broadcaster = AsyncMock()
         mock_settings = MagicMock(spec=Settings)

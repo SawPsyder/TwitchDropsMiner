@@ -4,10 +4,12 @@ from datetime import datetime, timedelta, timezone
 from src.config.settings import Settings
 from src.library_sync.service import LibrarySyncService
 from src.models.campaign import DropsCampaign
+from src.models.drop import TimedDrop
 from src.models.game import Game
 
 
 # Tags identifying where a wanted-queue entry came from.
+SOURCE_FAVORITE = "favorite"
 SOURCE_MANUAL = "manual"
 SOURCE_AUTO = "auto"
 SOURCE_IDLE = "idle"
@@ -20,6 +22,7 @@ class StreamSelector:
         campaigns: list[DropsCampaign],
         games_order: list[str] | None = None,
         campaign_filter: Callable[[DropsCampaign], bool] | None = None,
+        drop_filter: Callable[[DropsCampaign, TimedDrop], bool] | None = None,
     ) -> list[dict]:
         """
         Get the hierarchical tree of wanted items (Games -> Campaigns -> Drops -> Benefits).
@@ -32,6 +35,12 @@ class StreamSelector:
         campaign_filter overrides which campaigns qualify for a game; defaults
         to "can earn within the next hour" (requires the account to be linked
         or the campaign to grant a badge/emote - see DropsCampaign.eligible).
+
+        drop_filter, if given, additionally restricts which of a campaign's
+        unclaimed drops are considered (e.g. trimming a favorited game down to
+        just the path leading to its favorited drop - see
+        _make_favorite_drop_filter); defaults to considering every unclaimed
+        drop with a wanted benefit.
         """
         wanted_games = []
         games_to_watch = games_order if games_order is not None else settings.games_to_watch
@@ -58,6 +67,8 @@ class StreamSelector:
                 wanted_drops = []
                 for drop in campaign.drops:
                     if drop.is_claimed:
+                        continue
+                    if drop_filter is not None and not drop_filter(campaign, drop):
                         continue
 
                     filtered_benefits = drop.get_wanted_unclaimed_benefits(mining_benefits)
@@ -90,6 +101,69 @@ class StreamSelector:
 
         return wanted_games
 
+    def _get_favorite_games(
+        self, campaigns: list[DropsCampaign], favorite_keys: set[str]
+    ) -> list[str]:
+        """
+        Games with at least one drop marked favorite (settings.favorite_drops,
+        keyed "{campaign_id}#{drop_id}") that hasn't been claimed yet, in
+        campaign-list order, deduped. A favorited drop stops holding its game
+        in this tier the moment that specific drop is claimed - other drops
+        in the same campaign don't keep it here.
+        """
+        if not favorite_keys:
+            return []
+        favorite_games: list[str] = []
+        seen: set[str] = set()
+        for campaign in campaigns:
+            name_cf = campaign.game.name.casefold()
+            if name_cf in seen:
+                continue
+            for drop in campaign.drops:
+                if not drop.is_claimed and f"{campaign.id}#{drop.id}" in favorite_keys:
+                    favorite_games.append(campaign.game.name)
+                    seen.add(name_cf)
+                    break
+        return favorite_games
+
+    def _favorite_path_drop_ids(
+        self, campaign: DropsCampaign, favorite_keys: set[str]
+    ) -> set[str]:
+        """
+        The favorited drop(s) in this campaign, plus their unclaimed
+        precondition ancestors (the drops that must be earned first to reach
+        them) - "the path up to the favorite", not sibling or descendant
+        drops that don't gate it.
+        """
+        path_ids: set[str] = set()
+        stack = [
+            drop_id for drop_id in campaign.timed_drops if f"{campaign.id}#{drop_id}" in favorite_keys
+        ]
+        while stack:
+            drop_id = stack.pop()
+            if drop_id in path_ids:
+                continue
+            path_ids.add(drop_id)
+            drop = campaign.timed_drops.get(drop_id)
+            if drop is not None:
+                stack.extend(drop.precondition_drops)
+        return path_ids
+
+    def _make_favorite_drop_filter(
+        self, favorite_keys: set[str]
+    ) -> Callable[[DropsCampaign, TimedDrop], bool]:
+        # Cached per campaign since _get_wanted_game_tree calls this once per drop.
+        path_cache: dict[str, set[str]] = {}
+
+        def drop_filter(campaign: DropsCampaign, drop: TimedDrop) -> bool:
+            path_ids = path_cache.get(campaign.id)
+            if path_ids is None:
+                path_ids = self._favorite_path_drop_ids(campaign, favorite_keys)
+                path_cache[campaign.id] = path_ids
+            return drop.id in path_ids
+
+        return drop_filter
+
     def _get_primary_tree(
         self,
         settings: Settings,
@@ -98,22 +172,48 @@ class StreamSelector:
         auto_games: list[str] | None,
     ) -> list[dict]:
         """
-        The two-tier watch list tree (user's manual games_to_watch first,
-        then auto-detected library games), tagged with a "source" of
-        "manual" or "auto".
+        The watch list tree: favorited games first (regardless of watch list
+        membership - see _get_favorite_games), then the user's manual
+        games_to_watch, then auto-detected library games. Tagged with a
+        "source" of "favorite", "manual", or "auto".
+
+        Favorited games are trimmed to just the path leading to their
+        favorited drop(s) (_favorite_path_drop_ids) rather than every drop of
+        every campaign for that game - the other tiers show the full breadth.
         """
         manual_games = manual_games if manual_games is not None else settings.games_to_watch
         auto_games = list(auto_games) if auto_games else []
-        games_order = LibrarySyncService.combine_watch_lists(manual_games, auto_games)
-        primary_tree = self._get_wanted_game_tree(settings, campaigns, games_order)
+        favorite_keys = set(settings.favorite_drops)
+        favorite_games = self._get_favorite_games(campaigns, favorite_keys)
+        favorite_set = {name.casefold() for name in favorite_games}
+        combined_games = LibrarySyncService.combine_watch_lists(manual_games, auto_games)
+        rest_games = [name for name in combined_games if name.casefold() not in favorite_set]
+
+        favorite_tree = (
+            self._get_wanted_game_tree(
+                settings,
+                campaigns,
+                favorite_games,
+                drop_filter=self._make_favorite_drop_filter(favorite_keys),
+            )
+            if favorite_games
+            else []
+        )
+        rest_tree = self._get_wanted_game_tree(settings, campaigns, rest_games)
+        primary_tree = favorite_tree + rest_tree
 
         manual_set = {name.casefold() for name in manual_games}
         auto_set = {name.casefold() for name in auto_games}
         for entry in primary_tree:
             name_cf = entry["game_name"].casefold()
-            entry["source"] = SOURCE_MANUAL if name_cf in manual_set else (
-                SOURCE_AUTO if name_cf in auto_set else SOURCE_IDLE
-            )
+            if name_cf in favorite_set:
+                entry["source"] = SOURCE_FAVORITE
+            elif name_cf in manual_set:
+                entry["source"] = SOURCE_MANUAL
+            elif name_cf in auto_set:
+                entry["source"] = SOURCE_AUTO
+            else:
+                entry["source"] = SOURCE_IDLE
         return primary_tree
 
     def _get_idle_tree(
@@ -180,13 +280,17 @@ class StreamSelector:
         auto_games: list[str] | None = None,
     ) -> list[dict]:
         """
-        Games being watched - manually, or auto-detected by a library
-        tracker (Steam, Ubisoft, ...) - that have at least one campaign
-        whose Twitch account isn't linked yet, so nothing will actually be
-        mined until the user links it. Manual games come first, followed by
-        auto-detected ones not already on the manual list (case-insensitive,
-        no duplicates); each entry is tagged with a "source" of "manual" or
-        "auto". Only unlinked campaigns are kept per game.
+        Games being watched - manually, auto-detected by a library tracker
+        (Steam, Ubisoft, ...), or favorited (see _get_favorite_games) - that
+        have at least one campaign whose Twitch account isn't linked yet, so
+        nothing will actually be mined until the user links it. Favorited
+        games come first (regardless of watch list membership), followed by
+        manual games, then auto-detected ones not already on the manual list
+        (case-insensitive, no duplicates); each entry is tagged with a
+        "source" of "favorite", "manual", or "auto". Only unlinked campaigns
+        are kept per game - favorited ones are further trimmed to just the
+        path leading to the favorited drop (_favorite_path_drop_ids), same as
+        the main wanted queue.
 
         This intentionally bypasses the "can earn within" / eligible check
         used by the main wanted queue: DropsCampaign.eligible is only True
@@ -197,17 +301,41 @@ class StreamSelector:
         """
         manual_games = manual_games if manual_games is not None else settings.games_to_watch
         auto_games = list(auto_games) if auto_games else []
-        games_order = LibrarySyncService.combine_watch_lists(manual_games, auto_games)
-        if not games_order:
+        favorite_keys = set(settings.favorite_drops)
+        favorite_games = self._get_favorite_games(campaigns, favorite_keys)
+        favorite_set = {name.casefold() for name in favorite_games}
+
+        combined_games = LibrarySyncService.combine_watch_lists(manual_games, auto_games)
+        rest_games = [name for name in combined_games if name.casefold() not in favorite_set]
+        if not favorite_games and not rest_games:
             return []
 
-        manual_set = {name.casefold() for name in manual_games}
-        tree = self._get_wanted_game_tree(
+        favorite_tree = (
+            self._get_wanted_game_tree(
+                settings,
+                campaigns,
+                favorite_games,
+                campaign_filter=lambda campaign: not campaign.linked and not campaign.expired,
+                drop_filter=self._make_favorite_drop_filter(favorite_keys),
+            )
+            if favorite_games
+            else []
+        )
+        rest_tree = self._get_wanted_game_tree(
             settings,
             campaigns,
-            games_order,
+            rest_games,
             campaign_filter=lambda campaign: not campaign.linked and not campaign.expired,
         )
+        tree = favorite_tree + rest_tree
+
+        manual_set = {name.casefold() for name in manual_games}
         for entry in tree:
-            entry["source"] = SOURCE_MANUAL if entry["game_name"].casefold() in manual_set else SOURCE_AUTO
+            name_cf = entry["game_name"].casefold()
+            if name_cf in favorite_set:
+                entry["source"] = SOURCE_FAVORITE
+            elif name_cf in manual_set:
+                entry["source"] = SOURCE_MANUAL
+            else:
+                entry["source"] = SOURCE_AUTO
         return [{**game, "game_obj": None} for game in tree]

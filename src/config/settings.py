@@ -45,15 +45,16 @@ class InventoryFilters(TypedDict):
     show_benefit_item: bool
     show_benefit_other: bool
     show_expired: bool
+    show_favorites: bool
     show_finished: bool
     show_not_linked: bool
-    show_upcoming: bool
 
 
 default_settings = {
     "animations": "auto",  # "auto" | "on" | "off" - UI motion/animation preference
     "connection_quality": 1,
     "dark_mode": "auto",  # "auto" | "on" | "off" - UI light/dark theme preference
+    "favorite_drops": [],  # "{campaign_id}#{drop_id}" keys, see StreamSelector.SOURCE_FAVORITE
     "games_to_watch": [],
     "idle_behavior": {
         "mine_all_when_idle": True,
@@ -67,9 +68,9 @@ default_settings = {
         "show_benefit_item": True,
         "show_benefit_other": True,
         "show_expired": False,
+        "show_favorites": False,
         "show_finished": False,
         "show_not_linked": True,
-        "show_upcoming": True,
     },
     "library_sync": {
         "enabled": False,
@@ -102,6 +103,7 @@ class Settings:
     animations: str
     connection_quality: int
     dark_mode: str
+    favorite_drops: list[str]
     games_to_watch: list[str]
     idle_behavior: IdleBehaviorSettings
     language: str
