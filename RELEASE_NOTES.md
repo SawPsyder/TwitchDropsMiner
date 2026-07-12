@@ -1,3 +1,27 @@
+# Release Notes - v1.5.0
+
+This release adds Discord notifications and favourite drop markers, plus an inventory display
+polish pass.
+
+### 🔔 Discord Notifications (New)
+- **Bring Your Own Bot**: Connect a Discord bot application you own to get notified about drops
+  claimed, unlinked auto-tracked games, auth issues needing attention, stalled mining, and new
+  campaigns.
+- **Per-Event Toggles & Cooldown**: Enable/disable each event type independently, with a configurable
+  cooldown so a flapping condition (e.g. repeatedly stalled mining) can't spam the channel.
+
+### ⭐ Favourite Drops
+- **Prioritize Specific Drops**: Mark individual drops as favourites to prioritize them in the
+  wanted-items queue, without needing to farm the entire game or all of its campaigns.
+- **Favourite Filter & Badge**: Filter the inventory view by favourite, and see a dedicated
+  "Favourite" source badge in the Drops Queue.
+
+### 🎨 Inventory Display Polish
+- **All Benefit Icons Shown**: Drop rows now render every benefit icon with a hover tooltip (name
+  and type), instead of only the first icon plus a truncated "name (+N)" text summary.
+- **Grid-Aligned Rows**: Campaign and drop rows now share a common grid column width so dates,
+  names, and icons line up vertically.
+
 # Release Notes - v1.4.0
 
 This release reworks the Inventory tab into a collapsible, status-grouped tree and gives the
