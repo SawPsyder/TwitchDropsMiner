@@ -385,6 +385,27 @@ class TestUnlinkedAutoTrackedTree(unittest.TestCase):
 
         self.assertEqual(tree, [])
 
+    def test_linked_favorite_campaign_does_not_hide_unrelated_unlinked_campaign(self):
+        # Regression: the favorited drop's own campaign already being linked
+        # (so it has nothing to show here) shouldn't hide a *different*,
+        # still-unlinked campaign of the same game - it should fall through
+        # to the normal manual/auto treatment instead of disappearing.
+        fav_campaign = self._make_favorited_campaign(1, "SameGame", linked=True)
+        other_campaign = _make_campaign(1, "SameGame", linked=False)
+        other_campaign.id = "other_unlinked_campaign"
+        other_campaign.timed_drops = {drop.id: drop for drop in other_campaign.drops}
+        self.settings.favorite_drops = [f"{fav_campaign.id}#SameGame_drop"]
+
+        tree = self.stream_selector.get_unlinked_auto_tracked_tree(
+            self.settings, [fav_campaign, other_campaign], manual_games=["SameGame"], auto_games=[]
+        )
+
+        self.assertEqual(len(tree), 1)
+        self.assertEqual(tree[0]["game_name"], "SameGame")
+        self.assertEqual(tree[0]["source"], "manual")
+        campaign_ids = {c["id"] for c in tree[0]["campaigns"]}
+        self.assertEqual(campaign_ids, {"other_unlinked_campaign"})
+
 
 def _make_drop(
     drop_id: str, name: str, is_claimed: bool = False, precondition_drops: list[str] | None = None
@@ -399,14 +420,19 @@ def _make_drop(
 
 
 def _make_campaign_with_drops(
-    campaign_id: str, game_id: int, game_name: str, drops: list[MagicMock], linked: bool = True
+    campaign_id: str,
+    game_id: int,
+    game_name: str,
+    drops: list[MagicMock],
+    linked: bool = True,
+    can_earn: bool = True,
 ) -> MagicMock:
     campaign = MagicMock(spec=DropsCampaign)
     campaign.id = campaign_id
     campaign.name = f"{game_name} Campaign"
     campaign.campaign_url = f"http://test.url/{game_name}"
     campaign.game = Game({"id": game_id, "name": game_name})
-    campaign.can_earn_within.return_value = True
+    campaign.can_earn_within.return_value = can_earn
     campaign.linked = linked
     campaign.link_url = f"http://link.url/{game_name}"
     campaign.expired = False
@@ -539,6 +565,67 @@ class TestFavoriteTier(unittest.TestCase):
         )
 
         self.assertEqual(len(tree), 1)
+        campaign_ids = {c["id"] for c in tree[0]["campaigns"]}
+        self.assertEqual(campaign_ids, {"c_fav"})
+
+    def test_favorite_not_yet_earnable_does_not_block_unrelated_campaign(self):
+        # Regression: favoriting a drop whose own campaign isn't earnable yet
+        # (e.g. not linked, hasn't started) must not black out a *different*,
+        # perfectly mineable campaign of the same game - the game should fall
+        # through to normal (untrimmed) treatment instead of vanishing.
+        self.settings.games_to_watch = ["SameGame"]
+        other_campaign = _make_campaign_with_drops(
+            "c_other", 1, "SameGame", [_make_drop("d_other", "OtherDrop")]
+        )
+        fav_campaign = _make_campaign_with_drops(
+            "c_fav", 1, "SameGame", [_make_drop("d_fav", "FavDrop")], can_earn=False
+        )
+        self.settings.favorite_drops = ["c_fav#d_fav"]
+
+        wanted_games = self.stream_selector.get_wanted_games(
+            self.settings, [fav_campaign, other_campaign], ["SameGame"], []
+        )
+
+        self.assertEqual([g.name for g in wanted_games], ["SameGame"])
+
+    def test_favorite_not_yet_earnable_falls_back_to_manual_source(self):
+        self.settings.games_to_watch = ["SameGame"]
+        other_campaign = _make_campaign_with_drops(
+            "c_other", 1, "SameGame", [_make_drop("d_other", "OtherDrop")]
+        )
+        fav_campaign = _make_campaign_with_drops(
+            "c_fav", 1, "SameGame", [_make_drop("d_fav", "FavDrop")], can_earn=False
+        )
+        self.settings.favorite_drops = ["c_fav#d_fav"]
+
+        tree = self.stream_selector.get_wanted_game_tree(
+            self.settings, [fav_campaign, other_campaign], ["SameGame"], []
+        )
+
+        self.assertEqual(len(tree), 1)
+        self.assertEqual(tree[0]["source"], "manual")
+        campaign_ids = {c["id"] for c in tree[0]["campaigns"]}
+        self.assertEqual(campaign_ids, {"c_other"})
+
+    def test_favorite_still_wins_priority_once_it_becomes_earnable(self):
+        # Sanity check alongside the two regressions above: once the
+        # favorited campaign *is* earnable, the existing trimming behavior
+        # (favorite tier, unrelated campaign excluded) still applies.
+        self.settings.games_to_watch = ["SameGame"]
+        other_campaign = _make_campaign_with_drops(
+            "c_other", 1, "SameGame", [_make_drop("d_other", "OtherDrop")]
+        )
+        fav_campaign = _make_campaign_with_drops(
+            "c_fav", 1, "SameGame", [_make_drop("d_fav", "FavDrop")], can_earn=True
+        )
+        self.settings.favorite_drops = ["c_fav#d_fav"]
+
+        tree = self.stream_selector.get_wanted_game_tree(
+            self.settings, [fav_campaign, other_campaign], ["SameGame"], []
+        )
+
+        self.assertEqual(len(tree), 1)
+        self.assertEqual(tree[0]["source"], "favorite")
         campaign_ids = {c["id"] for c in tree[0]["campaigns"]}
         self.assertEqual(campaign_ids, {"c_fav"})
 

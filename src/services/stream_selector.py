@@ -180,14 +180,20 @@ class StreamSelector:
         Favorited games are trimmed to just the path leading to their
         favorited drop(s) (_favorite_path_drop_ids) rather than every drop of
         every campaign for that game - the other tiers show the full breadth.
+
+        A game only claims the favorite tier once its favorite tree actually
+        produced something (i.e. the favorited drop's own campaign is
+        currently earnable) - otherwise it falls through to the normal
+        manual/auto treatment (full breadth) instead of vanishing entirely.
+        Without this, favoriting a drop whose campaign isn't earnable yet
+        (not linked, not started, ...) would silently black out the game's
+        other, perfectly mineable campaigns too, since they'd otherwise be
+        excluded from both tiers at once.
         """
         manual_games = manual_games if manual_games is not None else settings.games_to_watch
         auto_games = list(auto_games) if auto_games else []
         favorite_keys = set(settings.favorite_drops)
         favorite_games = self._get_favorite_games(campaigns, favorite_keys)
-        favorite_set = {name.casefold() for name in favorite_games}
-        combined_games = LibrarySyncService.combine_watch_lists(manual_games, auto_games)
-        rest_games = [name for name in combined_games if name.casefold() not in favorite_set]
 
         favorite_tree = (
             self._get_wanted_game_tree(
@@ -199,6 +205,10 @@ class StreamSelector:
             if favorite_games
             else []
         )
+        resolved_favorite_set = {entry["game_name"].casefold() for entry in favorite_tree}
+
+        combined_games = LibrarySyncService.combine_watch_lists(manual_games, auto_games)
+        rest_games = [name for name in combined_games if name.casefold() not in resolved_favorite_set]
         rest_tree = self._get_wanted_game_tree(settings, campaigns, rest_games)
         primary_tree = favorite_tree + rest_tree
 
@@ -206,7 +216,7 @@ class StreamSelector:
         auto_set = {name.casefold() for name in auto_games}
         for entry in primary_tree:
             name_cf = entry["game_name"].casefold()
-            if name_cf in favorite_set:
+            if name_cf in resolved_favorite_set:
                 entry["source"] = SOURCE_FAVORITE
             elif name_cf in manual_set:
                 entry["source"] = SOURCE_MANUAL
@@ -298,16 +308,19 @@ class StreamSelector:
         an unlinked campaign without a badge/emote (e.g. an in-game item)
         would otherwise never show up anywhere - defeating the purpose of
         this list, which exists precisely to flag that case.
+
+        As with the main wanted queue, a game only claims the favorite tier
+        once its favorite tree actually produced something here (i.e. it has
+        an unlinked, non-expired campaign on the path to the favorited drop)
+        - otherwise it falls through to the normal manual/auto treatment
+        instead of hiding the game's other unlinked campaigns entirely.
         """
         manual_games = manual_games if manual_games is not None else settings.games_to_watch
         auto_games = list(auto_games) if auto_games else []
         favorite_keys = set(settings.favorite_drops)
         favorite_games = self._get_favorite_games(campaigns, favorite_keys)
-        favorite_set = {name.casefold() for name in favorite_games}
-
         combined_games = LibrarySyncService.combine_watch_lists(manual_games, auto_games)
-        rest_games = [name for name in combined_games if name.casefold() not in favorite_set]
-        if not favorite_games and not rest_games:
+        if not favorite_games and not combined_games:
             return []
 
         favorite_tree = (
@@ -321,6 +334,9 @@ class StreamSelector:
             if favorite_games
             else []
         )
+        resolved_favorite_set = {entry["game_name"].casefold() for entry in favorite_tree}
+
+        rest_games = [name for name in combined_games if name.casefold() not in resolved_favorite_set]
         rest_tree = self._get_wanted_game_tree(
             settings,
             campaigns,
@@ -332,7 +348,7 @@ class StreamSelector:
         manual_set = {name.casefold() for name in manual_games}
         for entry in tree:
             name_cf = entry["game_name"].casefold()
-            if name_cf in favorite_set:
+            if name_cf in resolved_favorite_set:
                 entry["source"] = SOURCE_FAVORITE
             elif name_cf in manual_set:
                 entry["source"] = SOURCE_MANUAL
