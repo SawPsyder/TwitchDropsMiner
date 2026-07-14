@@ -63,6 +63,15 @@ class BaseDrop:
             and all(self.starts_at <= dt < self.ends_at for dt in dts)
         ):
             self.is_claimed = True
+        if (
+            # Badges/emotes are auto-granted and Twitch doesn't reliably report them as
+            # claimed in the inventory, so fall back to our own persisted record of
+            # verified completions to avoid re-mining an already-earned drop.
+            not self.is_claimed
+            and self.is_badge_or_emote
+            and self._twitch.claimed_drops.is_completed(self.id)
+        ):
+            self.is_claimed = True
         self.precondition_drops: list[str] = [d["id"] for d in (data["preconditionDrops"] or [])]
 
     def __repr__(self) -> str:
@@ -113,13 +122,33 @@ class BaseDrop:
         )
 
     @property
+    def is_badge_or_emote(self) -> bool:
+        # Badges and emotes are auto-granted by Twitch once the required watchtime is
+        # registered - there's no drop instance to claim via GQL. A drop only counts as
+        # auto-claimed when *every* benefit is a badge/emote; a mixed drop (e.g. a badge
+        # bundled with a game key) still needs the normal claim flow for the entitlement.
+        return bool(self.benefits) and all(
+            benefit.type.is_badge_or_emote() for benefit in self.benefits
+        )
+
+    def _watchtime_met(self) -> bool:
+        # Overridden by TimedDrop; base drops carry no watchtime requirement.
+        return False
+
+    @property
     def can_claim(self) -> bool:
+        if self.is_claimed:
+            return False
+        if self.is_badge_or_emote:
+            # Twitch auto-grants badges/emotes - there's no drop instance to claim.
+            # All we can (and need to) do is confirm the registered watchtime meets the
+            # requirement, then mark the drop claimed locally.
+            return self._watchtime_met()
         # https://help.twitch.tv/s/article/mission-based-drops?language=en_US#claiming
         # "If you are unable to claim the Drop in time, you will be able to claim it
         # from the Drops Inventory page until 24 hours after the Drops campaign has ended."
         return (
             self.claim_id is not None
-            and not self.is_claimed
             and datetime.now(timezone.utc) < self.campaign.ends_at + timedelta(hours=24)
         )
 
@@ -150,6 +179,10 @@ class BaseDrop:
         result = await self._claim()
         if result:
             self.is_claimed = result
+            if self.is_badge_or_emote:
+                # Twitch won't reliably report this as claimed on the next reload, so
+                # persist the verified completion ourselves (keyed to campaign end).
+                self._twitch.claimed_drops.mark_completed(self.id, self.campaign.ends_at)
             claim_text = (
                 f"{self.campaign.game.name}\n"
                 f"{self.rewards_text()} "
@@ -182,6 +215,10 @@ class BaseDrop:
             return True
         if not self.can_claim:
             return False
+        if self.is_badge_or_emote:
+            # can_claim already verified the registered watchtime; Twitch has granted the
+            # badge/emote automatically, so there's nothing to claim via GQL - mark it.
+            return True
         try:
             response = await self._twitch.gql_request(
                 GQL_OPERATIONS["ClaimDrop"].with_variables(
@@ -240,6 +277,12 @@ class TimedDrop(BaseDrop):
     @property
     def remaining_minutes(self) -> int:
         return self.required_minutes - self.current_minutes
+
+    def _watchtime_met(self) -> bool:
+        # Verify against real_current_minutes (the watchtime Twitch has actually
+        # registered), never current_minutes - the latter includes our own local
+        # estimate (extra_current_minutes) which Twitch may not have credited yet.
+        return self.required_minutes > 0 and self.real_current_minutes >= self.required_minutes
 
     @property
     def total_required_minutes(self) -> int:

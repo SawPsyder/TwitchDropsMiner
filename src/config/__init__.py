@@ -34,6 +34,7 @@ from .constants import (
 )
 from .operations import GQL_OPERATIONS
 from .paths import (
+    CLAIMED_DROPS_PATH,
     COOKIES_PATH,
     DATA_DIR,
     LANG_PATH,
@@ -80,6 +81,7 @@ __all__ = [
     "LIBRARY_CACHE_PATH",
     "UBISOFT_AUTH_PATH",
     "NOTIFICATIONS_STATE_PATH",
+    "CLAIMED_DROPS_PATH",
     "_merge_vars",
     # client_info.py
     "ClientInfo",

@@ -28,6 +28,7 @@ from src.models.campaign import DropsCampaign
 from src.models.channel import Channel
 from src.notifications import NotificationService
 from src.services.channel_service import ChannelService
+from src.services.claimed_drops import ClaimedDropsStore
 from src.services.inventory_service import InventoryService
 from src.services.maintenance import MaintenanceService
 from src.services.message_handlers import MessageHandlerService
@@ -64,6 +65,9 @@ class Twitch:
         self.auto_watch_games: list[str] = []
         self.inventory: list[DropsCampaign] = []
         self._drops: dict[str, TimedDrop] = {}
+        # persisted record of badge/emote drops verified as completed, so they stay
+        # claimed across inventory reloads/restarts instead of being re-mined every time
+        self.claimed_drops: ClaimedDropsStore = ClaimedDropsStore()
         self._campaigns: dict[str, DropsCampaign] = {}
         self._mnt_triggers: deque[datetime] = deque()
         # Client type and auth

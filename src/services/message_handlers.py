@@ -248,9 +248,21 @@ class MessageHandlerService:
 
         logger.log(CALL, f"Drop update from websocket: {drop_text}")
 
-        if drop is not None and drop.can_earn(self._twitch.watching_channel.get_with_default(None)):
+        if drop is not None and drop.can_earn(watching_channel):
             # the received payload is for the drop we expected
             drop.update_minutes(message["data"]["current_progress_min"])
+            # Badges/emotes are auto-granted by Twitch: there's no drop-claim websocket
+            # event and no drop instance to claim via GQL. Once the registered watchtime
+            # meets the requirement, mark the drop claimed locally and move the loop on
+            # (mirrors the drop-claim handling above for regular drops).
+            if drop.is_badge_or_emote and drop.can_claim:
+                campaign = drop.campaign
+                await drop.claim()
+                drop.display()
+                if campaign.can_earn(watching_channel):
+                    self._twitch.restart_watching()
+                else:
+                    self._twitch.change_state(State.INVENTORY_FETCH)
 
     @task_wrapper
     async def process_notifications(self, user_id: int, message: JsonType) -> None:
