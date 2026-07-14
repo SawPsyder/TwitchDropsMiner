@@ -15,6 +15,7 @@ const state = {
     linkClickedCampaigns: new Set(),  // Campaign IDs where "Link Account" was clicked; shows a "Refresh Status" trigger
     linkClickedAutoGames: new Set(),  // Game names where "Link Account" was clicked in the unlinked auto-tracked panel
     unlinkedAutoItems: [],  // Latest "Games Awaiting Link" tree (kept in sync for post-refresh link checks)
+    wantedItems: [],  // Latest Wanted Drop Queue tree (channels are filtered against its idle-tier games too)
     pendingLinkCheck: null,  // { kind: 'campaign'|'auto_game', campaignId?, gameName } - set right before a "Refresh Status" reload
     // Inventory section collapse state (Categories view) - active/not_linked/upcoming expanded by default
     inventorySections: { active: true, not_linked: true, upcoming: true, finished: false, expired: false }
@@ -489,9 +490,12 @@ function renderChannels() {
     }
 
     // Get the effective watch list: user picks + library-detected games + favorited games
-    // (favorited games are tracked/mined just like manual/auto ones - see StreamSelector)
+    // + idle-tier games (every queue tier is tracked/mined - see StreamSelector)
+    const idleGames = (state.wantedItems || [])
+        .filter(item => item.source === 'idle')
+        .map(item => item.game_name);
     const gamesToWatch = (state.settings.games_to_watch || [])
-        .concat(state.autoWatchGames || [], getFavoriteGameNames());
+        .concat(state.autoWatchGames || [], getFavoriteGameNames(), idleGames);
     const gamesToWatchSet = new Set(gamesToWatch);
 
     // Filter channels to only include those playing games in the watch list
@@ -504,7 +508,7 @@ function renderChannels() {
 
     if (filteredChannels.length === 0) {
         const emptyMsg = t.gui?.channels?.no_channels_for_games || 'No channels found for selected games...';
-        const emptySubMsg = t.gui?.channels?.no_channels_for_games_sub || '(Idle mode will not list channels here)';
+        const emptySubMsg = t.gui?.channels?.no_channels_for_games_sub || '(Idle mining channels are listed here too, when enabled)';
         container.replaceChildren(
             makeElement('p', { class: 'empty-message' }, '', el => {
                 el.appendChild(document.createTextNode(emptyMsg));
@@ -3528,7 +3532,44 @@ document.addEventListener('DOMContentLoaded', () => {
 
 // ==================== Wanted Items Rendering ====================
 
+// Campaign card shared by the Wanted Drop Queue and the "Games Awaiting Link" panel:
+// the campaign name link on top, then one row per drop - the drop's benefit images
+// first (name and type shown on hover, same as the inventory page), followed by the
+// drop name. Benefits without an image fall back to a text pill.
+function buildWantedCampaignCard(campaign) {
+    const t = state.translations;
+    return makeElement('div', { class: 'wanted-card' }, '', el => {
+        el.appendChild(makeElement('div', { class: 'wanted-card-header' }, '', h =>
+            h.appendChild(makeElement('a', { href: campaign.url, target: '_blank', rel: 'noopener noreferrer', class: 'wanted-card-campaign-link', title: campaign.name }, campaign.name))
+        ));
+        el.appendChild(makeElement('div', { class: 'wanted-card-body' }, '', b => {
+            campaign.drops.forEach(drop => {
+                b.appendChild(makeElement('div', { class: 'wanted-drop-item' }, '', row => {
+                    (drop.benefits || []).forEach(benefit => {
+                        if (benefit && benefit.image_url) {
+                            row.appendChild(makeElement('span', {
+                                class: 'wanted-drop-icon-wrap tooltip-target',
+                                'data-tooltip': `${benefit.name} (${benefitTypeLabel(benefit.type, t)})`
+                            }, '', wrap => {
+                                wrap.appendChild(makeImageElement(benefit.image_url, benefit.name, 'benefit-icon'));
+                            }));
+                        } else {
+                            const name = typeof benefit === 'string' ? benefit : benefit?.name;
+                            if (name) row.appendChild(makeElement('span', { class: 'wanted-benefit-pill' }, name));
+                        }
+                    });
+                    row.appendChild(makeElement('span', { class: 'wanted-drop-name' }, drop.name));
+                }));
+            });
+        }));
+    });
+}
+
 function renderWantedItems(tree) {
+    state.wantedItems = tree || [];
+    // idle-tier games are part of the channel filter - keep the channels panel in sync
+    renderChannels();
+
     const container = document.getElementById('wanted-items-list');
     if (!container) return;
 
@@ -3574,27 +3615,7 @@ function renderWantedItems(tree) {
         campaignListEl.className = 'wanted-campaign-list';
 
         gameGroup.campaigns.forEach(campaign => {
-            const dropContainer = makeElement('div', {});
-            const cardEl = makeElement('div', { class: 'wanted-card' }, '', el => {
-                el.appendChild(makeElement('div', { class: 'wanted-card-header' }, '', h =>
-                    h.appendChild(makeElement('a', { href: campaign.url, target: '_blank', rel: 'noopener noreferrer', class: 'wanted-card-campaign-link', title: campaign.name }, campaign.name))
-                ));
-                el.appendChild(makeElement('div', { class: 'wanted-card-body' }, '', b =>
-                    b.appendChild(dropContainer)
-                ));
-            });
-
-            campaign.drops.forEach(drop => {
-                const dropEl = makeElement('div', { class: 'wanted-drop-item' }, '', el => {
-                    el.appendChild(makeElement('span', { class: 'wanted-drop-name' }, drop.name));
-                    drop.benefits.forEach(benefit => {
-                        el.appendChild(makeElement('span', { class: 'wanted-benefit-pill' }, benefit));
-                    });
-                });
-                dropContainer.appendChild(dropEl);
-            });
-
-            campaignListEl.appendChild(cardEl);
+            campaignListEl.appendChild(buildWantedCampaignCard(campaign));
         });
 
         groupEl.appendChild(campaignListEl);
@@ -3676,27 +3697,7 @@ function renderUnlinkedAutoItems(tree) {
         campaignListEl.className = 'wanted-campaign-list';
 
         gameGroup.campaigns.forEach(campaign => {
-            const dropContainer = makeElement('div', {});
-            const cardEl = makeElement('div', { class: 'wanted-card' }, '', el => {
-                el.appendChild(makeElement('div', { class: 'wanted-card-header' }, '', h =>
-                    h.appendChild(makeElement('a', { href: campaign.url, target: '_blank', rel: 'noopener noreferrer', class: 'wanted-card-campaign-link', title: campaign.name }, campaign.name))
-                ));
-                el.appendChild(makeElement('div', { class: 'wanted-card-body' }, '', b => {
-                    b.appendChild(dropContainer);
-                }));
-            });
-
-            campaign.drops.forEach(drop => {
-                const dropEl = makeElement('div', { class: 'wanted-drop-item' }, '', el => {
-                    el.appendChild(makeElement('span', { class: 'wanted-drop-name' }, drop.name));
-                    drop.benefits.forEach(benefit => {
-                        el.appendChild(makeElement('span', { class: 'wanted-benefit-pill' }, benefit));
-                    });
-                });
-                dropContainer.appendChild(dropEl);
-            });
-
-            campaignListEl.appendChild(cardEl);
+            campaignListEl.appendChild(buildWantedCampaignCard(campaign));
         });
 
         groupEl.appendChild(campaignListEl);

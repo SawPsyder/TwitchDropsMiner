@@ -1,9 +1,18 @@
-import unittest
+﻿import unittest
 from unittest.mock import MagicMock
 
+from src.models.benefit import Benefit, BenefitType
 from src.models.campaign import DropsCampaign
 from src.models.game import Game
 from src.services.stream_selector import StreamSelector
+
+
+def _make_benefit(name: str) -> MagicMock:
+    benefit = MagicMock(spec=Benefit)
+    benefit.name = name
+    benefit.type = BenefitType.DIRECT_ENTITLEMENT
+    benefit.image_url = f"http://img/{name}"
+    return benefit
 
 
 class TestWantedGamesFilter(unittest.TestCase):
@@ -16,6 +25,8 @@ class TestWantedGamesFilter(unittest.TestCase):
             "BADGE": True,
             "DIRECT_ENTITLEMENT": True,
         }  # both allowed by default
+        # idle_behavior isn't what these filtering tests exercise
+        self.settings.idle_behavior = {"mine_all_when_idle": False}
 
     def test_filter_wanted_campaigns(self):
         # Setup Campaigns
@@ -32,7 +43,8 @@ class TestWantedGamesFilter(unittest.TestCase):
         d1 = MagicMock()
         d1.name = "Test Drop"
         d1.is_claimed = False
-        d1.get_wanted_unclaimed_benefits.return_value = ["Benefit1"]
+        d1.required_minutes = 30
+        d1.get_wanted_unclaimed_benefits.return_value = [_make_benefit("Benefit1")]
         c1.drops = [d1]
         c1.has_wanted_unclaimed_benefits.side_effect = (
             DropsCampaign.has_wanted_unclaimed_benefits.__get__(c1, DropsCampaign)
@@ -44,6 +56,7 @@ class TestWantedGamesFilter(unittest.TestCase):
         c2.can_earn_within.return_value = True
         d2 = MagicMock()
         d2.is_claimed = False
+        d2.required_minutes = 30
         d2.get_wanted_unclaimed_benefits.return_value = []
         c2.drops = [d2]
         c2.has_wanted_unclaimed_benefits.side_effect = (
@@ -56,7 +69,8 @@ class TestWantedGamesFilter(unittest.TestCase):
         c3.can_earn_within.return_value = True
         d3 = MagicMock()
         d3.is_claimed = False
-        d3.get_wanted_unclaimed_benefits.return_value = ["Benefit3"]
+        d3.required_minutes = 30
+        d3.get_wanted_unclaimed_benefits.return_value = [_make_benefit("Benefit3")]
         c3.drops = [d3]
         c3.has_wanted_unclaimed_benefits.side_effect = (
             DropsCampaign.has_wanted_unclaimed_benefits.__get__(c3, DropsCampaign)
@@ -72,7 +86,8 @@ class TestWantedGamesFilter(unittest.TestCase):
         d4 = MagicMock()
         d4.name = "Test Drop"
         d4.is_claimed = True
-        d4.get_wanted_unclaimed_benefits.return_value = ["Benefit4"]
+        d4.required_minutes = 30
+        d4.get_wanted_unclaimed_benefits.return_value = [_make_benefit("Benefit4")]
         c4.drops = [d4]
         c4.has_wanted_unclaimed_benefits.side_effect = (
             DropsCampaign.has_wanted_unclaimed_benefits.__get__(c4, DropsCampaign)
@@ -88,7 +103,8 @@ class TestWantedGamesFilter(unittest.TestCase):
         d5 = MagicMock()
         d5.name = "Test Drop"
         d5.is_claimed = False
-        d5.get_wanted_unclaimed_benefits.return_value = ["Benefit5"]
+        d5.required_minutes = 30
+        d5.get_wanted_unclaimed_benefits.return_value = [_make_benefit("Benefit5")]
         c5.drops = [d5]
         c5.has_wanted_unclaimed_benefits.side_effect = (
             DropsCampaign.has_wanted_unclaimed_benefits.__get__(c5, DropsCampaign)
@@ -116,17 +132,18 @@ def _make_campaign(game_id: int, game_name: str, linked: bool = True) -> MagicMo
     drop = MagicMock()
     drop.name = f"{game_name} Drop"
     drop.is_claimed = False
-    drop.get_wanted_unclaimed_benefits.return_value = ["Benefit"]
+    drop.required_minutes = 30
+    drop.get_wanted_unclaimed_benefits.return_value = [_make_benefit("Benefit")]
     campaign.drops = [drop]
     return campaign
 
 
 class TestIdleBehaviorFallback(unittest.TestCase):
     """
-    Regression coverage for the idle_behavior.mine_all_when_idle fallback:
-    it must trigger whenever the resulting wanted queue is empty, not merely
-    when games_to_watch/auto_watch_games happen to be empty lists (games on
-    those lists may simply have nothing earnable right now).
+    Coverage for the idle_behavior.mine_all_when_idle tier: every earnable
+    game not already on the watch list is appended to the wanted queue at
+    the lowest priority - fully integrated (channels fetched, tracked and
+    mined) rather than a display-only preview.
     """
 
     def setUp(self):
@@ -193,17 +210,45 @@ class TestIdleBehaviorFallback(unittest.TestCase):
         self.assertEqual(tree[0]["source"], "manual")
         self.assertEqual(tree[1]["source"], "idle")
 
-    def test_idle_preview_not_included_in_actual_mining_priority(self):
-        # Unlike the display tree, get_wanted_games (channel selection
-        # priority) should NOT keep tracking idle-preview games while there's
-        # still something active on the manual/auto watch list.
+    def test_idle_games_included_in_mining_priority_at_lowest_priority(self):
+        # Same as the display tree, get_wanted_games (channel selection
+        # priority) keeps tracking idle-tier games even while there's still
+        # something active on the manual/auto watch list - they just always
+        # sort behind it.
         self.settings.games_to_watch = ["Game1"]
         self.settings.idle_behavior = {"mine_all_when_idle": True}
+        inventory = [_make_campaign(2, "Game2"), _make_campaign(1, "Game1")]
+
+        wanted_games = self.stream_selector.get_wanted_games(self.settings, inventory, ["Game1"], [])
+
+        self.assertEqual([g.name for g in wanted_games], ["Game1", "Game2"])
+
+    def test_idle_games_not_included_in_mining_priority_when_disabled(self):
+        # With idle_behavior disabled, an active watch list stays the whole
+        # mining priority list - no idle games appended.
+        self.settings.games_to_watch = ["Game1"]
+        self.settings.idle_behavior = {"mine_all_when_idle": False}
         inventory = [_make_campaign(1, "Game1"), _make_campaign(2, "Game2")]
 
         wanted_games = self.stream_selector.get_wanted_games(self.settings, inventory, ["Game1"], [])
 
         self.assertEqual([g.name for g in wanted_games], ["Game1"])
+
+    def test_idle_games_ranked_behind_auto_tier(self):
+        # Full ordering: manual -> auto -> idle.
+        self.settings.games_to_watch = ["Game1"]
+        self.settings.idle_behavior = {"mine_all_when_idle": True}
+        inventory = [
+            _make_campaign(3, "Game3"),
+            _make_campaign(2, "Game2"),
+            _make_campaign(1, "Game1"),
+        ]
+
+        wanted_games = self.stream_selector.get_wanted_games(
+            self.settings, inventory, ["Game1"], ["Game2"]
+        )
+
+        self.assertEqual([g.name for g in wanted_games], ["Game1", "Game2", "Game3"])
 
 
 class TestUnlinkedAutoTrackedTree(unittest.TestCase):
@@ -408,14 +453,19 @@ class TestUnlinkedAutoTrackedTree(unittest.TestCase):
 
 
 def _make_drop(
-    drop_id: str, name: str, is_claimed: bool = False, precondition_drops: list[str] | None = None
+    drop_id: str,
+    name: str,
+    is_claimed: bool = False,
+    precondition_drops: list[str] | None = None,
+    required_minutes: int = 30,
 ) -> MagicMock:
     drop = MagicMock()
     drop.id = drop_id
     drop.name = name
     drop.is_claimed = is_claimed
+    drop.required_minutes = required_minutes
     drop.precondition_drops = precondition_drops or []
-    drop.get_wanted_unclaimed_benefits.return_value = ["Benefit"]
+    drop.get_wanted_unclaimed_benefits.return_value = [_make_benefit("Benefit")]
     return drop
 
 
@@ -628,6 +678,47 @@ class TestFavoriteTier(unittest.TestCase):
         self.assertEqual(tree[0]["source"], "favorite")
         campaign_ids = {c["id"] for c in tree[0]["campaigns"]}
         self.assertEqual(campaign_ids, {"c_fav"})
+
+
+class TestManualDropExclusion(unittest.TestCase):
+    """
+    Drops without a watch-time requirement (shown as "manual" in the
+    inventory) can't be mined by watching, so they must not appear in the
+    wanted queue - and a campaign offering only such drops must not make its
+    game wanted at all.
+    """
+
+    def setUp(self):
+        self.settings = MagicMock()
+        self.settings.games_to_watch = ["Game1"]
+        self.settings.favorite_drops = []
+        self.settings.mining_benefits = {"BADGE": True, "DIRECT_ENTITLEMENT": True}
+        self.settings.idle_behavior = {"mine_all_when_idle": False}
+        self.stream_selector = StreamSelector()
+
+    def test_manual_only_campaign_does_not_make_its_game_wanted(self):
+        campaign = _make_campaign_with_drops(
+            "c1", 1, "Game1", [_make_drop("d1", "ManualDrop", required_minutes=0)]
+        )
+
+        wanted_games = self.stream_selector.get_wanted_games(
+            self.settings, [campaign], ["Game1"], []
+        )
+
+        self.assertEqual(wanted_games, [])
+
+    def test_manual_drop_hidden_but_timed_drops_of_same_campaign_kept(self):
+        drops = [
+            _make_drop("d_manual", "ManualDrop", required_minutes=0),
+            _make_drop("d_timed", "TimedDrop"),
+        ]
+        campaign = _make_campaign_with_drops("c1", 1, "Game1", drops)
+
+        tree = self.stream_selector.get_wanted_game_tree(self.settings, [campaign], ["Game1"], [])
+
+        self.assertEqual(len(tree), 1)
+        drop_names = [d["name"] for d in tree[0]["campaigns"][0]["drops"]]
+        self.assertEqual(drop_names, ["TimedDrop"])
 
 
 if __name__ == "__main__":

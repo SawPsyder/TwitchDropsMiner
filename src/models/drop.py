@@ -170,10 +170,10 @@ class BaseDrop:
     def has_wanted_unclaimed_benefits(self, allowed_benefits: dict[str, bool]) -> bool:
         return len(self.get_wanted_unclaimed_benefits(allowed_benefits)) > 0
 
-    def get_wanted_unclaimed_benefits(self, allowed_benefits: dict[str, bool]) -> list[str]:
+    def get_wanted_unclaimed_benefits(self, allowed_benefits: dict[str, bool]) -> list[Benefit]:
         if self.is_claimed:
             return []
-        return [benefit.name for benefit in self.benefits if benefit.is_wanted(allowed_benefits)]
+        return [benefit for benefit in self.benefits if benefit.is_wanted(allowed_benefits)]
 
     async def claim(self) -> bool:
         result = await self._claim()

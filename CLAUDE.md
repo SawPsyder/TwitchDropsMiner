@@ -120,9 +120,10 @@ time (most recent first, never-played last alphabetically). The watch list is tw
 `Twitch.get_effective_watch_list()` = user's `games_to_watch` (persisted, user-ordered) followed by
 `auto_watch_games` (runtime only, never written into settings) - consumed by `StreamSelector`, the
 wanted-items tree, and channel priority. `StreamSelector` builds the actual wanted-items queue from
-that two-tier list; if it comes up empty (the watched games have nothing earnable right now) and
-`settings.idle_behavior["mine_all_when_idle"]` is enabled, it falls back to every game with an
-active campaign instead of leaving the queue empty. Each queue entry is tagged with a `source` of
+that two-tier list; if `settings.idle_behavior["mine_all_when_idle"]` is enabled, every other game
+with an active campaign is appended at the lowest priority - fully integrated (channels fetched,
+tracked, shown in the channels panel, and mined once the higher tiers have nothing watchable),
+not just a display preview. Each queue entry is tagged with a `source` of
 `"manual"`, `"auto"`, or `"idle"` (shown as a badge in the web GUI's Wanted Drop Queue). Provider
 failures are logged but never break the mining loop. New platforms subclass `LibraryProvider` and
 get registered in `LibrarySyncService._providers`.

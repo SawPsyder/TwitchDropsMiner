@@ -1,4 +1,4 @@
-import unittest
+﻿import unittest
 from unittest.mock import MagicMock
 
 from src.core.client import Twitch
@@ -55,12 +55,14 @@ class TestWantedItems(unittest.TestCase):
         d1 = MagicMock(spec=TimedDrop)
         d1.name = "Drop1"
         d1.is_claimed = False
+        d1.required_minutes = 30
         d1.get_wanted_unclaimed_benefits = TimedDrop.get_wanted_unclaimed_benefits.__get__(
             d1, TimedDrop
         )
         b1 = MagicMock(spec=Benefit)
         b1.name = "Badge1"
         b1.type = BenefitType.BADGE
+        b1.image_url = "http://benefit1.img"
         b1.is_wanted = Benefit.is_wanted.__get__(b1, Benefit)
         d1.benefits = [b1]
         c1.drops = [d1]
@@ -78,12 +80,14 @@ class TestWantedItems(unittest.TestCase):
         d2 = MagicMock(spec=TimedDrop)
         d2.name = "Drop2"
         d2.is_claimed = False
+        d2.required_minutes = 30
         d2.get_wanted_unclaimed_benefits = TimedDrop.get_wanted_unclaimed_benefits.__get__(
             d2, TimedDrop
         )
         b2 = MagicMock(spec=Benefit)
         b2.name = "Item1"
         b2.type = BenefitType.DIRECT_ENTITLEMENT
+        b2.image_url = "http://benefit2.img"
         b2.is_wanted = Benefit.is_wanted.__get__(b2, Benefit)
         d2.benefits = [b2]
         c2.drops = [d2]
@@ -101,12 +105,14 @@ class TestWantedItems(unittest.TestCase):
         d3 = MagicMock(spec=TimedDrop)
         d3.name = "Drop3"
         d3.is_claimed = False
+        d3.required_minutes = 30
         d3.get_wanted_unclaimed_benefits = TimedDrop.get_wanted_unclaimed_benefits.__get__(
             d3, TimedDrop
         )
         b3 = MagicMock(spec=Benefit)
         b3.name = "Badge2"
         b3.type = BenefitType.BADGE
+        b3.image_url = "http://benefit3.img"
         b3.is_wanted = Benefit.is_wanted.__get__(b3, Benefit)
         d3.benefits = [b3]
         c3.drops = [d3]
@@ -124,12 +130,14 @@ class TestWantedItems(unittest.TestCase):
         d4 = MagicMock(spec=TimedDrop)
         d4.name = "Drop4"
         d4.is_claimed = False
+        d4.required_minutes = 30
         d4.get_wanted_unclaimed_benefits = TimedDrop.get_wanted_unclaimed_benefits.__get__(
             d4, TimedDrop
         )
         b4 = MagicMock(spec=Benefit)
         b4.name = "Badge1"
         b4.type = BenefitType.BADGE
+        b4.image_url = "http://benefit4.img"
         b4.is_wanted = Benefit.is_wanted.__get__(b4, Benefit)
         d4.benefits = [b4]
         c4.drops = [d4]
@@ -151,7 +159,10 @@ class TestWantedItems(unittest.TestCase):
         self.assertEqual(campaigns[0]["name"], "Campaign1")
         self.assertEqual(len(campaigns[0]["drops"]), 1)
         self.assertEqual(campaigns[0]["drops"][0]["name"], "Drop1")
-        self.assertEqual(campaigns[0]["drops"][0]["benefits"], ["Badge1"])
+        self.assertEqual(
+            campaigns[0]["drops"][0]["benefits"],
+            [{"name": "Badge1", "type": "BADGE", "image_url": "http://benefit1.img"}],
+        )
 
     def test_get_wanted_tree_claimed_filtering(self):
         # Setup Settings
@@ -171,6 +182,7 @@ class TestWantedItems(unittest.TestCase):
         d1 = MagicMock(spec=TimedDrop)
         d1.name = "Drop1"
         d1.is_claimed = True
+        d1.required_minutes = 30
         b1 = MagicMock(spec=Benefit)
         b1.name = "Badge1"
         b1.type = BenefitType.BADGE
@@ -215,12 +227,14 @@ class TestUnlinkedAutoTrackedItems(unittest.TestCase):
         drop = MagicMock(spec=TimedDrop)
         drop.name = f"{game_name} Drop"
         drop.is_claimed = False
+        drop.required_minutes = 30
         drop.get_wanted_unclaimed_benefits = TimedDrop.get_wanted_unclaimed_benefits.__get__(
             drop, TimedDrop
         )
         benefit = MagicMock(spec=Benefit)
         benefit.name = "Badge1"
         benefit.type = BenefitType.BADGE
+        benefit.image_url = "http://benefit.img"
         benefit.is_wanted = Benefit.is_wanted.__get__(benefit, Benefit)
         drop.benefits = [benefit]
         campaign.drops = [drop]

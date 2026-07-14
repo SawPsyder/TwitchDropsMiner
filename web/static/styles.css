@@ -1355,7 +1355,7 @@ body.reduce-motion .progress-fill::after {
 /* Wanted Cards (Nested inside Game Group) */
 .wanted-card {
     background: var(--bg-panel);
-    overflow: hidden;
+    /* overflow must stay visible so the benefit icon tooltips aren't clipped */
     position: relative;
 }
 
@@ -1401,6 +1401,10 @@ body.reduce-motion .progress-fill::after {
 .wanted-drop-name {
     font-weight: 600;
     color: var(--text-secondary);
+}
+
+.wanted-drop-icon-wrap {
+    display: inline-flex;
 }
 
 .wanted-benefit-pill {

@@ -68,13 +68,33 @@ class StreamSelector:
                 for drop in campaign.drops:
                     if drop.is_claimed:
                         continue
+                    # drops without a watch-time requirement ("manual" in the
+                    # inventory) can't be mined by watching - don't queue them
+                    if drop.required_minutes <= 0:
+                        continue
                     if drop_filter is not None and not drop_filter(campaign, drop):
                         continue
 
                     filtered_benefits = drop.get_wanted_unclaimed_benefits(mining_benefits)
 
                     if len(filtered_benefits) > 0:
-                        wanted_drops.append({"name": drop.name, "benefits": filtered_benefits})
+                        # Same shape as the inventory manager's benefit payload,
+                        # so the web GUI can render benefit icons + tooltips.
+                        wanted_drops.append(
+                            {
+                                "name": drop.name,
+                                "benefits": [
+                                    {
+                                        "name": benefit.name,
+                                        "type": benefit.type.name,
+                                        "image_url": (
+                                            str(benefit.image_url) if benefit.image_url else None
+                                        ),
+                                    }
+                                    for benefit in filtered_benefits
+                                ],
+                            }
+                        )
 
                 if len(wanted_drops) > 0:
                     wanted_campaigns.append(
@@ -248,6 +268,21 @@ class StreamSelector:
             entry["source"] = SOURCE_IDLE
         return idle_tree
 
+    def _get_full_tree(
+        self,
+        settings: Settings,
+        campaigns: list[DropsCampaign],
+        manual_games: list[str] | None,
+        auto_games: list[str] | None,
+    ) -> list[dict]:
+        """
+        The complete wanted queue: the two-tier watch list (favorites, then
+        manual, then auto) followed by the idle_behavior tier (every other
+        earnable game) at the lowest priority.
+        """
+        primary_tree = self._get_primary_tree(settings, campaigns, manual_games, auto_games)
+        return primary_tree + self._get_idle_tree(settings, campaigns, primary_tree)
+
     def get_wanted_game_tree(
         self,
         settings: Settings,
@@ -256,14 +291,12 @@ class StreamSelector:
         auto_games: list[str] | None = None,
     ) -> list[dict]:
         """
-        The full display queue: the two-tier watch list first, followed by
-        the idle_behavior preview (every other earnable game) so the user
-        can see what will be mined automatically once the active games run
-        out - even while there's still something active to mine.
+        The display queue: same games and order as get_wanted_games, as a
+        hierarchical tree (Games -> Campaigns -> Drops -> Benefits) with
+        source tags.
         """
-        primary_tree = self._get_primary_tree(settings, campaigns, manual_games, auto_games)
-        idle_tree = self._get_idle_tree(settings, campaigns, primary_tree)
-        return [{**game, "game_obj": None} for game in primary_tree + idle_tree]
+        tree = self._get_full_tree(settings, campaigns, manual_games, auto_games)
+        return [{**game, "game_obj": None} for game in tree]
 
     def get_wanted_games(
         self,
@@ -273,13 +306,12 @@ class StreamSelector:
         auto_games: list[str] | None = None,
     ) -> list[Game]:
         """
-        The actual mining priority list: the two-tier watch list, falling
-        back to every other earnable game only when that list is completely
-        empty (unlike get_wanted_game_tree, this doesn't keep tracking the
-        idle preview games once there's something active to mine).
+        The actual mining priority list: the two-tier watch list followed by
+        the idle_behavior tier (every other earnable game) at the lowest
+        priority - idle games get their channels fetched, tracked and mined
+        like any other tier, they just always sort behind the watch list.
         """
-        primary_tree = self._get_primary_tree(settings, campaigns, manual_games, auto_games)
-        tree = primary_tree if primary_tree else self._get_idle_tree(settings, campaigns, primary_tree)
+        tree = self._get_full_tree(settings, campaigns, manual_games, auto_games)
         return [game["game_obj"] for game in tree]
 
     def get_unlinked_auto_tracked_tree(

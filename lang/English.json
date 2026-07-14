@@ -96,7 +96,7 @@
             "offline": "OFFLINE ❌",
             "no_channels": "No channels tracked yet...",
             "no_channels_for_games": "No active channels for manual or auto tracked drops.",
-            "no_channels_for_games_sub": "(Idle mode will not list channels here)",
+            "no_channels_for_games_sub": "(Idle mining channels are listed here too, when enabled)",
             "channel_count": "channel",
             "channel_count_plural": "channels",
             "viewers": "viewers"
@@ -147,7 +147,7 @@
             },
             "idle_behavior": {
                 "name": "Idle Behavior",
-                "help": "When the manual and automated tracklists are done or empty, mine drops for every active campaign instead of sitting idle."
+                "help": "Track and mine drops for every other active campaign at the lowest priority - they are only watched once the manual and automated tracklists have nothing left to mine."
             },
             "library": {
                 "name": "Automated Tracklist",

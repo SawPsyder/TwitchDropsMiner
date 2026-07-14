@@ -26,7 +26,7 @@
 Personal tweaks layered on top of upstream, built for my own setup rather than general use:
 
 - 🎮 **Game Library Sync**: Auto-watches owned games with active drop campaigns via Steam and Ubisoft libraries, so games dont have to be hand-picked.
-- 💤 **Idle Miner**: Watches channels with active drop campaigns with already connected accounts not in any other track list.
+- 💤 **Idle Miner**: Tracks and mines every remaining active drop campaign (already-linked accounts, not on any other track list) at the lowest queue priority, instead of sitting idle.
 - 🔔 **Discord Notifications**: Connect your own Discord bot to get notified about drops claimed, unlinked auto-tracked games, auth issues, stalled mining, and new campaigns - configurable per event type with a cooldown to avoid spam.
 - 🐳 **Own Docker image**: Built and published from this repo (GHCR) for my own Portainer deployment, instead of pulling upstream's image.
 
