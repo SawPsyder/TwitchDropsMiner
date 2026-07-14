@@ -1355,7 +1355,6 @@ body.reduce-motion .progress-fill::after {
 /* Wanted Cards (Nested inside Game Group) */
 .wanted-card {
     background: var(--bg-panel);
-    /* overflow must stay visible so the benefit icon tooltips aren't clipped */
     position: relative;
 }
 
@@ -1425,26 +1424,20 @@ body.reduce-motion .progress-fill::after {
 }
 
 /* Custom tooltips: styled bubble on hover instead of the native browser title tooltip.
-   Add class "tooltip-target" plus a "data-tooltip" attribute to any element. */
-.tooltip-target {
-    position: relative;
-}
-
-.tooltip-target::after,
-.tooltip-target::before {
+   Add class "tooltip-target" plus a "data-tooltip" attribute to any element. The bubble
+   itself (.global-tooltip) is a single element appended directly to <body> and positioned
+   in JS by initGlobalTooltips() in app.js - unlike a same-parent absolutely-positioned
+   pseudo-element, it isn't clipped by ancestors that use `overflow: hidden` for
+   rounded-corner clipping (e.g. .wanted-game-group, .inventory-game-group), and it's
+   clamped to stay inside the viewport instead of running off the edge of the screen. */
+.global-tooltip {
+    position: fixed;
+    top: 0;
+    left: 0;
+    z-index: 60;
     opacity: 0;
     visibility: hidden;
     pointer-events: none;
-    position: absolute;
-    left: 50%;
-    z-index: 60;
-    transition: opacity 0.12s ease, transform 0.12s ease;
-}
-
-.tooltip-target::after {
-    content: attr(data-tooltip);
-    bottom: calc(100% + 9px);
-    transform: translateX(-50%) translateY(4px);
     background: #1a1a1a;
     color: #f0f0f0;
     padding: 4px 8px;
@@ -1453,21 +1446,30 @@ body.reduce-motion .progress-fill::after {
     font-weight: 500;
     white-space: nowrap;
     box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+    transition: opacity 0.12s ease;
 }
 
-.tooltip-target::before {
+.global-tooltip.visible {
+    opacity: 1;
+    visibility: visible;
+}
+
+.global-tooltip::after {
     content: '';
-    bottom: 100%;
-    transform: translateX(-50%) translateY(4px);
+    position: absolute;
+    left: var(--tooltip-arrow-left, 50%);
+    transform: translateX(-50%);
     border: 5px solid transparent;
+}
+
+.global-tooltip:not(.tooltip-below)::after {
+    top: 100%;
     border-top-color: #1a1a1a;
 }
 
-.tooltip-target:hover::after,
-.tooltip-target:hover::before {
-    opacity: 1;
-    visibility: visible;
-    transform: translateX(-50%) translateY(0);
+.global-tooltip.tooltip-below::after {
+    bottom: 100%;
+    border-bottom-color: #1a1a1a;
 }
 
 /* Settings */

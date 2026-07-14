@@ -3359,6 +3359,8 @@ document.addEventListener('DOMContentLoaded', () => {
     // Fetch and display version information
     fetchAndDisplayVersion();
 
+    initGlobalTooltips();
+
     // Tab switching
     document.querySelectorAll('.tab-button').forEach(button => {
         button.addEventListener('click', () => {
@@ -3731,5 +3733,84 @@ function makeImageElement(src, alt, className) {
         image.style.display = 'none';
     };
     return image;
+}
+
+// ==================== Tooltips ====================
+
+// Manages a single tooltip bubble appended to <body> for every ".tooltip-target"
+// element (data-tooltip attribute holds the text). Positioned in JS rather than via a
+// same-parent CSS pseudo-element so it isn't clipped by ancestors using `overflow:
+// hidden` for rounded-corner clipping, and so it can be clamped to stay on-screen.
+function initGlobalTooltips() {
+    const tooltip = makeElement('div', { class: 'global-tooltip', role: 'tooltip' });
+    document.body.appendChild(tooltip);
+    let currentTarget = null;
+
+    function positionTooltip(target) {
+        const targetRect = target.getBoundingClientRect();
+        const gap = 9;
+        const margin = 8;
+        const arrowMargin = 10;
+
+        const tooltipRect = tooltip.getBoundingClientRect();
+        const targetCenterX = targetRect.left + targetRect.width / 2;
+
+        let left = targetCenterX - tooltipRect.width / 2;
+        left = Math.min(Math.max(left, margin), Math.max(margin, window.innerWidth - tooltipRect.width - margin));
+
+        let top = targetRect.top - tooltipRect.height - gap;
+        let below = false;
+        if (top < margin) {
+            top = targetRect.bottom + gap;
+            below = true;
+        }
+
+        const arrowLeft = Math.min(
+            Math.max(targetCenterX - left, arrowMargin),
+            Math.max(arrowMargin, tooltipRect.width - arrowMargin)
+        );
+
+        tooltip.style.left = `${left}px`;
+        tooltip.style.top = `${top}px`;
+        tooltip.style.setProperty('--tooltip-arrow-left', `${arrowLeft}px`);
+        tooltip.classList.toggle('tooltip-below', below);
+    }
+
+    function showTooltip(target) {
+        const text = target.getAttribute('data-tooltip');
+        if (!text) return;
+        currentTarget = target;
+        tooltip.textContent = text;
+        positionTooltip(target);
+        tooltip.classList.add('visible');
+    }
+
+    function hideTooltip() {
+        currentTarget = null;
+        tooltip.classList.remove('visible');
+    }
+
+    document.addEventListener('mouseover', e => {
+        const target = e.target.closest('.tooltip-target');
+        if (target) showTooltip(target);
+    });
+    document.addEventListener('mouseout', e => {
+        const target = e.target.closest('.tooltip-target');
+        if (target && target === currentTarget && !target.contains(e.relatedTarget)) hideTooltip();
+    });
+    document.addEventListener('focusin', e => {
+        const target = e.target.closest('.tooltip-target');
+        if (target) showTooltip(target);
+    });
+    document.addEventListener('focusout', e => {
+        const target = e.target.closest('.tooltip-target');
+        if (target && target === currentTarget) hideTooltip();
+    });
+    window.addEventListener('scroll', () => {
+        if (currentTarget) positionTooltip(currentTarget);
+    }, true);
+    window.addEventListener('resize', () => {
+        if (currentTarget) positionTooltip(currentTarget);
+    });
 }
 
