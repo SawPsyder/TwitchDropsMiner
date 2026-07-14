@@ -1,3 +1,34 @@
+# Release Notes - v1.7.0
+
+This release fixes badge/emote drops being re-mined on every reload, corrects the idle-mining
+queue falling back instead of layering behind your watch list, and polishes the web GUI's
+tooltips and mobile layout.
+
+### 🐛 Bug Fixes
+- **Badge/Emote Drops No Longer Re-Mined Forever**: Twitch auto-grants badge/emote drops once
+  the watchtime is registered, but doesn't reliably report them as claimed in the inventory -
+  so they kept coming back as unclaimed and getting mined from zero on every reload or restart.
+  Verified completions are now persisted locally and consulted on every inventory rebuild, so an
+  already-earned badge/emote stays marked as claimed for good.
+- **Idle-Mining Games No Longer Drop Out Once Something Else Is Active**: The "mine anything when
+  idle" fallback used to only kick in when your watch list produced *nothing* earnable at all,
+  and would stop tracking those games the moment anything from your watch list became mineable.
+  It's now a proper lowest-priority tier appended behind your manual/auto watch list, so idle
+  games stay tracked and get mined whenever the higher tiers have nothing to do - not just when
+  the whole list is empty.
+- **Manual-Claim Drops No Longer Queued**: Drops with no watch-time requirement (manual-claim
+  only) could end up listed in the Wanted Drop Queue despite being unmineable by watching; they're
+  now filtered out.
+- **Tooltip Clipping**: Tooltips are now positioned via a single shared floating element instead
+  of per-element CSS, so they no longer get clipped by rounded-corner containers using
+  `overflow: hidden`, and stay clamped on-screen near viewport edges.
+- **Mobile Layout Overflow**: Fixed several panels (Wanted Drop Queue, settings game lists, long
+  game names) overflowing or refusing to shrink on narrow/mobile viewports.
+
+### 🎨 UI Polish
+- **Benefit Icons in the Wanted Drop Queue**: The queue now shows the same benefit icons and
+  tooltips as the Inventory tab instead of plain text names.
+
 # Release Notes - v1.6.0
 
 This release fixes a bug in the favourite drops feature added in 1.5.0.
