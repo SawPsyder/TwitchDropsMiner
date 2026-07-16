@@ -49,6 +49,17 @@ TOPICS_PER_CHANNEL = 2
 MAX_TOPICS = (MAX_WEBSOCKETS * WS_TOPICS_LIMIT) - BASE_TOPICS
 MAX_CHANNELS = MAX_TOPICS // TOPICS_PER_CHANNEL
 
+# When CHANNEL_SWITCH finds nothing watchable among the currently tracked
+# channels, the loop re-fetches the directory this many times (re-discovering
+# live channels for every wanted game, so it can fall through to lower-priority
+# or idle queue entries) before giving up and going IDLE.
+CHANNEL_REFETCH_MAX_ATTEMPTS = 3
+# Backoff (seconds) before each successive re-fetch attempt. The first retry is
+# immediate because the usual cause is a tracked channel list gone stale over a
+# long watch session, which a fresh directory fetch fixes at once; later retries
+# wait longer since that means nothing is genuinely online across the whole queue.
+CHANNEL_REFETCH_BACKOFF = (0, 60, 120)
+
 # Misc
 DEFAULT_LANG = "English"
 

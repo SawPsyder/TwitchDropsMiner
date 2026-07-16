@@ -13,6 +13,8 @@ import aiohttp
 from src.api import GQLClient, HTTPClient
 from src.auth import _AuthState
 from src.config import (
+    CHANNEL_REFETCH_BACKOFF,
+    CHANNEL_REFETCH_MAX_ATTEMPTS,
     MAX_CHANNELS,
     ClientType,
     State,
@@ -83,6 +85,9 @@ class Twitch:
         self.watching_channel: AwaitableValue[Channel] = AwaitableValue()
         self._watching_task: asyncio.Task[None] | None = None
         self._watching_restart = asyncio.Event()
+        # how many times in a row CHANNEL_SWITCH has re-fetched the channel list
+        # after finding nothing watchable; reset once we start watching again
+        self._channel_refetch_attempts: int = 0
         # Manual mode tracking
         self._manual_target_channel: Channel | None = None
         self._manual_target_game: Game | None = None
@@ -165,6 +170,31 @@ class Twitch:
     def get_change_state_callable(self, state: State) -> abc.Callable[[], None]:
         """Return a callable that changes state when invoked (deferred call for GUI usage)."""
         return partial(self.change_state, state)
+
+    def _plan_channel_refetch(self) -> tuple[bool, float]:
+        """
+        Decide what to do when CHANNEL_SWITCH finds no watchable channel.
+
+        Rather than stalling in IDLE the moment the tracked channel list dries
+        up (e.g. every channel we knew about drifted offline over a long watch
+        session), we first re-fetch the directory a bounded number of times to
+        re-discover live channels for every wanted game. The priority-ordered
+        selection then naturally falls through to the next queue entry
+        (auto -> idle) that actually has an online channel.
+
+        Returns a ``(should_refetch, backoff_seconds)`` tuple. While attempts
+        remain, this increments the attempt counter and returns
+        ``(True, <backoff>)``; once exhausted it resets the counter and returns
+        ``(False, 0.0)`` so the caller falls back to IDLE.
+        """
+        if self._channel_refetch_attempts < CHANNEL_REFETCH_MAX_ATTEMPTS:
+            backoff = CHANNEL_REFETCH_BACKOFF[
+                min(self._channel_refetch_attempts, len(CHANNEL_REFETCH_BACKOFF) - 1)
+            ]
+            self._channel_refetch_attempts += 1
+            return True, float(backoff)
+        self._channel_refetch_attempts = 0
+        return False, 0.0
 
     def close(self) -> None:
         """
@@ -504,6 +534,7 @@ class Twitch:
 
                 if new_watching is not None:
                     # Switch to new channel
+                    self._channel_refetch_attempts = 0
                     self.watch(new_watching)
                     # Display the active drop for the new channel
                     if (active_campaign := self.get_active_campaign(new_watching)) is not None and (
@@ -513,6 +544,7 @@ class Twitch:
                     self._state_change.clear()
                 elif watching_channel is not None and self.can_watch(watching_channel):
                     # Continue watching current channel
+                    self._channel_refetch_attempts = 0
                     if self.is_manual_mode() and self._manual_target_game:
                         status_text = f"🎯 Manual Mode: Watching {watching_channel.name} for {self._manual_target_game.name}"
                     else:
@@ -522,12 +554,39 @@ class Twitch:
                     self.gui.status.update(status_text)
                     self._state_change.clear()
                 else:
-                    # No channels available to watch
-                    self.print(_.t["status"]["no_channel"])
-                    await self.notification_service.notify_mining_stalled(
-                        _.t["status"]["no_channel"]
-                    )
-                    self.change_state(State.IDLE)
+                    # Nothing among the currently-tracked channels is watchable. Before
+                    # stalling in IDLE, re-fetch the directory a bounded number of times
+                    # so we re-discover live channels for the wanted games and fall
+                    # through to the next queue entry (auto -> idle) that has one online.
+                    should_refetch, backoff = self._plan_channel_refetch()
+                    if should_refetch:
+                        logger.info(
+                            "No watchable channel among tracked channels; re-fetching the "
+                            "channel list (attempt %d/%d, after %ds)",
+                            self._channel_refetch_attempts,
+                            CHANNEL_REFETCH_MAX_ATTEMPTS,
+                            int(backoff),
+                        )
+                        self.gui.status.update(_.t["gui"]["status"]["gathering"])
+                        if backoff:
+                            await asyncio.sleep(backoff)
+                        # Only force the re-fetch if nothing else changed state during the
+                        # backoff (e.g. a maintenance reload or drop claim) - otherwise let
+                        # that queued transition take precedence.
+                        if self._state is State.CHANNEL_SWITCH:
+                            # full re-fetch: drop every tracked channel and rebuild from
+                            # the directory (CHANNELS_CLEANUP honours full_cleanup)
+                            full_cleanup = True
+                            self.change_state(State.CHANNELS_CLEANUP)
+                    else:
+                        # Re-fetching kept coming up empty: genuinely nothing online across
+                        # the whole queue right now. Fall back to IDLE; the periodic
+                        # maintenance reload will resume mining.
+                        self.print(_.t["status"]["no_channel"])
+                        await self.notification_service.notify_mining_stalled(
+                            _.t["status"]["no_channel"]
+                        )
+                        self.change_state(State.IDLE)
             elif self._state is State.EXIT:
                 self.gui.status.update(_.t["gui"]["status"]["exiting"])
                 # we've been requested to exit the application

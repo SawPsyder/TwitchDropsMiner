@@ -1,3 +1,18 @@
+# Release Notes - v1.7.1
+
+This release fixes the miner stalling instead of moving on to the rest of the queue when the
+game it's currently mining runs out of live channels.
+
+### 🐛 Bug Fixes
+- **No More Stalling When a Game Runs Out of Channels**: When the game being mined lost all its
+  live channels (e.g. every streamer went offline late at night during a long watch session), the
+  miner would give up and sit idle - printing *"No available channels to watch…"* - until the next
+  periodic inventory reload (up to ~30 minutes later), even though other games (including
+  auto-tracked and idle-mining ones) still had drops to earn. Channel selection now re-fetches the
+  directory a few times, with backoff, before giving up: it re-discovers live channels for every
+  wanted game and falls through to the next queue entry that actually has an online channel, so
+  mining continues automatically instead of stalling.
+
 # Release Notes - v1.7.0
 
 This release fixes badge/emote drops being re-mined on every reload, corrects the idle-mining
