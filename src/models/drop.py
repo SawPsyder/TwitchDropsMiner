@@ -64,6 +64,18 @@ class BaseDrop:
         ):
             self.is_claimed = True
         if (
+            # Badge drops are auto-granted into Twitch's chat-badge system and never appear
+            # in the inventory (no gameEventDrops entry, no isClaimed self edge). If every
+            # benefit is a badge the account already owns, the drop was earned - regardless
+            # of whether *this* install mined it. Matched by title (benefit.name == badge
+            # title); both sides come back in English via Accept-Language: en-US.
+            not self.is_claimed
+            and self.is_badge_or_emote
+            and (owned_badges := self._twitch.owned_badge_titles)
+            and all(benefit.name in owned_badges for benefit in self.benefits)
+        ):
+            self.is_claimed = True
+        if (
             # Badges/emotes are auto-granted and Twitch doesn't reliably report them as
             # claimed in the inventory, so fall back to our own persisted record of
             # verified completions to avoid re-mining an already-earned drop.

@@ -43,6 +43,18 @@ GQL_OPERATIONS: dict[str, GQLOperation] = {
             "channelLogin": ...,  # channel login
         },
     ),
+    # returns the account's owned/available chat badges (includes earned drop badges).
+    # Badge drops are auto-granted into the chat-badge system and do NOT appear in the
+    # inventory's gameEventDrops ledger, so this is the only reliable ownership signal.
+    "ChatSettings_Badges": GQLOperation(
+        "ChatSettings_Badges",
+        "f30c0381c916b81bad77302c3cf986094364fa2dfc63a598804cb5ee3743225c",
+        variables={
+            # required by the operation, but currentUser.availableBadges is account-global
+            # and does not depend on it - any valid login/id works
+            "channelLogin": ...,
+        },
+    ),
     # returns all in-progress campaigns
     "Inventory": GQLOperation(
         "Inventory",

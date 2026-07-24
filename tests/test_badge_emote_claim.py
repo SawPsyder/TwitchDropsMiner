@@ -29,11 +29,16 @@ def _benefit_edge(index: int, distribution_type: str) -> dict:
     }
 
 
-def _mock_twitch(completed_drop_ids: set[str] | None = None) -> MagicMock:
+def _mock_twitch(
+    completed_drop_ids: set[str] | None = None,
+    owned_badge_titles: set[str] | None = None,
+) -> MagicMock:
     """A Twitch stub whose claimed-drops store reports the given IDs as completed."""
     completed = completed_drop_ids or set()
     twitch = MagicMock()
     twitch.claimed_drops.is_completed.side_effect = lambda drop_id: drop_id in completed
+    # owned_badge_titles must be a real set (the drop model does `name in owned_badges`)
+    twitch.owned_badge_titles = owned_badge_titles or set()
     # claim() awaits this - MagicMock children are not awaitable, so make it async
     twitch.notification_service.notify_drop_received = AsyncMock()
     return twitch
@@ -200,6 +205,50 @@ class TestClaimedDropsStore(unittest.TestCase):
         store = ClaimedDropsStore(self.path)
         self.assertTrue(store.is_completed("good"))
         self.assertFalse(store.is_completed("bad"))
+
+
+class TestOwnedBadgeDetection(unittest.TestCase):
+    """A badge the account already owns (per ChatSettings_Badges) is claimed on rebuild."""
+
+    def test_owned_badge_marked_claimed(self):
+        # benefit names are "Benefit 0", "Benefit 1", ... (see _benefit_edge)
+        twitch = _mock_twitch(owned_badge_titles={"Benefit 0"})
+        drop = _make_drop(["BADGE"], twitch=twitch)
+        self.assertTrue(drop.is_claimed)
+        # a claimed timed drop reports full watchtime
+        self.assertEqual(drop.real_current_minutes, drop.required_minutes)
+
+    def test_unowned_badge_stays_minable(self):
+        # the EWC "Ultraviolet" case: same campaign, badge simply not on the account
+        twitch = _mock_twitch(owned_badge_titles={"Some Other Badge"})
+        drop = _make_drop(["BADGE"], twitch=twitch)
+        self.assertFalse(drop.is_claimed)
+
+    def test_detects_without_local_store(self):
+        # portability: a fresh install (empty claimed-drops store) still recognises the badge
+        twitch = _mock_twitch(completed_drop_ids=set(), owned_badge_titles={"Benefit 0"})
+        drop = _make_drop(["BADGE"], twitch=twitch)
+        self.assertTrue(drop.is_claimed)
+
+    def test_multi_benefit_requires_all_owned(self):
+        # a drop granting two badges is only "owned" if both are present
+        partial = _mock_twitch(owned_badge_titles={"Benefit 0"})
+        self.assertFalse(_make_drop(["BADGE", "BADGE"], twitch=partial).is_claimed)
+        both = _mock_twitch(owned_badge_titles={"Benefit 0", "Benefit 1"})
+        self.assertTrue(_make_drop(["BADGE", "BADGE"], twitch=both).is_claimed)
+
+    def test_direct_entitlement_ignores_owned_badges(self):
+        # only badge/emote drops use the owned-badges signal; a real entitlement must not be
+        # marked claimed just because a badge with the same title happens to be owned
+        twitch = _mock_twitch(owned_badge_titles={"Benefit 0"})
+        drop = _make_drop(["DIRECT_ENTITLEMENT"], twitch=twitch)
+        self.assertFalse(drop.is_claimed)
+
+    def test_empty_owned_set_falls_back_to_store(self):
+        # no owned-badge data + store knows it -> still claimed (no regression)
+        twitch = _mock_twitch(completed_drop_ids={"drop-1"}, owned_badge_titles=set())
+        drop = _make_drop(["BADGE"], twitch=twitch)
+        self.assertTrue(drop.is_claimed)
 
 
 class TestClaimedDropsPersistenceIntegration(unittest.TestCase):

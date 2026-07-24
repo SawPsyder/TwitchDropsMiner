@@ -10,7 +10,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from dateutil.parser import isoparse
 
@@ -87,6 +87,46 @@ class InventoryService:
 
         return GQLClient.merge_data(campaign_ids, fetched_data)
 
+    async def fetch_owned_badges(self) -> set[str]:
+        """
+        Fetch the titles of chat badges the account already owns.
+
+        ``currentUser.availableBadges`` is the account-wide list of owned chat badges,
+        including drop badges auto-granted by watchtime. Unlike item entitlements, badge
+        benefits never appear in the inventory's ``gameEventDrops`` ledger nor get an
+        ``isClaimed`` self edge, so this is the only reliable way to know a badge drop was
+        already earned (e.g. on a previous install or a different machine).
+
+        The join key back to a campaign's badge benefit is the localized title
+        (``benefit.name == badge.title``); requests already send ``Accept-Language: en-US``,
+        so both sides are in English.
+
+        Failures are swallowed - badge-ownership detection is a best-effort optimisation and
+        must never break the mining loop.
+
+        Returns:
+            Set of owned badge titles (empty if the request fails).
+        """
+        try:
+            auth_state = await self._twitch.get_auth()
+            response = cast(
+                "JsonType",
+                await self._twitch.gql_request(
+                    GQL_OPERATIONS["ChatSettings_Badges"].with_variables(
+                        {"channelLogin": str(auth_state.user_id)}
+                    )
+                ),
+            )
+            current_user: JsonType = (response.get("data") or {}).get("currentUser") or {}
+            badges: list[JsonType] = current_user.get("availableBadges") or []
+            return {title for badge in badges if (title := badge.get("title"))}
+        except Exception:
+            logger.warning(
+                "Failed to fetch owned badges; badge-ownership check skipped this cycle",
+                exc_info=True,
+            )
+            return set()
+
     async def fetch_inventory(self) -> None:
         """
         Fetch the complete inventory including campaigns and drops.
@@ -111,6 +151,10 @@ class InventoryService:
         claimed_benefits: dict[str, datetime] = {
             b["id"]: isoparse(b["lastAwardedAt"]) for b in inventory["gameEventDrops"]
         }
+
+        # refresh the account's owned chat badges, so already-earned badge drops (which are
+        # absent from gameEventDrops) are recognised as claimed when the drops are rebuilt
+        self._twitch.owned_badge_titles = await self.fetch_owned_badges()
 
         inventory_data: dict[str, JsonType] = {c["id"]: c for c in ongoing_campaigns}
 

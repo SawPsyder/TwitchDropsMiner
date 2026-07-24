@@ -70,6 +70,10 @@ class Twitch:
         # persisted record of badge/emote drops verified as completed, so they stay
         # claimed across inventory reloads/restarts instead of being re-mined every time
         self.claimed_drops: ClaimedDropsStore = ClaimedDropsStore()
+        # account-wide owned chat badge titles (incl. earned drop badges), refreshed each
+        # inventory fetch - lets us detect already-earned BADGE drops (which are absent from
+        # the inventory's gameEventDrops ledger) even on a fresh install / different machine
+        self.owned_badge_titles: set[str] = set()
         self._campaigns: dict[str, DropsCampaign] = {}
         self._mnt_triggers: deque[datetime] = deque()
         # Client type and auth
