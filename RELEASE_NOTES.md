@@ -1,3 +1,28 @@
+# Release Notes - v1.8.0
+
+This release adds selectable date/time formats, fixes the built-in update checker, and lands a
+large internal hardening pass - a cleaner mining state machine, tighter service boundaries, and a
+real test gate in CI. No change to how drops are mined.
+
+### ✨ New Features
+- **Selectable Date & Time Formats**: The web GUI now lets you pick how dates and times are shown
+  instead of assuming a single locale format.
+
+### 🐛 Bug Fixes
+- **Update Checker Actually Detects New Releases**: The "update available" check compared version
+  numbers as plain text (so it would have missed everything past a 9→10 rollover) and queried the
+  wrong upstream repository. It now compares versions numerically against this fork's own releases.
+- **Login Form Accessibility**: The username, password and 2FA fields now carry proper labels and
+  autocomplete hints, so screen readers and password managers handle them correctly.
+
+### 🔧 Under the Hood
+- **Cleaner Mining Loop**: The core state machine was decomposed from one giant method into focused
+  per-state steps, and background services no longer reach into the client's internal state - making
+  the mining loop easier to reason about and safer to change, with identical behaviour.
+- **CI Now Runs the Tests**: Continuous integration previously only linted; it now runs the full
+  unit-test suite on every change. A flaky watch-event test was fixed, and the codebase was
+  modernised and brought fully clean under type-checking.
+
 # Release Notes - v1.7.1
 
 This release fixes the miner stalling instead of moving on to the rest of the queue when the
