@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable, Mapping
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from enum import Enum
 from pathlib import Path
 from typing import Any, TypeVar, cast
@@ -22,7 +22,7 @@ _MISSING = object()
 SERIALIZE_ENV: dict[str, Callable[[Any], object]] = {
     "set": set,
     "URL": URL,
-    "datetime": lambda d: datetime.fromtimestamp(d, timezone.utc),
+    "datetime": lambda d: datetime.fromtimestamp(d, UTC),
 }
 
 
@@ -33,7 +33,7 @@ def json_minify(data: JsonType | list[JsonType]) -> str:
 
 def isonow() -> str:
     """Return the current UTC time in Twitch's expected ISO-8601 format."""
-    return datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+    return datetime.now(UTC).isoformat(timespec="milliseconds").replace("+00:00", "Z")
 
 
 def _serialize(obj: Any) -> Any:
@@ -48,7 +48,7 @@ def _serialize(obj: Any) -> Any:
     if isinstance(obj, datetime):
         if obj.tzinfo is None:
             # assume naive objects are UTC
-            obj = obj.replace(tzinfo=timezone.utc)
+            obj = obj.replace(tzinfo=UTC)
         d = obj.timestamp()
     elif isinstance(obj, set):
         d = list(obj)

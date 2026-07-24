@@ -31,3 +31,28 @@ def chunk(to_chunk: abc.Iterable[_T], chunk_length: int) -> abc.Generator[list[_
 def deduplicate(iterable: abc.Iterable[_T]) -> list[_T]:
     """Remove duplicates from an iterable while preserving order."""
     return list(OrderedDict.fromkeys(iterable).keys())
+
+
+def parse_version(version: str) -> tuple[int, ...]:
+    """
+    Parse a dotted version string into a tuple of integers for ordered comparison.
+
+    Leading ``v`` and any pre-release/build suffix (e.g. ``1.7.1-rc2``) are
+    stripped; only the leading numeric dotted segment is compared. This avoids
+    the string-comparison bug where ``"10.0" < "9.0"`` because ``"1" < "9"``.
+    Unparseable segments stop parsing, so ``"1.7.1-rc2"`` -> ``(1, 7, 1)``.
+    """
+    cleaned = version.strip().lstrip("vV")
+    parts: list[int] = []
+    for segment in cleaned.split("."):
+        # take the leading run of digits in the segment (handles "1rc2" -> 1)
+        digits = ""
+        for ch in segment:
+            if ch.isdigit():
+                digits += ch
+            else:
+                break
+        if not digits:
+            break
+        parts.append(int(digits))
+    return tuple(parts)

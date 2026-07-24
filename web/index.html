@@ -54,9 +54,16 @@
                     <h2>Login</h2>
                     <div id="login-status" class="login-status"></div>
                     <div id="login-form" style="display: none;">
-                        <input type="text" id="username" placeholder="Username" />
-                        <input type="password" id="password" placeholder="Password" />
-                        <input type="text" id="2fa-token" placeholder="2FA Token (optional)" />
+                        <label class="sr-only" for="username">Username</label>
+                        <input type="text" id="username" name="username" placeholder="Username"
+                            autocomplete="username" aria-label="Username" />
+                        <label class="sr-only" for="password">Password</label>
+                        <input type="password" id="password" name="password" placeholder="Password"
+                            autocomplete="current-password" aria-label="Password" />
+                        <label class="sr-only" for="2fa-token">2FA Token (optional)</label>
+                        <input type="text" id="2fa-token" name="2fa-token"
+                            placeholder="2FA Token (optional)" autocomplete="one-time-code"
+                            inputmode="numeric" aria-label="2FA Token (optional)" />
                         <button id="login-button">Login</button>
                     </div>
                     <div id="oauth-code-display" style="display: none;">

@@ -16,7 +16,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Iterable
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, cast
 
 import aiohttp
@@ -124,7 +124,7 @@ class LibrarySyncService:
             return results
 
         async with self._sync_lock:
-            now = datetime.now(timezone.utc)
+            now = datetime.now(UTC)
             timeout = aiohttp.ClientTimeout(total=self.REQUEST_TIMEOUT)
             async with aiohttp.ClientSession(timeout=timeout) as session:
                 for provider in self._providers:
@@ -265,7 +265,7 @@ class LibrarySyncService:
                 seen.add(normalized)
                 auto_games.append(game_name)
 
-        recent_cutoff = datetime.now(timezone.utc) - self.RECENTLY_PLAYED_WINDOW
+        recent_cutoff = datetime.now(UTC) - self.RECENTLY_PLAYED_WINDOW
         recent_cutoff_ts = recent_cutoff.timestamp()
 
         def sort_key(name: str) -> tuple[int, float, str]:

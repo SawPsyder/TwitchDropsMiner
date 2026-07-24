@@ -593,9 +593,12 @@ class TestLibrarySyncServiceSync(unittest.IsolatedAsyncioTestCase):
 class TestSettingsManagerLibrarySync(unittest.IsolatedAsyncioTestCase):
     def make_manager(self, library_sync=None):
         from src.config.settings import Settings
+        from src.web.managers.broadcaster import WebSocketBroadcaster
         from src.web.managers.settings import SettingsManager
 
-        mock_broadcaster = AsyncMock()
+        # spec so the sync emit_soon() stays a plain MagicMock (a bare AsyncMock
+        # would make it return an un-awaited coroutine and leak a warning)
+        mock_broadcaster = MagicMock(spec=WebSocketBroadcaster)
         mock_settings = MagicMock(spec=Settings)
         mock_settings.library_sync = (
             library_sync if library_sync is not None else make_library_settings(enabled=False)

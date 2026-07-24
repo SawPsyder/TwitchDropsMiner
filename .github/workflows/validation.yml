@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
 
 env:
-  PYTHON_VERSION: '>=3.10'
+  PYTHON_VERSION: '3.12'
 
 jobs:
   lint:
@@ -32,7 +32,9 @@ jobs:
 
       - name: Run Ruff linter
         run: |
-          ruff check --fix src/
+          # No --fix in CI: auto-repairing fixable lints would let a PR go green
+          # while leaving the offending source unchanged on the branch.
+          ruff check src/
           echo "✅ Ruff checks passed!"
 
       - name: Run Mypy type checker
@@ -40,6 +42,29 @@ jobs:
           mypy src/
           echo "✅ Mypy checks passed!"
         continue-on-error: true  # Don't fail CI on mypy errors yet
+
+  test:
+    name: Unit Tests (pytest)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{env.PYTHON_VERSION}}
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install .[dev]
+
+      - name: Run tests with coverage
+        run: |
+          coverage run -m pytest tests/
+          coverage report
 
   validate:
     name: Validate Language Files
@@ -75,7 +100,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-    needs: [lint, validate]
+    needs: [lint, validate, test]
 
     steps:
       - name: Checkout code

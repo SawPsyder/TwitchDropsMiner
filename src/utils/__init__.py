@@ -35,6 +35,7 @@ from .string_utils import (
     chunk,
     create_nonce,
     deduplicate,
+    parse_version,
 )
 
 
@@ -46,6 +47,7 @@ __all__ = [
     "create_nonce",
     "chunk",
     "deduplicate",
+    "parse_version",
     # JSON utilities
     "json_minify",
     "isonow",

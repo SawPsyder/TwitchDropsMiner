@@ -23,7 +23,7 @@ sort at the alphabetical tail of the auto watch list.
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
 from src.config import UBISOFT_AUTH_PATH
@@ -151,7 +151,7 @@ class UbisoftProvider(LibraryProvider):
             bool(self._auth.get("ticket"))
             and self._auth.get("source_ticket") == self.remember_me_ticket
             and isinstance(expires_at, datetime)
-            and datetime.now(timezone.utc) < expires_at
+            and datetime.now(UTC) < expires_at
         )
 
     def _invalidate_session(self) -> None:
@@ -221,7 +221,7 @@ class UbisoftProvider(LibraryProvider):
         ticket, session_id, new_rm_ticket = self.parse_login_response(data)
         self._auth["ticket"] = ticket
         self._auth["session_id"] = session_id
-        self._auth["expires_at"] = datetime.now(timezone.utc) + TICKET_LIFETIME
+        self._auth["expires_at"] = datetime.now(UTC) + TICKET_LIFETIME
         if new_rm_ticket:
             self._auth["remember_me_ticket"] = new_rm_ticket
         self._save_auth()

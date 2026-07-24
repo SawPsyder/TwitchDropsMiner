@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from typing import TYPE_CHECKING, Any
 
@@ -32,7 +31,7 @@ class InventoryManager:
     def clear(self):
         """Clear all campaigns from inventory."""
         self._campaigns.clear()
-        asyncio.create_task(self._broadcaster.emit("inventory_clear", {}))
+        self._broadcaster.emit_soon("inventory_clear", {})
 
     async def add_campaign(self, campaign: DropsCampaign):
         """Add a campaign to the inventory display.
@@ -113,10 +112,8 @@ class InventoryManager:
                             "can_claim": drop.can_claim,
                         }
                     )
-                    asyncio.create_task(
-                        self._broadcaster.emit(
-                            "drop_update", {"campaign_id": campaign_id, "drop": drop_data}
-                        )
+                    self._broadcaster.emit_soon(
+                        "drop_update", {"campaign_id": campaign_id, "drop": drop_data}
                     )
                     break
 

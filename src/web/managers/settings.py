@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
@@ -180,7 +179,7 @@ class SettingsManager:
             )
 
         self._settings.save()
-        asyncio.create_task(self._broadcaster.emit("settings_updated", self.get_settings()))
+        self._broadcaster.emit_soon("settings_updated", self.get_settings())
 
         if should_trigger_update and self._on_change:
             self._on_change()
@@ -279,7 +278,7 @@ class SettingsManager:
     def _set_language(self, language: str):
         _.set_language(language)
         # Notify clients that translations need to be reloaded
-        asyncio.create_task(self._broadcaster.emit("language_changed", {"language": language}))
+        self._broadcaster.emit_soon("language_changed", {"language": language})
 
     def set_favorite_drop(self, campaign_id: str, drop_id: str, favorite: bool) -> None:
         """Mark (or unmark) a single drop as favorite, prioritizing its game in the
@@ -302,7 +301,7 @@ class SettingsManager:
         self._settings.favorite_drops = sorted(favorites)
         self._log_change(f"Setting changed: favorite {'added' if favorite else 'removed'} for drop {key}")
         self._settings.save()
-        asyncio.create_task(self._broadcaster.emit("settings_updated", self.get_settings()))
+        self._broadcaster.emit_soon("settings_updated", self.get_settings())
         if self._on_change:
             self._on_change()
 
@@ -315,4 +314,4 @@ class SettingsManager:
         # Store and broadcast available games for settings panel
         game_names = sorted([g.name for g in games])
         self._available_games = game_names
-        asyncio.create_task(self._broadcaster.emit("games_available", {"games": game_names}))
+        self._broadcaster.emit_soon("games_available", {"games": game_names})

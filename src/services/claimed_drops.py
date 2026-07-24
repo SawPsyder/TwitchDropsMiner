@@ -16,7 +16,7 @@ rebuilt, keeping them marked as claimed across reloads and restarts.
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import cast
 
@@ -65,7 +65,7 @@ class ClaimedDropsStore:
 
     def _prune(self) -> bool:
         """Drop entries for campaigns that ended long ago. Returns True if any were removed."""
-        cutoff = datetime.now(timezone.utc) - _RETENTION
+        cutoff = datetime.now(UTC) - _RETENTION
         stale = [drop_id for drop_id, expiry in self._expiry.items() if expiry < cutoff]
         for drop_id in stale:
             del self._expiry[drop_id]

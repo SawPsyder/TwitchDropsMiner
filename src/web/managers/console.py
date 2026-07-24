@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 from collections import deque
 from datetime import datetime
 from typing import TYPE_CHECKING
@@ -38,7 +37,7 @@ class ConsoleOutputManager:
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         line = f"[{timestamp}] | {message}"
         self._buffer.append(line)
-        asyncio.create_task(self._broadcaster.emit("console_output", {"message": line}))
+        self._broadcaster.emit_soon("console_output", {"message": line})
         logger.info(message)
 
     def get_history(self) -> list[str]:

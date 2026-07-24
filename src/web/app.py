@@ -30,8 +30,12 @@ app = FastAPI(title="Twitch Drops Miner Web", version="1.0.0")
 # Add CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # In production, specify exact origins
-    allow_credentials=True,
+    # The web GUI is served same-origin by this very server, so it never needs
+    # cross-origin credentials. Wildcard origins with allow_credentials=True is
+    # invalid per the CORS spec (browsers reject it), so credentials stay off and
+    # the wildcard remains valid for read-only cross-origin API tooling.
+    allow_origins=["*"],
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -261,7 +265,11 @@ async def verify_proxy(request: ProxyVerifyRequest):
         # Test connection to Twitch
         async with (
             aiohttp.ClientSession() as session,
-            session.get("https://www.twitch.tv", proxy=proxy_url, timeout=10) as response,
+            session.get(
+                "https://www.twitch.tv",
+                proxy=proxy_url,
+                timeout=aiohttp.ClientTimeout(total=10),
+            ) as response,
         ):
             # Just checking if we can connect and get a response
             if response.status < 500:
@@ -285,6 +293,7 @@ async def get_version():
     """Get current application version and check for updates"""
     import aiohttp
 
+    from src.utils import parse_version
     from src.version import __version__
 
     current_version = __version__
@@ -297,7 +306,8 @@ async def get_version():
         async with (
             aiohttp.ClientSession() as session,
             session.get(
-                "https://api.github.com/repos/rangermix/TwitchDropsMiner/releases/latest", timeout=5
+                "https://api.github.com/repos/SawPsyder/TwitchDropsMiner/releases/latest",
+                timeout=aiohttp.ClientTimeout(total=5),
             ) as response,
         ):
             if response.status == 200:
@@ -305,8 +315,11 @@ async def get_version():
                 latest_version = data.get("tag_name", "").lstrip("v")
                 download_url = data.get("html_url")
 
-                # Compare versions (simple string comparison works for semantic versioning)
-                if latest_version and latest_version > current_version:
+                # Compare as numeric version tuples - a plain string compare gets
+                # "10.0" < "9.0" wrong (and breaks at every multi-digit rollover).
+                if latest_version and parse_version(latest_version) > parse_version(
+                    current_version
+                ):
                     update_available = True
     except Exception as e:
         logger.warning(f"Failed to check for updates: {str(e)}")
@@ -315,7 +328,7 @@ async def get_version():
         "current_version": current_version,
         "latest_version": latest_version,
         "update_available": update_available,
-        "download_url": download_url or "https://github.com/rangermix/TwitchDropsMiner/releases",
+        "download_url": download_url or "https://github.com/SawPsyder/TwitchDropsMiner/releases",
     }
 
 

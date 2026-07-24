@@ -1,8 +1,9 @@
 import unittest
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import MagicMock
 
 from src.config.settings import Settings
 from src.web.app import SettingsUpdate
+from src.web.managers.broadcaster import WebSocketBroadcaster
 from src.web.managers.settings import SettingsManager
 
 
@@ -19,7 +20,7 @@ class TestSettingsAPI(unittest.IsolatedAsyncioTestCase):
 
     async def test_settings_manager_networking(self):
         # Mock dependencies
-        mock_broadcaster = AsyncMock()
+        mock_broadcaster = MagicMock(spec=WebSocketBroadcaster)
         mock_settings = MagicMock(spec=Settings)
         # Initialize mock attributes with default values for comparison
         mock_settings.inventory_filters = {}
@@ -56,7 +57,7 @@ class TestSettingsAPI(unittest.IsolatedAsyncioTestCase):
         mock_callback.assert_called_once()
 
     async def test_set_favorite_drop_toggle(self):
-        mock_broadcaster = AsyncMock()
+        mock_broadcaster = MagicMock(spec=WebSocketBroadcaster)
         mock_settings = MagicMock(spec=Settings)
         mock_settings.favorite_drops = []
         mock_console = MagicMock()
@@ -83,7 +84,7 @@ class TestSettingsAPI(unittest.IsolatedAsyncioTestCase):
         mock_callback.assert_called_once()
 
     async def test_animations_setting_validation(self):
-        mock_broadcaster = AsyncMock()
+        mock_broadcaster = MagicMock(spec=WebSocketBroadcaster)
         mock_settings = MagicMock(spec=Settings)
         mock_settings.animations = "auto"
         mock_console = MagicMock()
@@ -104,7 +105,7 @@ class TestSettingsAPI(unittest.IsolatedAsyncioTestCase):
         mock_console.print.assert_called_with("Ignoring unknown animations mode: 'bogus'")
 
     async def test_notifications_update_does_not_trigger_restart(self):
-        mock_broadcaster = AsyncMock()
+        mock_broadcaster = MagicMock(spec=WebSocketBroadcaster)
         mock_settings = MagicMock(spec=Settings)
         mock_settings.notifications = {
             "enabled": False,
@@ -158,7 +159,7 @@ class TestSettingsAPI(unittest.IsolatedAsyncioTestCase):
         )
 
     async def test_notifications_token_change_clears_guild_and_channel(self):
-        mock_broadcaster = AsyncMock()
+        mock_broadcaster = MagicMock(spec=WebSocketBroadcaster)
         mock_settings = MagicMock(spec=Settings)
         mock_settings.notifications = {
             "enabled": True,
@@ -200,7 +201,7 @@ class TestSettingsAPI(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(mock_settings.notifications["discord"]["channel_id"], "")
 
     async def test_dark_mode_setting_validation(self):
-        mock_broadcaster = AsyncMock()
+        mock_broadcaster = MagicMock(spec=WebSocketBroadcaster)
         mock_settings = MagicMock(spec=Settings)
         mock_settings.dark_mode = "auto"
         mock_console = MagicMock()
@@ -221,7 +222,7 @@ class TestSettingsAPI(unittest.IsolatedAsyncioTestCase):
         mock_console.print.assert_called_with("Ignoring unknown dark_mode mode: 'bogus'")
 
     async def test_date_format_setting_validation(self):
-        mock_broadcaster = AsyncMock()
+        mock_broadcaster = MagicMock(spec=WebSocketBroadcaster)
         mock_settings = MagicMock(spec=Settings)
         mock_settings.date_format = "auto"
         mock_console = MagicMock()
@@ -242,7 +243,7 @@ class TestSettingsAPI(unittest.IsolatedAsyncioTestCase):
         mock_console.print.assert_called_with("Ignoring unknown date_format: 'bogus'")
 
     async def test_time_format_setting_validation(self):
-        mock_broadcaster = AsyncMock()
+        mock_broadcaster = MagicMock(spec=WebSocketBroadcaster)
         mock_settings = MagicMock(spec=Settings)
         mock_settings.time_format = "auto"
         mock_console = MagicMock()

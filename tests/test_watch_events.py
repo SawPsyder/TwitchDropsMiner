@@ -69,9 +69,21 @@ class TestSpadeWatchEvents(unittest.IsolatedAsyncioTestCase):
         result = await channel.send_watch()
 
         self.assertTrue(result)
-        twitch.request.assert_called_once_with(
-            "POST", "https://beacon.twitch.tv/track", data=channel._stream._spade_payload
-        )
+        # Assert on what was ACTUALLY sent rather than recomputing _spade_payload:
+        # that property regenerates client_time via isonow() on every access, so a
+        # byte-for-byte compare races the millisecond boundary and flakes.
+        self.assertEqual(twitch.request.call_count, 1)
+        args, kwargs = twitch.request.call_args
+        self.assertEqual(args, ("POST", "https://beacon.twitch.tv/track"))
+        events = _decode_spade_events(kwargs["data"])
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0]["event"], "minute-watched")
+        properties = events[0]["properties"]
+        self.assertEqual(properties["broadcast_id"], "24680")
+        self.assertEqual(properties["channel_id"], "67890")
+        self.assertEqual(properties["channel"], "example_channel")
+        self.assertEqual(properties["user_id"], 12345)
+        self.assertRegex(properties["client_time"], r"^\d{4}-\d{2}-\d{2}T.*Z$")
 
     async def test_send_watch_returns_false_without_stream(self):
         twitch = MagicMock()

@@ -195,7 +195,7 @@ class MessageHandlerService:
             return
 
         drop_id: str = message["data"]["drop_id"]
-        drop: TimedDrop | None = self._twitch._drops.get(drop_id)
+        drop: TimedDrop | None = self._twitch.get_drop(drop_id)
         watching_channel: Channel | None = self._twitch.watching_channel.get_with_default(None)
 
         if msg_type == "drop-claim":

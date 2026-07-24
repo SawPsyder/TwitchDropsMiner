@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from datetime import UTC
 from typing import TYPE_CHECKING, cast
 
 import aiohttp
@@ -99,11 +100,11 @@ class _AuthState:
         }
         while True:
             try:
-                from datetime import datetime, timedelta, timezone
+                from datetime import datetime, timedelta
 
                 from src.exceptions import RequestInvalid
 
-                now = datetime.now(timezone.utc)
+                now = datetime.now(UTC)
                 async with self._twitch.request(
                     "POST", "https://id.twitch.tv/oauth2/device", headers=headers, data=payload
                 ) as response:

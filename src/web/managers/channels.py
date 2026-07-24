@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 from typing import TYPE_CHECKING, Any
 
 
@@ -46,9 +45,7 @@ class ChannelListManager:
             "watching": channel.id == self._watching_id,
         }
         self._channels[channel.id] = channel_data
-        asyncio.create_task(
-            self._broadcaster.emit("channel_update" if not add else "channel_add", channel_data)
-        )
+        self._broadcaster.emit_soon("channel_update" if not add else "channel_add", channel_data)
 
     def remove(self, channel: Channel):
         """Remove a channel from the display list.
@@ -58,12 +55,12 @@ class ChannelListManager:
         """
         if channel.id in self._channels:
             del self._channels[channel.id]
-            asyncio.create_task(self._broadcaster.emit("channel_remove", {"id": channel.id}))
+            self._broadcaster.emit_soon("channel_remove", {"id": channel.id})
 
     def clear(self):
         """Clear all channels from the display list."""
         self._channels.clear()
-        asyncio.create_task(self._broadcaster.emit("channels_clear", {}))
+        self._broadcaster.emit_soon("channels_clear", {})
 
     def set_watching(self, channel: Channel):
         """Mark a channel as currently being watched.
@@ -72,12 +69,12 @@ class ChannelListManager:
             channel: The channel now being watched
         """
         self._watching_id = channel.id
-        asyncio.create_task(self._broadcaster.emit("channel_watching", {"id": channel.id}))
+        self._broadcaster.emit_soon("channel_watching", {"id": channel.id})
 
     def clear_watching(self):
         """Clear the currently watched channel indicator."""
         self._watching_id = None
-        asyncio.create_task(self._broadcaster.emit("channel_watching_clear", {}))
+        self._broadcaster.emit_soon("channel_watching_clear", {})
 
     def get_selection(self) -> Channel | None:
         """Get user's channel selection from web GUI.
@@ -135,9 +132,7 @@ class ChannelListManager:
         self._channels = new_channels
 
         # Emit batch update event
-        asyncio.create_task(
-            self._broadcaster.emit("channels_batch_update", {"channels": channels_data})
-        )
+        self._broadcaster.emit_soon("channels_batch_update", {"channels": channels_data})
 
     def get_channels(self) -> list[dict[str, Any]]:
         """Get all currently tracked channels.

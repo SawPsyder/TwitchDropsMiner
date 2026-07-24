@@ -3,8 +3,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TypedDict
 
-from yarl import URL
-
 from src.config import DEFAULT_LANG, SETTINGS_PATH
 from src.utils import json_load, json_save
 
@@ -167,13 +165,9 @@ class Settings:
         self.load()
 
     def load(self):
-        # TODO: remvoe customized serde in the future
         settings = json_load(SETTINGS_PATH, default_settings, merge=True)
         for key, value in settings.items():
-            if value is URL:
-                setattr(self, key, str(value))
-            else:
-                setattr(self, key, value)
+            setattr(self, key, value)
 
     def save(self) -> None:
         json_save(SETTINGS_PATH, vars(self), sort=True)

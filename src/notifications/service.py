@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Iterable
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
@@ -82,12 +82,12 @@ class NotificationService:
             sent_at = datetime.fromisoformat(raw)
         except ValueError:
             return False
-        return datetime.now(timezone.utc) - sent_at < self.cooldown
+        return datetime.now(UTC) - sent_at < self.cooldown
 
     def _mark_sent(self, provider_name: str, event_type: str) -> None:
         last_sent = cast("dict[str, Any]", self._state.setdefault("last_sent", {}))
         last_sent[self._cooldown_key(provider_name, event_type)] = (
-            datetime.now(timezone.utc).isoformat()
+            datetime.now(UTC).isoformat()
         )
 
     async def notify(self, event_type: str, title: str, description: str) -> None:

@@ -126,8 +126,8 @@ class WatchService:
 
         if update_status:
             # Check if manual mode is active for custom status message
-            if self._twitch.is_manual_mode() and self._twitch._manual_target_game:
-                status_text = f"🎯 Manual Mode: Watching {channel.name} for {self._twitch._manual_target_game.name}"
+            if self._twitch.is_manual_mode() and self._twitch.manual_target_game:
+                status_text = f"🎯 Manual Mode: Watching {channel.name} for {self._twitch.manual_target_game.name}"
             else:
                 status_text = _.t["status"]["watching"].format(channel=channel.name)
             self._twitch.print(status_text)
@@ -222,7 +222,7 @@ class WatchService:
                     drop_data = None
 
                 if drop_data is not None:
-                    gql_drop: TimedDrop | None = self._twitch._drops.get(drop_data["dropID"])
+                    gql_drop: TimedDrop | None = self._twitch.get_drop(drop_data["dropID"])
                     if gql_drop is not None and gql_drop.can_earn(channel):
                         gql_drop.update_minutes(drop_data["currentMinutesWatched"])
                         drop_text: str = (
@@ -235,7 +235,7 @@ class WatchService:
                 # Solution 2: If GQL fails, figure out which campaign we're most likely mining
                 # right now, and then bump up the minutes on it's drops
                 if not handled:
-                    active_campaign = self._twitch._inventory_service.get_active_campaign(channel)
+                    active_campaign = self._twitch.get_active_campaign(channel)
                     if active_campaign is not None:
                         active_campaign.bump_minutes(channel)
                         # NOTE: This usually gets overwritten below

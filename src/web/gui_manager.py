@@ -54,8 +54,6 @@ class WebGUIManager:
         self.channels = ChannelListManager(self._broadcaster, self)
         self.inv = InventoryManager(self._broadcaster, ImageCache(self))
         self.login = LoginFormManager(self._broadcaster, self)
-        self.inv = InventoryManager(self._broadcaster, ImageCache(self))
-        self.login = LoginFormManager(self._broadcaster, self)
 
         # Callback to trigger game update when relevant settings change
         on_settings_change = self._twitch.get_change_state_callable(State.GAMES_UPDATE)
@@ -120,7 +118,7 @@ class WebGUIManager:
         Args:
             sound: Whether to play notification sound
         """
-        asyncio.create_task(self._broadcaster.emit("attention_required", {"sound": sound}))
+        self._broadcaster.emit_soon("attention_required", {"sound": sound})
 
     def select_channel(self, channel_id: int):
         """Select a channel (called by webapp when user clicks channel).
@@ -146,7 +144,7 @@ class WebGUIManager:
         Args:
             dark_mode: "auto" | "on" | "off" dark theme preference
         """
-        asyncio.create_task(self._broadcaster.emit("theme_change", {"dark_mode": dark_mode}))
+        self._broadcaster.emit_soon("theme_change", {"dark_mode": dark_mode})
 
     def broadcast_manual_mode_change(self, manual_mode_info: dict):
         """Broadcast manual mode status change to connected clients.
@@ -154,7 +152,7 @@ class WebGUIManager:
         Args:
             manual_mode_info: Manual mode status from get_manual_mode_info()
         """
-        asyncio.create_task(self._broadcaster.emit("manual_mode_update", manual_mode_info))
+        self._broadcaster.emit_soon("manual_mode_update", manual_mode_info)
 
     def get_wanted_game_tree(self) -> list[dict]:
         return self._stream_selector.get_wanted_game_tree(
@@ -175,16 +173,16 @@ class WebGUIManager:
     def broadcast_wanted_items(self):
         """Broadcast the list of wanted items to connected clients."""
         tree = self.get_wanted_game_tree()
-        asyncio.create_task(self._broadcaster.emit("wanted_items_update", tree))
+        self._broadcaster.emit_soon("wanted_items_update", tree)
         unlinked_tree = self.get_unlinked_auto_tracked_items()
-        asyncio.create_task(self._broadcaster.emit("unlinked_auto_items_update", unlinked_tree))
+        self._broadcaster.emit_soon("unlinked_auto_items_update", unlinked_tree)
         asyncio.create_task(
             self._twitch.notification_service.track_unlinked_tracked_games(unlinked_tree)
         )
 
     def broadcast_auto_watch(self, games: list[str]):
         """Broadcast the auto watch list (library-detected games) to connected clients."""
-        asyncio.create_task(self._broadcaster.emit("auto_watch_update", {"games": list(games)}))
+        self._broadcaster.emit_soon("auto_watch_update", {"games": list(games)})
 
     def notify_drop_collected(self, game_name: str, benefits: list[str]):
         """Notify connected clients that a drop was successfully claimed, for a toast popup.
@@ -193,9 +191,7 @@ class WebGUIManager:
             game_name: Name of the game the drop belongs to
             benefits: Names of the benefits included in the claimed drop
         """
-        asyncio.create_task(
-            self._broadcaster.emit("drop_collected", {"game": game_name, "benefits": benefits})
-        )
+        self._broadcaster.emit_soon("drop_collected", {"game": game_name, "benefits": benefits})
 
 
 # Type aliases for backwards compatibility with code that imports from gui

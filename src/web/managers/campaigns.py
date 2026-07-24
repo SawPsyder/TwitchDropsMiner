@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 from time import monotonic
 from typing import TYPE_CHECKING
 
@@ -44,28 +43,26 @@ class CampaignProgressManager:
         self._remaining_seconds = remaining_seconds
         self._last_update_at = monotonic()
         if drop:
-            asyncio.create_task(
-                self._broadcaster.emit(
-                    "drop_progress",
-                    {
-                        "drop_id": drop.id,
-                        "drop_name": drop.name,
-                        "campaign_name": drop.campaign.name,
-                        "campaign_id": drop.campaign.id,
-                        "game_name": drop.campaign.game.name,
-                        "current_minutes": drop.current_minutes,
-                        "required_minutes": drop.required_minutes,
-                        "progress": drop.progress,
-                        "remaining_seconds": remaining_seconds,
-                        "is_estimated": drop.extra_current_minutes > 0,
-                    },
-                )
+            self._broadcaster.emit_soon(
+                "drop_progress",
+                {
+                    "drop_id": drop.id,
+                    "drop_name": drop.name,
+                    "campaign_name": drop.campaign.name,
+                    "campaign_id": drop.campaign.id,
+                    "game_name": drop.campaign.game.name,
+                    "current_minutes": drop.current_minutes,
+                    "required_minutes": drop.required_minutes,
+                    "progress": drop.progress,
+                    "remaining_seconds": remaining_seconds,
+                    "is_estimated": drop.extra_current_minutes > 0,
+                },
             )
 
     def stop_timer(self):
         """Stop the progress timer and clear the current drop."""
         self._current_drop = None
-        asyncio.create_task(self._broadcaster.emit("drop_progress_stop", {}))
+        self._broadcaster.emit_soon("drop_progress_stop", {})
 
     def minute_almost_done(self) -> bool:
         """Check if progress hasn't been updated recently and may need a nudge.

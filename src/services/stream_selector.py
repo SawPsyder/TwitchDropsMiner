@@ -1,5 +1,5 @@
 from collections.abc import Callable
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from src.config.settings import Settings
 from src.library_sync.service import LibrarySyncService
@@ -45,7 +45,7 @@ class StreamSelector:
         wanted_games = []
         games_to_watch = games_order if games_order is not None else settings.games_to_watch
         mining_benefits = settings.mining_benefits
-        next_hour = datetime.now(timezone.utc) + timedelta(hours=1)
+        next_hour = datetime.now(UTC) + timedelta(hours=1)
         is_campaign_wanted = campaign_filter or (lambda campaign: campaign.can_earn_within(next_hour))
 
         for game_name in games_to_watch:

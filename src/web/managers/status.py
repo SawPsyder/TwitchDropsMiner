@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 from typing import TYPE_CHECKING, Any
 
 
@@ -24,7 +23,7 @@ class StatusManager:
     def update(self, status: str):
         """Update the current status and broadcast to all clients."""
         self._current_status = status
-        asyncio.create_task(self._broadcaster.emit("status_update", {"status": status}))
+        self._broadcaster.emit_soon("status_update", {"status": status})
 
     def get(self) -> str:
         """Get the current status message."""
@@ -62,15 +61,33 @@ class WebsocketStatusManager:
             self._websockets[idx]["topics"] = topics
 
         # Broadcast the update
-        asyncio.create_task(
-            self._broadcaster.emit(
-                "websocket_status",
-                {
-                    "idx": idx,
-                    "status": self._websockets[idx]["status"],
-                    "topics": self._websockets[idx]["topics"],
-                    "total_websockets": len(self._websockets),
-                    "total_topics": sum(ws["topics"] for ws in self._websockets.values()),
-                },
-            )
+        self._broadcast_status(idx)
+
+    def remove(self, idx: int) -> None:
+        """Stop tracking a websocket shard and refresh the aggregate totals.
+
+        Called when a shard is torn down (e.g. topic count dropped and the pool
+        released the socket) so the tracked websocket/topic totals stay accurate.
+        """
+        if self._websockets.pop(idx, None) is None:
+            return
+        self._broadcaster.emit_soon(
+            "websocket_removed",
+            {
+                "idx": idx,
+                "total_websockets": len(self._websockets),
+                "total_topics": sum(ws["topics"] for ws in self._websockets.values()),
+            },
+        )
+
+    def _broadcast_status(self, idx: int) -> None:
+        self._broadcaster.emit_soon(
+            "websocket_status",
+            {
+                "idx": idx,
+                "status": self._websockets[idx]["status"],
+                "topics": self._websockets[idx]["topics"],
+                "total_websockets": len(self._websockets),
+                "total_topics": sum(ws["topics"] for ws in self._websockets.values()),
+            },
         )

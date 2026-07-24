@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from functools import cached_property
 from itertools import chain
 from typing import TYPE_CHECKING
@@ -67,15 +67,15 @@ class DropsCampaign:
 
     @property
     def active(self) -> bool:
-        return self._valid and self.starts_at <= datetime.now(timezone.utc) < self.ends_at
+        return self._valid and self.starts_at <= datetime.now(UTC) < self.ends_at
 
     @property
     def upcoming(self) -> bool:
-        return self._valid and datetime.now(timezone.utc) < self.starts_at
+        return self._valid and datetime.now(UTC) < self.starts_at
 
     @property
     def expired(self) -> bool:
-        return not self._valid or self.ends_at <= datetime.now(timezone.utc)
+        return not self._valid or self.ends_at <= datetime.now(UTC)
 
     @property
     def total_drops(self) -> int:
@@ -178,7 +178,7 @@ class DropsCampaign:
         return (
             self.eligible
             and self._valid
-            and self.ends_at > datetime.now(timezone.utc)
+            and self.ends_at > datetime.now(UTC)
             and self.starts_at < stamp
             and any(drop._can_earn_within(stamp) for drop in self.drops)
         )
@@ -190,8 +190,11 @@ class DropsCampaign:
         """
         # NOTE: Use a temporary list to ensure all drops are bumped before checking
         if any(drop._bump_minutes(channel) for drop in self.drops):
-            # Executes if any drop's extra_current_minutes reach MAX_ESTIMATED_MINUTES
-            # TODO: Figure out a better way to handle this case
+            # Executes if any drop's extra_current_minutes reach MAX_ESTIMATED_MINUTES.
+            # NOTE: this is a safety valve - when our local estimate has drifted far
+            # enough from Twitch's own count (no websocket progress arriving), we force
+            # a channel switch so a re-fetch can resync progress rather than mining a
+            # channel that may no longer be crediting us.
             logger.warning(
                 f'At least one of the drops in campaign "{self.name}({self.game.name})" '
                 "has reached the maximum extra minutes limit!"

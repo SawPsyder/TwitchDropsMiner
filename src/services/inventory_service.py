@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, cast
 
 from dateutil.parser import isoparse
@@ -200,20 +200,15 @@ class InventoryService:
         campaigns.sort(key=lambda c: c.upcoming and c.starts_at or c.ends_at)
         campaigns.sort(key=lambda c: c.eligible, reverse=True)
 
-        self._twitch._drops.clear()
-        self._twitch.gui.inv.clear()
-        self._twitch.inventory.clear()
-        self._twitch._mnt_triggers.clear()
+        self._twitch.reset_inventory_state()
         switch_triggers: set[datetime] = set()
-        next_hour = datetime.now(timezone.utc) + timedelta(hours=1)
+        next_hour = datetime.now(UTC) + timedelta(hours=1)
 
         # add the campaigns to the internal inventory
         for campaign in campaigns:
-            self._twitch._drops.update({drop.id: drop for drop in campaign.drops})
+            self._twitch.register_campaign(campaign)
             if campaign.can_earn_within(next_hour):
                 switch_triggers.update(campaign.time_triggers)
-            self._twitch.inventory.append(campaign)
-            self._twitch._campaigns[campaign.id] = campaign
 
         # concurrently add the campaigns into the GUI
         # NOTE: this fetches pictures from the CDN, so might be slow without a cache
@@ -234,9 +229,7 @@ class InventoryService:
                     )
                 )
                 # this is needed here explicitly, because cache reads from disk don't raise this
-                from src.config import State
-
-                if self._twitch._state == State.EXIT:
+                if self._twitch.is_exiting():
                     raise ExitRequest()
         except Exception:
             # asyncio.as_completed doesn't cancel tasks on errors
@@ -244,19 +237,10 @@ class InventoryService:
                 task.cancel()
             raise
 
-        self._twitch._mnt_triggers.extend(sorted(switch_triggers))
-
-        # trim out all triggers that we're already past
-        now = datetime.now(timezone.utc)
-        while self._twitch._mnt_triggers and self._twitch._mnt_triggers[0] <= now:
-            self._twitch._mnt_triggers.popleft()
+        self._twitch.set_maintenance_triggers(switch_triggers)
 
         # NOTE: maintenance task is restarted at the end of each inventory fetch
-        if self._twitch._mnt_task is not None and not self._twitch._mnt_task.done():
-            self._twitch._mnt_task.cancel()
-        self._twitch._mnt_task = asyncio.create_task(
-            self._twitch._maintenance_service.run_maintenance_task()
-        )
+        self._twitch.restart_maintenance_task()
 
     def get_active_campaign(self, channel: Channel | None = None) -> DropsCampaign | None:
         """
