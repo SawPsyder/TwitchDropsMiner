@@ -212,10 +212,24 @@ class GUISettingsGeneral(TypedDict):
     name: str
 
 
+class GUISettingsDateFormat(TypedDict):
+    name: str
+    auto: str
+
+
+# functional syntax: "24h"/"12h" are not valid Python identifiers
+GUISettingsTimeFormat = TypedDict(
+    "GUISettingsTimeFormat",
+    {"name": str, "auto": str, "24h": str, "12h": str},
+)
+
+
 class GUISettingsAppearance(TypedDict):
     name: str
     dark_mode: GUISettingsDarkMode
     animations: GUISettingsAnimations
+    date_format: GUISettingsDateFormat
+    time_format: GUISettingsTimeFormat
 
 
 class GUISettingsProxy(TypedDict):

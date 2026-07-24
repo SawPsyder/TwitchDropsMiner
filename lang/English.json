@@ -118,6 +118,16 @@
                     "auto": "Auto",
                     "on": "On",
                     "off": "Off"
+                },
+                "date_format": {
+                    "name": "Date Format",
+                    "auto": "Auto (system)"
+                },
+                "time_format": {
+                    "name": "Time Format",
+                    "auto": "Auto",
+                    "24h": "24-hour",
+                    "12h": "12-hour"
                 }
             },
             "mining_benefits": "Mining Benefits",

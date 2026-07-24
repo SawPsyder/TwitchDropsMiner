@@ -20,6 +20,11 @@ logger = logging.getLogger("TwitchDrops")
 # regardless of that preference (see web/static/app.js and styles.css)
 AUTO_ON_OFF_MODES = ("auto", "on", "off")
 
+# allowed values for the date/time appearance settings (see web/static/app.js
+# DATE_FORMATS / TIME_FORMATS - "auto" defers to the browser/OS locale)
+DATE_FORMATS = ("auto", "iso", "dmy_dot", "dmy_slash", "mdy_slash", "ymd_slash")
+TIME_FORMATS = ("auto", "24h", "12h")
+
 
 if TYPE_CHECKING:
     from src.config.settings import Settings
@@ -95,6 +100,16 @@ class SettingsManager:
             self._log_change(f"Ignoring unknown animations mode: {animations!r}")
             animations = None
         should_trigger_update |= self.check_and_update_setting("animations", animations)
+        date_format = settings_data.get("date_format")
+        if date_format is not None and date_format not in DATE_FORMATS:
+            self._log_change(f"Ignoring unknown date_format: {date_format!r}")
+            date_format = None
+        should_trigger_update |= self.check_and_update_setting("date_format", date_format)
+        time_format = settings_data.get("time_format")
+        if time_format is not None and time_format not in TIME_FORMATS:
+            self._log_change(f"Ignoring unknown time_format: {time_format!r}")
+            time_format = None
+        should_trigger_update |= self.check_and_update_setting("time_format", time_format)
         if settings_data.get("idle_behavior") is not None:
             should_trigger_update |= self.check_and_update_setting(
                 "idle_behavior",

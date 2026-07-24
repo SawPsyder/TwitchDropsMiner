@@ -220,6 +220,53 @@ class TestSettingsAPI(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(mock_settings.dark_mode, "on")
         mock_console.print.assert_called_with("Ignoring unknown dark_mode mode: 'bogus'")
 
+    async def test_date_format_setting_validation(self):
+        mock_broadcaster = AsyncMock()
+        mock_settings = MagicMock(spec=Settings)
+        mock_settings.date_format = "auto"
+        mock_console = MagicMock()
+        mock_callback = MagicMock()
+
+        manager = SettingsManager(
+            mock_broadcaster, mock_settings, mock_console, on_change=mock_callback
+        )
+
+        # Valid value is applied and does not require a mining-loop restart
+        manager.update_settings({"date_format": "dmy_dot"})
+        self.assertEqual(mock_settings.date_format, "dmy_dot")
+        mock_callback.assert_not_called()
+
+        # Invalid value is ignored, current setting is left untouched
+        manager.update_settings({"date_format": "bogus"})
+        self.assertEqual(mock_settings.date_format, "dmy_dot")
+        mock_console.print.assert_called_with("Ignoring unknown date_format: 'bogus'")
+
+    async def test_time_format_setting_validation(self):
+        mock_broadcaster = AsyncMock()
+        mock_settings = MagicMock(spec=Settings)
+        mock_settings.time_format = "auto"
+        mock_console = MagicMock()
+        mock_callback = MagicMock()
+
+        manager = SettingsManager(
+            mock_broadcaster, mock_settings, mock_console, on_change=mock_callback
+        )
+
+        # Valid value is applied and does not require a mining-loop restart
+        manager.update_settings({"time_format": "24h"})
+        self.assertEqual(mock_settings.time_format, "24h")
+        mock_callback.assert_not_called()
+
+        # Invalid value is ignored, current setting is left untouched
+        manager.update_settings({"time_format": "bogus"})
+        self.assertEqual(mock_settings.time_format, "24h")
+        mock_console.print.assert_called_with("Ignoring unknown time_format: 'bogus'")
+
+    def test_settings_update_model_accepts_datetime_formats(self):
+        model = SettingsUpdate(date_format="iso", time_format="12h")
+        self.assertEqual(model.date_format, "iso")
+        self.assertEqual(model.time_format, "12h")
+
 
 if __name__ == "__main__":
     unittest.main()

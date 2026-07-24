@@ -251,6 +251,36 @@
                             <label for="animations-off" id="animations-off-label">Off</label>
                         </div>
                     </div>
+                    <div class="library-block">
+                        <h3 id="date-format-header">Date Format</h3>
+                        <div class="custom-select" id="date-format" data-value="auto">
+                            <button type="button" class="custom-select-trigger" aria-haspopup="listbox"
+                                aria-expanded="false">
+                                <span class="custom-select-value"></span>
+                                <span class="custom-select-arrow" aria-hidden="true"></span>
+                            </button>
+                            <ul class="custom-select-options" role="listbox" tabindex="-1">
+                                <li class="custom-select-option" role="option" data-value="auto"
+                                    id="date-format-auto-option">Auto (system)</li>
+                                <li class="custom-select-option" role="option" data-value="iso">2026-12-31</li>
+                                <li class="custom-select-option" role="option" data-value="dmy_dot">31.12.2026</li>
+                                <li class="custom-select-option" role="option" data-value="dmy_slash">31/12/2026</li>
+                                <li class="custom-select-option" role="option" data-value="mdy_slash">12/31/2026</li>
+                                <li class="custom-select-option" role="option" data-value="ymd_slash">2026/12/31</li>
+                            </ul>
+                        </div>
+                    </div>
+                    <div class="library-block">
+                        <h3 id="time-format-header">Time Format</h3>
+                        <div class="segmented-control" id="time-format-control" role="radiogroup">
+                            <input type="radio" name="time-format-mode" id="time-format-auto" value="auto" checked>
+                            <label for="time-format-auto" id="time-format-auto-label">Auto</label>
+                            <input type="radio" name="time-format-mode" id="time-format-24h" value="24h">
+                            <label for="time-format-24h" id="time-format-24h-label">24-hour</label>
+                            <input type="radio" name="time-format-mode" id="time-format-12h" value="12h">
+                            <label for="time-format-12h" id="time-format-12h-label">12-hour</label>
+                        </div>
+                    </div>
                 </section>
 
                 <section class="settings-section settings-section-half settings-benefits">

@@ -97,6 +97,199 @@ osDarkModeQuery.addEventListener('change', () => {
 });
 applyDarkMode('auto');
 
+// ==================== Date / Time Formatting ====================
+// User-selectable appearance of dates/times shown in the UI (Settings > Appearance).
+// "auto" defers to the browser/OS locale; the explicit formats render deterministically
+// regardless of locale so users can pick e.g. 31.12.2026 over 12/31/2026.
+
+const DATE_FORMATS = ['auto', 'iso', 'dmy_dot', 'dmy_slash', 'mdy_slash', 'ymd_slash'];
+const TIME_FORMATS = ['auto', '24h', '12h'];
+
+function pad2(n) {
+    return String(n).padStart(2, '0');
+}
+
+function formatDatePart(date, fmt) {
+    const y = date.getFullYear();
+    const m = pad2(date.getMonth() + 1);
+    const d = pad2(date.getDate());
+    switch (fmt) {
+        case 'iso': return `${y}-${m}-${d}`;
+        case 'dmy_dot': return `${d}.${m}.${y}`;
+        case 'dmy_slash': return `${d}/${m}/${y}`;
+        case 'mdy_slash': return `${m}/${d}/${y}`;
+        case 'ymd_slash': return `${y}/${m}/${d}`;
+        default: return date.toLocaleDateString();
+    }
+}
+
+function formatTimePart(date, fmt) {
+    if (fmt === '24h') {
+        return `${pad2(date.getHours())}:${pad2(date.getMinutes())}`;
+    }
+    if (fmt === '12h') {
+        let h = date.getHours();
+        const ampm = h >= 12 ? 'PM' : 'AM';
+        h %= 12;
+        if (h === 0) h = 12;
+        return `${h}:${pad2(date.getMinutes())} ${ampm}`;
+    }
+    return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+}
+
+// Format a date/time value (Date | ISO string | epoch-ms number) using the user's
+// configured appearance. Returns '' for missing/invalid input so callers can drop it.
+function formatDateTime(value, { includeTime = true } = {}) {
+    if (value === null || value === undefined || value === '') return '';
+    const date = value instanceof Date ? value : new Date(value);
+    if (isNaN(date.getTime())) return '';
+    const dateFmt = (state.settings && state.settings.date_format) || 'auto';
+    const timeFmt = (state.settings && state.settings.time_format) || 'auto';
+    const datePart = formatDatePart(date, dateFmt);
+    if (!includeTime) return datePart;
+    return `${datePart} ${formatTimePart(date, timeFmt)}`;
+}
+
+// Reusable custom dropdown that replaces a native <select>, so its appearance is
+// fully themeable. Enhances a .custom-select root (see index.html), keeps the current
+// value in root.dataset.value, and dispatches a bubbling "change" event on selection
+// so callers can wire it exactly like a native <select>.
+class CustomSelect {
+    constructor(root) {
+        this.root = root;
+        this.trigger = root.querySelector('.custom-select-trigger');
+        this.valueLabel = root.querySelector('.custom-select-value');
+        this.list = root.querySelector('.custom-select-options');
+        this.options = Array.from(root.querySelectorAll('.custom-select-option'));
+        this.activeIndex = -1;
+        this._onDocPointerDown = this._onDocPointerDown.bind(this);
+
+        this.options.forEach((option, index) => {
+            option.addEventListener('click', () => {
+                this.setValue(option.dataset.value, true);
+                this.close();
+                this.trigger.focus();
+            });
+            option.addEventListener('mousemove', () => this._setActive(index));
+        });
+        this.trigger.addEventListener('click', () => this.toggle());
+        this.trigger.addEventListener('keydown', (e) => this._onTriggerKeydown(e));
+
+        // Initialise the displayed label from the root's data-value (or first option).
+        const initial = root.dataset.value || this.options[0]?.dataset.value || '';
+        this.setValue(initial, false);
+    }
+
+    getValue() {
+        return this.root.dataset.value || '';
+    }
+
+    setValue(value, fire) {
+        const option = this.options.find(o => o.dataset.value === value) || this.options[0];
+        if (!option) return;
+        this.root.dataset.value = option.dataset.value;
+        if (this.valueLabel) this.valueLabel.textContent = option.textContent;
+        this.options.forEach(o => o.setAttribute('aria-selected', String(o === option)));
+        if (fire) this.root.dispatchEvent(new CustomEvent('change', { bubbles: true }));
+    }
+
+    // Re-read the selected option's text into the trigger (after translations change it).
+    syncLabel() {
+        const option = this.options.find(o => o.dataset.value === this.getValue());
+        if (option && this.valueLabel) this.valueLabel.textContent = option.textContent;
+    }
+
+    toggle() {
+        this.root.classList.contains('open') ? this.close() : this.open();
+    }
+
+    open() {
+        this.root.classList.add('open');
+        this.trigger.setAttribute('aria-expanded', 'true');
+        const selected = this.options.findIndex(o => o.dataset.value === this.getValue());
+        this._setActive(selected >= 0 ? selected : 0);
+        document.addEventListener('pointerdown', this._onDocPointerDown, true);
+    }
+
+    close() {
+        this.root.classList.remove('open');
+        this.trigger.setAttribute('aria-expanded', 'false');
+        this._setActive(-1);
+        document.removeEventListener('pointerdown', this._onDocPointerDown, true);
+    }
+
+    _setActive(index) {
+        this.options.forEach((o, i) => o.classList.toggle('active', i === index));
+        this.activeIndex = index;
+        if (index >= 0) this.options[index].scrollIntoView({ block: 'nearest' });
+    }
+
+    _onDocPointerDown(e) {
+        if (!this.root.contains(e.target)) this.close();
+    }
+
+    _onTriggerKeydown(e) {
+        const isOpen = this.root.classList.contains('open');
+        switch (e.key) {
+            case 'ArrowDown':
+                e.preventDefault();
+                if (!isOpen) { this.open(); break; }
+                this._setActive(Math.min(this.activeIndex + 1, this.options.length - 1));
+                break;
+            case 'ArrowUp':
+                e.preventDefault();
+                if (!isOpen) { this.open(); break; }
+                this._setActive(Math.max(this.activeIndex - 1, 0));
+                break;
+            case 'Home':
+                if (isOpen) { e.preventDefault(); this._setActive(0); }
+                break;
+            case 'End':
+                if (isOpen) { e.preventDefault(); this._setActive(this.options.length - 1); }
+                break;
+            case 'Enter':
+            case ' ':
+                e.preventDefault();
+                if (!isOpen) { this.open(); break; }
+                if (this.activeIndex >= 0) {
+                    this.setValue(this.options[this.activeIndex].dataset.value, true);
+                }
+                this.close();
+                break;
+            case 'Escape':
+                if (isOpen) { e.preventDefault(); this.close(); }
+                break;
+            case 'Tab':
+                this.close();
+                break;
+        }
+    }
+}
+
+// Instance backing the date-format dropdown; created during init.
+let dateFormatSelect = null;
+
+function getDateFormatFromUI() {
+    const value = dateFormatSelect?.getValue();
+    return DATE_FORMATS.includes(value) ? value : 'auto';
+}
+
+function setDateFormatUI(value) {
+    dateFormatSelect?.setValue(DATE_FORMATS.includes(value) ? value : 'auto', false);
+}
+
+function getTimeFormatFromUI() {
+    if (document.getElementById('time-format-24h')?.checked) return '24h';
+    if (document.getElementById('time-format-12h')?.checked) return '12h';
+    return 'auto';
+}
+
+function setTimeFormatUI(value) {
+    const mode = TIME_FORMATS.includes(value) ? value : 'auto';
+    const radio = document.getElementById(`time-format-${mode}`);
+    if (radio) radio.checked = true;
+}
+
 // ==================== Value Sliders ====================
 // Keeps the decorative fill/label of a .value-slider (Connection Quality,
 // Minimum Refresh Interval) in sync with its underlying <input type="range">.
@@ -1181,8 +1374,8 @@ function buildInventoryTree(campaigns, filters) {
 }
 
 function formatCampaignDateRange(campaign, t) {
-    const start = campaign.starts_at ? new Date(campaign.starts_at).toLocaleString() : null;
-    const end = campaign.ends_at ? new Date(campaign.ends_at).toLocaleString() : null;
+    const start = campaign.starts_at ? formatDateTime(campaign.starts_at) : null;
+    const end = campaign.ends_at ? formatDateTime(campaign.ends_at) : null;
     if (start && end) return `${start} – ${end}`;
     if (start) return (t.gui?.inventory?.starts || 'Starts: {time}').replace('{time}', start);
     if (end) return (t.gui?.inventory?.ends || 'Ends: {time}').replace('{time}', end);
@@ -1493,6 +1686,8 @@ function updateSettingsUI(settings) {
     state.settings = settings;
     setDarkModeUI(settings.dark_mode);
     setAnimationsModeUI(settings.animations);
+    setDateFormatUI(settings.date_format);
+    setTimeFormatUI(settings.time_format);
     const connectionQualityInput = document.getElementById('connection-quality');
     connectionQualityInput.value = settings.connection_quality || 1;
     updateSliderVisual(connectionQualityInput);
@@ -2030,7 +2225,7 @@ function toggleLibraryListGame(gameName, listed) {
 function formatLastPlayed(timestamp) {
     if (!timestamp) return '';
     try {
-        return new Date(timestamp * 1000).toLocaleDateString();
+        return formatDateTime(new Date(timestamp * 1000), { includeTime: false });
     } catch (e) {
         return '';
     }
@@ -2156,7 +2351,7 @@ function updateProviderStatusLines(status) {
         const parts = [`${provider.game_count} ${library.owned_games || 'owned games'}`];
         if (provider.last_sync) {
             const lastSyncLabel = library.last_sync || 'Last sync:';
-            parts.push(`${lastSyncLabel} ${new Date(provider.last_sync).toLocaleString()}`);
+            parts.push(`${lastSyncLabel} ${formatDateTime(provider.last_sync)}`);
         } else {
             parts.push(library.never_synced || 'Never synced');
         }
@@ -2646,6 +2841,8 @@ async function saveSettings() {
     const settings = {
         dark_mode: getDarkModeFromUI(),
         animations: getAnimationsModeFromUI(),
+        date_format: getDateFormatFromUI(),
+        time_format: getTimeFormatFromUI(),
         // the dropdown is empty until languages are fetched - never send ""
         language: document.getElementById('language')?.value || undefined,
         connection_quality: parseInt(document.getElementById('connection-quality').value),
@@ -2862,6 +3059,28 @@ function applyTranslations(t) {
             if (onLabel) onLabel.textContent = animations.on;
             const offLabel = document.getElementById('animations-off-label');
             if (offLabel) offLabel.textContent = animations.off;
+        }
+
+        const dateFormat = t.gui.settings.appearance?.date_format;
+        if (dateFormat) {
+            const dateFormatHeader = document.getElementById('date-format-header');
+            if (dateFormatHeader) dateFormatHeader.textContent = dateFormat.name;
+            const dateFormatAutoOption = document.getElementById('date-format-auto-option');
+            if (dateFormatAutoOption) dateFormatAutoOption.textContent = dateFormat.auto;
+            // keep the closed-dropdown label in sync with the (re)translated option text
+            dateFormatSelect?.syncLabel();
+        }
+
+        const timeFormat = t.gui.settings.appearance?.time_format;
+        if (timeFormat) {
+            const timeFormatHeader = document.getElementById('time-format-header');
+            if (timeFormatHeader) timeFormatHeader.textContent = timeFormat.name;
+            const timeFormatAutoLabel = document.getElementById('time-format-auto-label');
+            if (timeFormatAutoLabel) timeFormatAutoLabel.textContent = timeFormat.auto;
+            const timeFormat24Label = document.getElementById('time-format-24h-label');
+            if (timeFormat24Label) timeFormat24Label.textContent = timeFormat['24h'];
+            const timeFormat12Label = document.getElementById('time-format-12h-label');
+            if (timeFormat12Label) timeFormat12Label.textContent = timeFormat['12h'];
         }
 
         const connQualityLabelText = document.getElementById('connection-quality-label-text');
@@ -3397,6 +3616,23 @@ document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('animations-off').addEventListener('change', () => {
         applyAnimationsMode('off');
         saveSettings();
+    });
+    // Date/time format: re-render the date-bearing panels immediately, then persist.
+    // (saveSettings round-trips via settings_updated, which also re-renders, but this
+    // gives instant feedback without waiting for the server echo.)
+    const dateFormatRoot = document.getElementById('date-format');
+    if (dateFormatRoot) dateFormatSelect = new CustomSelect(dateFormatRoot);
+    dateFormatRoot?.addEventListener('change', () => {
+        state.settings.date_format = getDateFormatFromUI();
+        renderInventory();
+        saveSettings();
+    });
+    ['auto', '24h', '12h'].forEach(mode => {
+        document.getElementById(`time-format-${mode}`)?.addEventListener('change', () => {
+            state.settings.time_format = getTimeFormatFromUI();
+            renderInventory();
+            saveSettings();
+        });
     });
     const connectionQualitySlider = document.getElementById('connection-quality');
     connectionQualitySlider.addEventListener('input', (e) => updateSliderVisual(e.target));

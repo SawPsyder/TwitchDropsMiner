@@ -74,6 +74,8 @@ class SettingsUpdate(BaseModel):
     idle_behavior: dict | None = None
     animations: str | None = None
     dark_mode: str | None = None
+    date_format: str | None = None
+    time_format: str | None = None
     language: str | None = None
     proxy: str | None = None
     connection_quality: int | None = None

@@ -1915,6 +1915,103 @@ body.reduce-motion .progress-fill::after {
     outline-offset: 2px;
 }
 
+/* Custom dropdown (replaces native <select> so appearance is fully themeable).
+   Enhanced by the CustomSelect class in app.js - the root .custom-select carries
+   the current value in its data-value attribute and emits a "change" event. */
+.custom-select {
+    position: relative;
+    display: inline-block;
+    min-width: 200px;
+    margin-bottom: 8px;
+    font-size: 14px;
+}
+
+.custom-select-trigger {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    width: 100%;
+    padding: 9px 12px;
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    background: var(--bg-panel);
+    color: var(--text-primary);
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+    transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.custom-select-trigger:hover {
+    border-color: var(--accent-color);
+}
+
+.custom-select.open .custom-select-trigger,
+.custom-select-trigger:focus-visible {
+    outline: none;
+    border-color: var(--accent-color);
+    box-shadow: 0 0 0 2px rgba(145, 70, 255, 0.2);
+}
+
+.custom-select-arrow {
+    flex: none;
+    width: 0;
+    height: 0;
+    border-left: 5px solid transparent;
+    border-right: 5px solid transparent;
+    border-top: 6px solid var(--text-secondary);
+    transition: transform 0.15s ease;
+}
+
+.custom-select.open .custom-select-arrow {
+    transform: rotate(180deg);
+}
+
+.custom-select-options {
+    position: absolute;
+    top: calc(100% + 4px);
+    left: 0;
+    right: 0;
+    z-index: 50;
+    margin: 0;
+    padding: 4px;
+    list-style: none;
+    max-height: 260px;
+    overflow-y: auto;
+    background: var(--bg-panel);
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+    /* hidden until opened */
+    display: none;
+}
+
+.custom-select.open .custom-select-options {
+    display: block;
+}
+
+.custom-select-option {
+    padding: 8px 12px;
+    border-radius: 4px;
+    cursor: pointer;
+    color: var(--text-primary);
+    white-space: nowrap;
+    transition: background-color 0.1s ease, color 0.1s ease;
+}
+
+.custom-select-option:hover,
+.custom-select-option.active {
+    background: color-mix(in srgb, var(--accent-color) 22%, transparent);
+    color: var(--text-primary);
+}
+
+.custom-select-option[aria-selected="true"] {
+    background: var(--accent-color);
+    color: #ffffff;
+    font-weight: 600;
+}
+
 /* Chips for listed games */
 .chips-container {
     display: flex;

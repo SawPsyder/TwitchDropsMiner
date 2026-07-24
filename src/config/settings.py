@@ -80,6 +80,10 @@ default_settings = {
     "animations": "auto",  # "auto" | "on" | "off" - UI motion/animation preference
     "connection_quality": 1,
     "dark_mode": "auto",  # "auto" | "on" | "off" - UI light/dark theme preference
+    # display appearance of dates/times in the web GUI (see DATE_FORMATS / TIME_FORMATS
+    # in src/web/managers/settings.py); "auto" defers to the browser/OS locale
+    "date_format": "auto",  # "auto" | "iso" | "dmy_dot" | "dmy_slash" | "mdy_slash" | "ymd_slash"
+    "time_format": "auto",  # "auto" | "24h" | "12h"
     "favorite_drops": [],  # "{campaign_id}#{drop_id}" keys, see StreamSelector.SOURCE_FAVORITE
     "games_to_watch": [],
     "idle_behavior": {
@@ -146,6 +150,8 @@ class Settings:
     animations: str
     connection_quality: int
     dark_mode: str
+    date_format: str
+    time_format: str
     favorite_drops: list[str]
     games_to_watch: list[str]
     idle_behavior: IdleBehaviorSettings
