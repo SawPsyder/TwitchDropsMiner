@@ -1,3 +1,50 @@
+# Release Notes - v1.9.0
+
+This release adds Xbox / Microsoft Store as a third game library source - including the option to
+treat everything in PC Game Pass, Console Game Pass or EA Play as "owned" without signing in at all -
+and replaces the inventory page's game picker with a proper search box.
+
+### ✨ New Features
+- **Xbox / Microsoft Store Library Sync**: Alongside Steam and Ubisoft Connect, the miner can now
+  auto-watch games from your Microsoft account. Connecting the account uses a device-code sign-in
+  (open a link, type a code - the same flow as the Twitch login, and 2FA accounts work fine) and
+  pulls in both the games you've played and the games you've bought. Play history from Xbox is real
+  last-played data, so those games sort to the front of the auto-watch list just like Steam's.
+- **Game Pass & EA Play Catalogs**: Three extra toggles - PC Game Pass, Console Game Pass and
+  EA Play - add every game currently included with that subscription to your library. These read
+  from Microsoft's public catalog and need **no sign-in whatsoever**, so you can use them with the
+  Xbox provider on its own. Each catalog is several hundred titles, so whitelist mode is worth
+  considering when they're enabled.
+- **Store Region Selector**: The subscription catalogs differ by region, so there's a store-region
+  dropdown listing only the regions Microsoft actually serves those catalogs in - picking an
+  unsupported one would have silently synced zero games. Changing the region or a catalog toggle
+  takes effect on the next sync instead of waiting out the 12-hour library cache.
+- **Inventory Search**: The inventory page's game multi-select dropdown is replaced by a single
+  search box that matches game names, campaign names, drop names and reward names, with a clear
+  button. Typing part of a reward you're after now finds it without knowing which campaign it
+  belongs to.
+
+### 🐛 Bug Fixes
+- **Trademark Symbols No Longer Break Game Matching**: Titles containing ™, ® or © were normalized
+  in a way that expanded ™ into the letters "TM", so a library game like *MySims™* could never match
+  Twitch's *MySims*. Affects all providers, but showed up because the Microsoft catalog uses these
+  symbols heavily.
+- **Microsoft's Platform Suffixes Stripped Before Matching**: Microsoft Store titles carry
+  qualifiers Twitch categories never have (*"… - PC"*, *"… - Windows"*, *"… (Game Preview)"*,
+  *"Minecraft: Windows 10 Edition"*). These are now trimmed off a known list of qualifiers so the
+  games actually match their Twitch category.
+
+### 🔧 Under the Hood
+- **Credentials Stay Out of Settings**: No Xbox credential is ever written to `settings.json` - only
+  the rotating refresh token and your gamertag are stored, in their own `xbox_auth.json`. A refresh
+  token that Microsoft rejects signs the account out rather than retrying forever.
+- **Resilient Multi-Source Sync**: The Xbox provider reads from five independent sources; any one of
+  them failing is logged and skipped rather than failing the sync, and as always a provider error
+  never interrupts mining.
+- **Library Provider Extension Points**: Providers can now declare what settings determine their
+  results (so cached data is invalidated when those change) and report their own connection state to
+  the web GUI - needed for a sign-in-based provider, and available to future platforms.
+
 # Release Notes - v1.8.0
 
 This release adds selectable date/time formats, fixes the built-in update checker, and lands a
