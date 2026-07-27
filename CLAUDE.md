@@ -169,7 +169,18 @@ party. **No Xbox credential is ever stored in `settings.json`**, which is why `x
 `POST /api/library/xbox/login` (returns the code + URL, then polls Microsoft in a background task)
 and `POST /api/library/xbox/logout`; the frontend watches `/api/library/status` until the account
 flips to signed in. A rejected refresh token signs the account out rather than retrying forever.
-Any single source failing is logged and skipped - only an all-sources failure raises.
+Any single source failing is logged and skipped - only an all-sources failure raises. A damaged
+`xbox_auth.json` is ignored with a warning instead of throwing during startup.
+
+Device-code specifics that cost real debugging time, so don't undo them: Microsoft's response has no
+`verification_uri_complete`, but its code-entry page accepts the code as an `?otc=` query parameter
+and pre-fills the field, so `build_complete_uri()` synthesizes that link - a hand-typed code is the
+most likely failure (user codes are full of 5/S, 6/G, 0/O, 8/B look-alikes and a mistype is reported
+as "that code is not correct", which reads like a bug in the app). `poll_device_code` must treat
+`slow_down` as "keep polling, wider interval" per RFC 8628 rather than fatal, and terminal outcomes
+are recorded in `XboxAuth.last_login_error` so `login_state()` can show them - the flow is otherwise
+completely silent when it fails. `POST /api/library/xbox/logout` also calls
+`LibrarySyncService.invalidate_provider("xbox")` so account-derived games stop counting immediately.
 
 Microsoft product titles carry platform/edition qualifiers that no Twitch category has
 ("… - PC", "… - Windows", "… (Game Preview)", "Minecraft: Windows 10 Edition"), so

@@ -26,7 +26,8 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, NoReturn
+from urllib.parse import quote
 
 from src.config import XBOX_AUTH_PATH
 from src.library_sync.base import LibrarySyncError
@@ -99,7 +100,17 @@ _EMPTY_AUTH_STATE: dict[str, Any] = {
 
 
 class XboxLoginPending(LibrarySyncError):
-    """Raised while the user hasn't finished entering the device code yet."""
+    """
+    Raised while the user hasn't finished entering the device code yet.
+
+    slow_down is set when the token endpoint asked to be polled less often
+    (RFC 8628); the caller has to widen its interval rather than treat it as a
+    failure, or the sign-in dies for a reason the user can't see.
+    """
+
+    def __init__(self, message: str, *, slow_down: bool = False) -> None:
+        super().__init__(message)
+        self.slow_down = slow_down
 
 
 @dataclass(frozen=True)
@@ -108,6 +119,8 @@ class DeviceCodePrompt:
 
     user_code: str
     verification_uri: str
+    # same page with the code already in the box - see build_complete_uri
+    verification_uri_complete: str
     expires_at: datetime
     interval: int
     device_code: str
@@ -117,8 +130,26 @@ class DeviceCodePrompt:
         return {
             "user_code": self.user_code,
             "verification_uri": self.verification_uri,
+            "verification_uri_complete": self.verification_uri_complete,
             "expires_at": self.expires_at.isoformat(),
         }
+
+
+def build_complete_uri(verification_uri: str, user_code: str) -> str:
+    """
+    Add the code to the verification URL so the user never has to type it.
+
+    Microsoft's device-code response carries no verification_uri_complete, but
+    its code-entry page does accept the code as an "otc" query parameter and
+    pre-fills the field with it (verified against the live page). That removes
+    the single most likely way this flow fails: user codes are full of
+    look-alike characters (5/S, 6/G, 0/O, 8/B), so a hand-typed code gets
+    rejected as "that code is not correct" while the code itself was fine.
+    """
+    if not verification_uri or not user_code:
+        return verification_uri
+    separator = "&" if "?" in verification_uri else "?"
+    return f"{verification_uri}{separator}otc={quote(user_code)}"
 
 
 @dataclass(frozen=True)
@@ -146,10 +177,32 @@ class XboxAuth:
 
     def __init__(self, auth_path: Path = XBOX_AUTH_PATH) -> None:
         self._auth_path = auth_path
-        self._auth: dict[str, Any] = json_load(auth_path, _EMPTY_AUTH_STATE, merge=False)
+        self._auth: dict[str, Any] = self._load_auth(auth_path)
         self._pending: DeviceCodePrompt | None = None
         # XSTS tokens by relying party
         self._tokens: dict[str, XstsToken] = {}
+        # why the last sign-in attempt ended, for the web GUI. Without this a failed
+        # or abandoned approval is completely silent: the code just sits there.
+        self._login_error: str = ""
+
+    @staticmethod
+    def _load_auth(auth_path: Path) -> dict[str, Any]:
+        """
+        Read the persisted sign-in, tolerating a damaged file.
+
+        A truncated or hand-edited xbox_auth.json (an unclean container shutdown is
+        enough) must not stop the app from starting - the worst case is that the
+        account shows as disconnected and the user signs in again.
+        """
+        try:
+            return json_load(auth_path, _EMPTY_AUTH_STATE, merge=False)
+        except (ValueError, OSError) as exc:
+            logger.warning(
+                "Xbox library sync: ignoring unreadable %s (%s) - sign in again",
+                auth_path.name,
+                exc,
+            )
+            return dict(_EMPTY_AUTH_STATE)
 
     @property
     def refresh_token(self) -> str:
@@ -169,7 +222,19 @@ class XboxAuth:
         """The device-code prompt awaiting approval, if a sign-in is in flight."""
         if self._pending is not None and datetime.now(UTC) >= self._pending.expires_at:
             self._pending = None
+            if not self.signed_in:
+                # the overwhelmingly common "it didn't work" case: the code was never
+                # approved. Say so instead of just making the prompt disappear.
+                self._login_error = (
+                    "the sign-in code expired before it was approved -"
+                    " enter the code and complete the Microsoft sign-in, then try again"
+                )
         return self._pending
+
+    @property
+    def last_login_error(self) -> str:
+        """Why the last sign-in attempt ended, or "" if there's nothing to report."""
+        return self._login_error
 
     def sensitive_values(self) -> tuple[str, ...]:
         """Credential values that must never reach logs or the web GUI."""
@@ -182,6 +247,7 @@ class XboxAuth:
         self._auth = dict(_EMPTY_AUTH_STATE)
         self._tokens.clear()
         self._pending = None
+        self._login_error = ""
         json_save(self._auth_path, self._auth)
 
     def _save(self) -> None:
@@ -229,6 +295,8 @@ class XboxAuth:
         Raises:
             LibrarySyncError: If Microsoft refused to issue a device code
         """
+        # a new attempt supersedes whatever the last one reported
+        self._login_error = ""
         status, body = await self._post_form(
             session,
             DEVICE_CODE_URL,
@@ -236,18 +304,23 @@ class XboxAuth:
             proxy,
         )
         if status >= 400 or not body.get("device_code"):
-            raise LibrarySyncError(
-                f"Xbox: could not start sign-in ({status}):"
+            self._fail_login(
+                f"could not start sign-in ({status}):"
                 f" {body.get('error_description') or body.get('error') or 'unknown error'}"
             )
+        user_code = str(body["user_code"])
+        # Microsoft returns https://www.microsoft.com/link, which redirects to the
+        # remoteconnect code-entry page; fall back to that page directly
+        verification_uri = str(
+            body.get("verification_uri") or "https://login.live.com/oauth20_remoteconnect.srf"
+        )
         self._pending = DeviceCodePrompt(
-            user_code=str(body["user_code"]),
-            # Microsoft returns https://www.microsoft.com/link, which redirects to the
-            # remoteconnect code-entry page; fall back to that page directly
-            verification_uri=str(
+            user_code=user_code,
+            verification_uri=verification_uri,
+            # prefer a complete URI if Microsoft ever starts sending one
+            verification_uri_complete=str(
                 body.get("verification_uri_complete")
-                or body.get("verification_uri")
-                or "https://login.live.com/oauth20_remoteconnect.srf"
+                or build_complete_uri(verification_uri, user_code)
             ),
             expires_at=datetime.now(UTC) + timedelta(seconds=int(body.get("expires_in", 900))),
             interval=int(body.get("interval", 5)),
@@ -286,6 +359,7 @@ class XboxAuth:
             self._auth["refresh_token"] = str(body["refresh_token"])
             self._pending = None
             self._tokens.clear()
+            self._login_error = ""
             self._save()
             logger.info("Xbox library sync: account sign-in completed")
             return True
@@ -293,16 +367,26 @@ class XboxAuth:
         error = str(body.get("error") or "")
         if error == "authorization_pending":
             raise XboxLoginPending("Xbox: waiting for the code to be entered")
-        if error == "authorization_declined":
+        if error == "slow_down":
+            # RFC 8628: keep polling, just less often. Treating this as fatal would
+            # kill the sign-in while the user is still working through the prompts.
+            raise XboxLoginPending("Xbox: asked to poll less often", slow_down=True)
+        if error in ("authorization_declined", "access_denied"):
             self._pending = None
-            raise LibrarySyncError("Xbox: sign-in was declined")
+            self._fail_login("the sign-in was declined in the browser")
         if error in ("expired_token", "code_expired"):
             self._pending = None
-            raise LibrarySyncError("Xbox: the sign-in code expired - start again")
-        raise LibrarySyncError(
-            f"Xbox: sign-in failed ({status}):"
+            self._fail_login("the sign-in code expired - start again")
+        self._fail_login(
+            f"sign-in failed ({status}):"
             f" {body.get('error_description') or error or 'unknown error'}"
         )
+        raise AssertionError("unreachable")  # pragma: no cover - _fail_login raises
+
+    def _fail_login(self, reason: str) -> NoReturn:
+        """Record why a sign-in ended and raise it, so the web GUI can show it."""
+        self._login_error = reason
+        raise LibrarySyncError(f"Xbox: {reason}")
 
     async def _refresh_access_token(
         self, session: aiohttp.ClientSession, proxy: str | None
@@ -325,9 +409,7 @@ class XboxAuth:
             # a rejected refresh token is unrecoverable - make the user sign in again
             # instead of retrying it forever on every sync
             self.sign_out()
-            raise LibrarySyncError(
-                "Xbox: the stored sign-in expired or was revoked - sign in again"
-            )
+            self._fail_login("the stored sign-in expired or was revoked - sign in again")
         if body.get("refresh_token"):
             # Microsoft rotates refresh tokens; keep the newest one
             self._auth["refresh_token"] = str(body["refresh_token"])

@@ -1822,6 +1822,24 @@ body.reduce-motion .progress-fill::after {
     font-weight: 600;
 }
 
+.xbox-login-expiry {
+    color: var(--text-secondary);
+    font-size: 0.85em;
+}
+
+.xbox-login-error {
+    padding: 8px 12px;
+    border: 1px solid var(--error-color);
+    border-radius: 6px;
+    background: rgba(255, 82, 82, 0.08);
+    color: var(--error-color);
+    font-size: 0.85em;
+}
+
+.xbox-login-error[hidden] {
+    display: none;
+}
+
 .xbox-login-code {
     padding: 4px 10px;
     border-radius: 4px;

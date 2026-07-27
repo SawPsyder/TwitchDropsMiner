@@ -17,7 +17,7 @@ from src.library_sync.xbox import (
     CATALOG_EA_PLAY,
     CATALOG_PC_GAME_PASS,
 )
-from src.library_sync.xbox_auth import XboxAuth, XboxLoginPending
+from src.library_sync.xbox_auth import XboxAuth, XboxLoginPending, build_complete_uri
 
 from tests.test_library_sync import FakeSettings, make_library_settings
 
@@ -302,6 +302,13 @@ class TestXboxProviderConfiguration(unittest.TestCase):
         self.assertEqual(extra["login"]["gamertag"], "Tester")
         self.assertNotIn("super-secret", str(extra))
 
+    def test_login_state_surfaces_the_last_error(self):
+        provider = make_provider(self.tmp_dir)
+        provider.auth._login_error = "the sign-in was declined in the browser"
+        state = provider.login_state()
+        self.assertFalse(state["signed_in"])
+        self.assertEqual(state["last_error"], "the sign-in was declined in the browser")
+
 
 class TestFetchFingerprint(unittest.TestCase):
     def setUp(self):
@@ -478,6 +485,105 @@ class FakeAuthTransport:
         return self._responses.pop(0)
 
 
+class TestDisconnect(unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.tmp_dir = self._tmp.name
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def test_sign_out_clears_account_and_pending_prompt(self):
+        provider = make_provider(self.tmp_dir, include_ea_play=True)
+        provider.auth._auth["refresh_token"] = "token"
+        provider.auth._auth["gamertag"] = "Tester"
+        provider.auth._tokens["http://xboxlive.com"] = MagicMock()
+        self.assertTrue(provider.login_state()["signed_in"])
+
+        provider.sign_out()
+
+        state = provider.login_state()
+        self.assertFalse(state["signed_in"])
+        self.assertEqual(state["gamertag"], "")
+        self.assertIsNone(state["pending"])
+        self.assertEqual(state["last_error"], "")
+        self.assertEqual(provider.auth._tokens, {})
+        # the catalogs still work on their own, so the provider stays configured
+        self.assertTrue(provider.is_configured)
+
+    def test_sign_out_persists_so_a_restart_stays_disconnected(self):
+        auth_path = Path(self.tmp_dir) / "xbox_auth.json"
+        provider = make_provider(self.tmp_dir)
+        provider.auth._auth["refresh_token"] = "token"
+        provider.auth._save()
+        self.assertTrue(XboxAuth(auth_path).signed_in)
+
+        provider.sign_out()
+        self.assertFalse(XboxAuth(auth_path).signed_in)
+
+    def test_sign_out_without_catalogs_leaves_provider_unconfigured(self):
+        provider = make_provider(self.tmp_dir)
+        provider.auth._auth["refresh_token"] = "token"
+        self.assertTrue(provider.is_configured)
+        provider.sign_out()
+        self.assertFalse(provider.is_configured)
+
+    def test_invalidate_provider_drops_the_cached_library(self):
+        from src.library_sync import LibrarySyncService
+
+        with tempfile.TemporaryDirectory() as tmp:
+            cache_path = Path(tmp) / "cache.json"
+            settings = FakeSettings(make_xbox_settings(include_ea_play=True))
+            service = LibrarySyncService(settings, cache_path)
+            cache = service._provider_cache("xbox")
+            cache["games"] = [{"name": "Halo Infinite", "app_id": "1", "last_played": 5}]
+            cache["last_sync"] = datetime.now(UTC)
+            cache["fingerprint"] = "market=US;catalogs=;account=1"
+            service._save_cache()
+            self.assertEqual(len(service.owned_games), 1)
+
+            self.assertTrue(service.invalidate_provider("xbox"))
+            self.assertEqual(service.owned_games, [])
+            self.assertIsNone(service._last_sync("xbox"))
+            # and it stays dropped for a freshly loaded service
+            self.assertEqual(LibrarySyncService(settings, cache_path).owned_games, [])
+
+    def test_invalidate_provider_is_a_no_op_when_nothing_is_cached(self):
+        from src.library_sync import LibrarySyncService
+
+        with tempfile.TemporaryDirectory() as tmp:
+            settings = FakeSettings(make_xbox_settings())
+            service = LibrarySyncService(settings, Path(tmp) / "cache.json")
+            self.assertFalse(service.invalidate_provider("xbox"))
+
+
+class TestCompleteVerificationUri(unittest.TestCase):
+    def test_appends_the_code_as_otc(self):
+        self.assertEqual(
+            build_complete_uri("https://www.microsoft.com/link", "ABCD1234"),
+            "https://www.microsoft.com/link?otc=ABCD1234",
+        )
+
+    def test_respects_an_existing_query_string(self):
+        self.assertEqual(
+            build_complete_uri("https://login.live.com/x.srf?lc=1033", "ABCD1234"),
+            "https://login.live.com/x.srf?lc=1033&otc=ABCD1234",
+        )
+
+    def test_escapes_the_code(self):
+        self.assertEqual(
+            build_complete_uri("https://www.microsoft.com/link", "A B&C"),
+            "https://www.microsoft.com/link?otc=A%20B%26C",
+        )
+
+    def test_missing_parts_are_left_alone(self):
+        self.assertEqual(build_complete_uri("", "ABCD"), "")
+        self.assertEqual(
+            build_complete_uri("https://www.microsoft.com/link", ""),
+            "https://www.microsoft.com/link",
+        )
+
+
 class TestXboxAuth(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
@@ -517,6 +623,15 @@ class TestXboxAuth(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(auth.signed_in)
         # the device code itself must not reach the web GUI payload
         self.assertNotIn("device-code-value", str(prompt.as_dict()))
+        # the link carries the user code so it never has to be typed
+        self.assertEqual(
+            prompt.verification_uri_complete,
+            "https://www.microsoft.com/link?otc=ABCD1234",
+        )
+        self.assertEqual(
+            prompt.as_dict()["verification_uri_complete"],
+            "https://www.microsoft.com/link?otc=ABCD1234",
+        )
 
         with self.assertRaises(XboxLoginPending):
             await auth.poll_device_code(MagicMock())
@@ -549,6 +664,144 @@ class TestXboxAuth(unittest.IsolatedAsyncioTestCase):
                 await auth.poll_device_code(MagicMock())
             self.assertIsNone(auth.pending_prompt)
             self.assertFalse(auth.signed_in)
+
+    async def test_slow_down_keeps_polling_instead_of_failing(self):
+        # RFC 8628: slow_down means widen the interval, not give up. Treating it as
+        # fatal would kill the sign-in silently while the user is still approving.
+        auth, _ = self.make_auth(
+            [
+                (
+                    200,
+                    {
+                        "user_code": "CODE",
+                        "device_code": "dc",
+                        "verification_uri": "https://www.microsoft.com/link",
+                        "expires_in": 900,
+                        "interval": 5,
+                    },
+                ),
+                (400, {"error": "slow_down"}),
+                (200, {"refresh_token": "rt"}),
+            ]
+        )
+        await auth.start_device_code(MagicMock())
+        with self.assertRaises(XboxLoginPending) as ctx:
+            await auth.poll_device_code(MagicMock())
+        self.assertTrue(ctx.exception.slow_down)
+        # the prompt survives, so the next poll can still succeed
+        self.assertIsNotNone(auth.pending_prompt)
+        self.assertTrue(await auth.poll_device_code(MagicMock()))
+        self.assertTrue(auth.signed_in)
+
+    async def test_access_denied_is_treated_as_declined(self):
+        auth, _ = self.make_auth(
+            [
+                (
+                    200,
+                    {
+                        "user_code": "CODE",
+                        "device_code": "dc",
+                        "verification_uri": "https://www.microsoft.com/link",
+                        "expires_in": 900,
+                        "interval": 5,
+                    },
+                ),
+                (400, {"error": "access_denied"}),
+            ]
+        )
+        await auth.start_device_code(MagicMock())
+        with self.assertRaises(LibrarySyncError):
+            await auth.poll_device_code(MagicMock())
+        self.assertIn("declined", auth.last_login_error)
+        self.assertIsNone(auth.pending_prompt)
+
+    async def test_expiry_without_approval_is_reported(self):
+        auth, _ = self.make_auth(
+            [
+                (
+                    200,
+                    {
+                        "user_code": "CODE",
+                        "device_code": "dc",
+                        "verification_uri": "https://www.microsoft.com/link",
+                        "expires_in": -1,
+                        "interval": 5,
+                    },
+                )
+            ]
+        )
+        await auth.start_device_code(MagicMock())
+        self.assertEqual(auth.last_login_error, "")
+        # reading the prompt detects the expiry and records why nothing happened
+        self.assertIsNone(auth.pending_prompt)
+        self.assertIn("expired before it was approved", auth.last_login_error)
+
+    async def test_a_new_attempt_clears_the_previous_error(self):
+        auth, _ = self.make_auth(
+            [
+                (400, {"error": "invalid_client"}),
+                (
+                    200,
+                    {
+                        "user_code": "FRESH",
+                        "device_code": "dc",
+                        "verification_uri": "https://www.microsoft.com/link",
+                        "expires_in": 900,
+                        "interval": 5,
+                    },
+                ),
+            ]
+        )
+        with self.assertRaises(LibrarySyncError):
+            await auth.start_device_code(MagicMock())
+        self.assertTrue(auth.last_login_error)
+
+        prompt = await auth.start_device_code(MagicMock())
+        self.assertEqual(prompt.user_code, "FRESH")
+        self.assertEqual(auth.last_login_error, "")
+
+    async def test_regenerating_replaces_the_pending_code(self):
+        def start_response(code):
+            return (
+                200,
+                {
+                    "user_code": code,
+                    "device_code": f"dc-{code}",
+                    "verification_uri": "https://www.microsoft.com/link",
+                    "expires_in": 900,
+                    "interval": 5,
+                },
+            )
+
+        auth, transport = self.make_auth([start_response("FIRST"), start_response("SECOND")])
+        first = await auth.start_device_code(MagicMock())
+        self.assertEqual(first.user_code, "FIRST")
+        second = await auth.start_device_code(MagicMock())
+        self.assertEqual(second.user_code, "SECOND")
+        # the pending prompt is the new one, and polling uses the new device code
+        self.assertEqual(auth.pending_prompt.user_code, "SECOND")
+        self.assertEqual(auth.pending_prompt.device_code, "dc-SECOND")
+
+    async def test_microsoft_supplied_complete_uri_wins(self):
+        auth, _ = self.make_auth(
+            [
+                (
+                    200,
+                    {
+                        "user_code": "CODE",
+                        "device_code": "dc",
+                        "verification_uri": "https://www.microsoft.com/link",
+                        "verification_uri_complete": "https://example.test/prefilled",
+                        "expires_in": 900,
+                        "interval": 5,
+                    },
+                )
+            ]
+        )
+        prompt = await auth.start_device_code(MagicMock())
+        self.assertEqual(prompt.verification_uri_complete, "https://example.test/prefilled")
+        # the plain page stays available as the fallback link target
+        self.assertEqual(prompt.verification_uri, "https://www.microsoft.com/link")
 
     async def test_failed_device_code_start_raises(self):
         auth, _ = self.make_auth([(400, {"error": "invalid_client"})])
@@ -665,6 +918,15 @@ class TestXboxAuth(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(auth.signed_in)
         self.assertEqual(auth.gamertag, "")
         self.assertFalse(XboxAuth(self.auth_path).signed_in)
+
+    def test_damaged_auth_file_does_not_crash_startup(self):
+        # an unclean shutdown can leave a truncated file, and a BOM is enough to
+        # make the JSON loader throw - neither may stop the app from starting
+        for content in ('﻿{"refresh_token": "x"}', '{"refresh_token":', "", "not json"):
+            self.auth_path.write_text(content, encoding="utf-8")
+            auth = XboxAuth(self.auth_path)
+            self.assertFalse(auth.signed_in, repr(content))
+            self.assertEqual(auth.gamertag, "")
 
     def test_sensitive_values_cover_the_refresh_token(self):
         auth = XboxAuth(self.auth_path)

@@ -394,10 +394,24 @@ async def start_xbox_login():
 
 @app.post("/api/library/xbox/logout")
 async def xbox_logout():
-    """Disconnect the Microsoft account (drops the stored refresh token)."""
+    """
+    Disconnect the Microsoft account.
+
+    Drops the stored refresh token and the provider's cached library, so the games
+    that came from the account stop counting towards the auto tracklist right away
+    rather than lingering until the cache expires. Any enabled subscription
+    catalogs (which need no account) come back on the next sync.
+    """
     provider = _get_xbox_provider()
     provider.sign_out()
-    return {"success": True, "login": provider.login_state()}
+    cache_cleared = False
+    if twitch_client:
+        cache_cleared = twitch_client.library_sync.invalidate_provider(XboxProvider.name)
+    return {
+        "success": True,
+        "cache_cleared": cache_cleared,
+        "login": provider.login_state(),
+    }
 
 
 @app.post("/api/library/sync")

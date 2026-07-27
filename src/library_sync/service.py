@@ -196,6 +196,27 @@ class LibrarySyncService:
                 entry["last_played"] = max(entry["last_played"], game.last_played)
         return sorted(merged.values(), key=lambda entry: str(entry["name"]).casefold())
 
+    def invalidate_provider(self, name: str) -> bool:
+        """
+        Drop a provider's cached games, so nothing it contributed is used again.
+
+        Needed when a provider loses access to a source rather than just changing
+        which ones it reads - disconnecting an account has to stop that account's
+        games from counting immediately, not at the next cache expiry. The games
+        that don't depend on the account come back on the next sync.
+
+        Returns:
+            True if there was a cache entry to drop
+        """
+        providers: dict[str, Any] = self._cache.setdefault("providers", {})
+        if name not in providers:
+            return False
+        providers.pop(name)
+        self._last_errors.pop(name, None)
+        self._save_cache()
+        logger.info("Library sync: dropped the cached library for %s", name)
+        return True
+
     def get_provider(self, name: str) -> LibraryProvider | None:
         """Look up a registered provider by its name (settings key)."""
         for provider in self._providers:

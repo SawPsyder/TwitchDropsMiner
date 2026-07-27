@@ -271,6 +271,11 @@ class GUISettingsLibrary(TypedDict):
     xbox_signed_in: str
     xbox_not_signed_in: str
     xbox_login_instructions: str
+    xbox_login_regen: str
+    xbox_login_copy: str
+    xbox_login_copied: str
+    xbox_login_copy_manual: str
+    xbox_login_expires_in: str
     xbox_login_failed: str
     xbox_account_hint: str
     xbox_catalogs: str

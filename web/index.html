@@ -469,11 +469,18 @@
                                         <span id="xbox-account-label" class="xbox-account-label"></span>
                                     </div>
                                     <div id="xbox-login-prompt" class="xbox-login-prompt" hidden>
-                                        <span id="xbox-login-instructions">Open the link and enter this code:</span>
+                                        <span id="xbox-login-instructions">Open the link - the code is filled in for
+                                            you, just approve it:</span>
                                         <a id="xbox-login-link" class="xbox-login-link" target="_blank"
                                             rel="noopener">microsoft.com/link</a>
                                         <code id="xbox-login-code" class="xbox-login-code"></code>
+                                        <button type="button" id="xbox-login-copy-btn" class="small-btn"
+                                            title="Copy code">Copy</button>
+                                        <span id="xbox-login-expiry" class="xbox-login-expiry"></span>
+                                        <button type="button" id="xbox-login-regen-btn" class="small-btn">New
+                                            code</button>
                                     </div>
+                                    <div id="xbox-login-error" class="xbox-login-error" hidden></div>
                                     <small id="xbox-account-hint" class="help-text-inline">Sign in to sync the games
                                         you've played and bought. Not needed for the subscription catalogs
                                         below.</small>

@@ -260,11 +260,14 @@ class XboxProvider(LibraryProvider):
 
     def login_state(self) -> dict[str, Any]:
         """Sign-in state for the web GUI."""
+        # read the prompt first: expiry is detected lazily there and turns into the
+        # "expired before it was approved" reason, which must be picked up below
         prompt = self._auth.pending_prompt
         return {
             "signed_in": self._auth.signed_in,
             "gamertag": self._auth.gamertag,
             "pending": prompt.as_dict() if prompt is not None else None,
+            "last_error": self._auth.last_login_error,
         }
 
     def status_extra(self) -> dict[str, Any]:
@@ -300,20 +303,32 @@ class XboxProvider(LibraryProvider):
     async def _poll_until_approved(self, interval: int) -> None:
         """Poll the device-code approval until it completes, expires or is cancelled."""
         proxy: str | None = self._settings.proxy or None
+        delay = max(interval, 1)
+        logger.info("Xbox sign-in: waiting for the code to be approved")
         try:
             async with aiohttp.ClientSession(
                 timeout=aiohttp.ClientTimeout(total=30)
             ) as session:
                 while self._auth.pending_prompt is not None:
-                    await asyncio.sleep(max(interval, 1))
+                    await asyncio.sleep(delay)
                     try:
                         if await self._auth.poll_device_code(session, proxy):
+                            logger.info("Xbox sign-in: account connected")
                             return
-                    except XboxLoginPending:
+                    except XboxLoginPending as pending:
+                        if pending.slow_down:
+                            # RFC 8628 asks for a wider interval, not a failure
+                            delay += 5
+                            logger.info(
+                                "Xbox sign-in: polling slowed to %ss on request", delay
+                            )
                         continue
                     except LibrarySyncError as exc:
                         logger.warning("Xbox sign-in failed: %s", exc)
                         return
+            # loop exited without a token: the prompt expired unapproved, which
+            # pending_prompt has already recorded as the reason
+            logger.warning("Xbox sign-in: %s", self._auth.last_login_error or "code expired")
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # pragma: no cover - defensive, task must never crash

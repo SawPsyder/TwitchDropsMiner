@@ -2283,6 +2283,8 @@ function updateXboxLoginUI(login) {
 
     loginBtn.hidden = signedIn;
     logoutBtn.hidden = !signedIn;
+    // while a code is outstanding the "New code" button in the prompt takes over,
+    // so a stale code never locks the user out until it expires
     loginBtn.disabled = !!pending;
 
     if (signedIn) {
@@ -2295,24 +2297,75 @@ function updateXboxLoginUI(login) {
         accountLabel.classList.remove('status-ok');
     }
 
+    // why the previous attempt ended - otherwise a failed approval is invisible
+    const errorBox = document.getElementById('xbox-login-error');
+    if (errorBox) {
+        const message = (!signedIn && login?.last_error) ? login.last_error : '';
+        errorBox.textContent = message;
+        errorBox.hidden = !message;
+    }
+
     prompt.hidden = !pending;
     if (pending) {
         const link = document.getElementById('xbox-login-link');
         const code = document.getElementById('xbox-login-code');
         if (link) {
-            link.href = pending.verification_uri;
+            // the complete URL carries the code as ?otc=, which Microsoft's page
+            // pre-fills - so the code never has to be typed (and mistyped)
+            link.href = pending.verification_uri_complete || pending.verification_uri;
             link.textContent = pending.verification_uri.replace(/^https?:\/\//, '');
         }
         if (code) code.textContent = pending.user_code;
+        updateXboxLoginExpiry(pending.expires_at);
         startXboxLoginPolling();
     } else {
         stopXboxLoginPolling();
     }
 }
 
+async function copyXboxLoginCode() {
+    const code = document.getElementById('xbox-login-code')?.textContent || '';
+    const button = document.getElementById('xbox-login-copy-btn');
+    if (!code || !button) return;
+    const library = state.translations.gui?.settings?.library || {};
+    const original = library.xbox_login_copy || 'Copy';
+    try {
+        await navigator.clipboard.writeText(code);
+        button.textContent = library.xbox_login_copied || 'Copied';
+    } catch (error) {
+        // clipboard access needs a secure context; fall back to selecting the code
+        // so a manual copy still works over plain http
+        const node = document.getElementById('xbox-login-code');
+        const range = document.createRange();
+        range.selectNodeContents(node);
+        const selection = window.getSelection();
+        selection.removeAllRanges();
+        selection.addRange(range);
+        button.textContent = library.xbox_login_copy_manual || 'Press Ctrl+C';
+    }
+    setTimeout(() => { button.textContent = original; }, 2000);
+}
+
+function updateXboxLoginExpiry(expiresAt) {
+    const label = document.getElementById('xbox-login-expiry');
+    if (!label) return;
+    const library = state.translations.gui?.settings?.library || {};
+    const secondsLeft = Math.round((new Date(expiresAt).getTime() - Date.now()) / 1000);
+    if (!Number.isFinite(secondsLeft) || secondsLeft <= 0) {
+        label.textContent = '';
+        return;
+    }
+    const template = library.xbox_login_expires_in || 'expires in {minutes} min';
+    label.textContent = template.replace('{minutes}', String(Math.max(1, Math.ceil(secondsLeft / 60))));
+}
+
+// Also used by the "New code" button: the endpoint always mints a fresh code and
+// cancels the previous poll, so requesting one again is the regenerate path too.
 async function startXboxLogin() {
     const loginBtn = document.getElementById('xbox-login-btn');
+    const regenBtn = document.getElementById('xbox-login-regen-btn');
     if (loginBtn) loginBtn.disabled = true;
+    if (regenBtn) regenBtn.disabled = true;
     try {
         const response = await fetch('/api/library/xbox/login', { method: 'POST' });
         const data = await response.json();
@@ -2330,6 +2383,8 @@ async function startXboxLogin() {
     } catch (error) {
         console.error('Failed to start Xbox sign-in:', error);
         if (loginBtn) loginBtn.disabled = false;
+    } finally {
+        if (regenBtn) regenBtn.disabled = false;
     }
 }
 
@@ -3181,6 +3236,8 @@ function applyTranslations(t) {
             setLibraryText('xbox-logout-btn', library.xbox_disconnect);
             setLibraryText('xbox-account-hint', library.xbox_account_hint);
             setLibraryText('xbox-login-instructions', library.xbox_login_instructions);
+            setLibraryText('xbox-login-regen-btn', library.xbox_login_regen);
+            setLibraryText('xbox-login-copy-btn', library.xbox_login_copy);
             setLibraryText('xbox-catalogs-label', library.xbox_catalogs);
             setLibraryText('xbox-catalogs-hint', library.xbox_catalogs_hint);
             setLibraryText('xbox-gamepass-pc-text', library.xbox_gamepass_pc);
@@ -3748,6 +3805,8 @@ document.addEventListener('DOMContentLoaded', () => {
     });
     document.getElementById('xbox-market').addEventListener('change', saveSettings);
     document.getElementById('xbox-login-btn').addEventListener('click', startXboxLogin);
+    document.getElementById('xbox-login-regen-btn').addEventListener('click', startXboxLogin);
+    document.getElementById('xbox-login-copy-btn').addEventListener('click', copyXboxLoginCode);
     document.getElementById('xbox-logout-btn').addEventListener('click', xboxSignOut);
     document.getElementById('library-mode-blacklist').addEventListener('change', onLibraryModeChange);
     document.getElementById('library-mode-whitelist').addEventListener('change', onLibraryModeChange);
