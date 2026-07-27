@@ -1,3 +1,40 @@
+# Release Notes - v1.9.1
+
+A fix release for the Xbox account sign-in from v1.9.0. The device code itself was fine, but you had
+to type it into Microsoft's page - and those codes are full of look-alike characters (5/S, 6/G, 0/O,
+8/B), so the first attempt often came back as *"that code is not correct"* while a second attempt
+worked. The link now carries the code so there is nothing to type, and when a sign-in does fail it
+finally says why instead of silently doing nothing.
+
+### 🐛 Bug Fixes
+- **The Sign-In Code No Longer Has To Be Typed**: The Xbox card's link now opens Microsoft's page
+  with the code already filled in - open it, approve, done. Mistyping a look-alike character was the
+  most likely reason a valid code got rejected.
+- **Failed Sign-Ins Are No Longer Silent**: A declined, expired or failed approval now shows the
+  reason on the Xbox card and in the log. Previously the code just sat there until it expired, which
+  made a code that was never approved indistinguishable from a broken one.
+- **Polling No Longer Gives Up Early**: Microsoft's `slow_down` response (a request to poll less
+  often) was treated as a fatal error, killing the sign-in mid-approval; it now widens the polling
+  interval and carries on. The standard `access_denied` response is also handled properly.
+- **Disconnecting Takes Effect Immediately**: Disconnecting the Microsoft account now also drops the
+  Xbox library from the cache, so games that came from the account stop counting towards the auto
+  tracklist right away instead of lingering until the cache expired. Enabled subscription catalogs
+  come back on the next sync (or straight away via Sync Now); other providers' caches are untouched.
+- **A Damaged `xbox_auth.json` No Longer Blocks Startup**: A truncated or hand-edited auth file threw
+  during startup. It's now ignored with a warning and the account simply shows as disconnected.
+
+### ✨ Improvements
+- **New Code Button**: The sign-in prompt has a "New code" button and shows how long the current code
+  is valid for. Previously the Connect button was disabled while a code was outstanding, so a stale
+  code locked you out for a full 15 minutes.
+- **Copy Button**: The code can be copied in one click, with a select-the-text fallback for instances
+  served over plain HTTP where the clipboard API is unavailable.
+
+### 🔧 Under the Hood
+- The device-code client id was already corrected during v1.9.0 development; the constant now records
+  why that specific id is required (several Microsoft client ids mint a code but then dead-end at the
+  consent step, reported to the user as an incorrect code) and lists verified alternatives.
+
 # Release Notes - v1.9.0
 
 This release adds Xbox / Microsoft Store as a third game library source - including the option to
