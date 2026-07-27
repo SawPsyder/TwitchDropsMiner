@@ -56,6 +56,39 @@ class TestSettingsAPI(unittest.IsolatedAsyncioTestCase):
         manager.update_settings({"games_to_watch": games})
         mock_callback.assert_called_once()
 
+    async def test_inventory_filters_search_text_sanitization(self):
+        mock_broadcaster = MagicMock(spec=WebSocketBroadcaster)
+        mock_settings = MagicMock(spec=Settings)
+        mock_settings.inventory_filters = {"search_text": "", "show_active": True}
+        mock_console = MagicMock()
+        mock_callback = MagicMock()
+
+        manager = SettingsManager(
+            mock_broadcaster, mock_settings, mock_console, on_change=mock_callback
+        )
+
+        # Free-text search is stored trimmed, and never restarts the mining loop
+        manager.update_settings(
+            {"inventory_filters": {"search_text": "  rust  ", "show_active": True}}
+        )
+        self.assertEqual(
+            mock_settings.inventory_filters, {"search_text": "rust", "show_active": True}
+        )
+        mock_callback.assert_not_called()
+
+        # A cached older frontend still posts the removed game multi-select's list of
+        # names - that must never be persisted as a list
+        manager.update_settings(
+            {"inventory_filters": {"search_text": ["Rust", "Dota 2"], "show_active": True}}
+        )
+        self.assertEqual(
+            mock_settings.inventory_filters, {"search_text": "", "show_active": True}
+        )
+
+        # Payloads without the key at all are left alone rather than gaining a blank search
+        manager.update_settings({"inventory_filters": {"show_active": False}})
+        self.assertEqual(mock_settings.inventory_filters, {"show_active": False})
+
     async def test_set_favorite_drop_toggle(self):
         mock_broadcaster = MagicMock(spec=WebSocketBroadcaster)
         mock_settings = MagicMock(spec=Settings)

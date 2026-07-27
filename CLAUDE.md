@@ -81,7 +81,8 @@ docker-compose up -d   # http://localhost:8080, data persisted to ./data
 - `library_sync/` - external game library sync: `LibraryProvider` ABC + `SteamProvider` (Steam Web
   API) + `UbisoftProvider` (unofficial ubiservices API + Uplay GraphQL; authenticates via a
   browser-copied `rememberMeTicket` - Ubisoft disabled password Basic-auth logins ~April 2026 -
-  rotated tickets persist in `DATA_DIR/ubisoft_auth.json`; no last-played data), `LibrarySyncService`
+  rotated tickets persist in `DATA_DIR/ubisoft_auth.json`; no last-played data) + `XboxProvider`
+  (`xbox.py` + `xbox_auth.py`, see below), `LibrarySyncService`
   builds a runtime auto watch list of owned games with active campaigns (blacklist/whitelist modes,
   ordered by last played, ~12h cache in `DATA_DIR/library_cache.json`)
 - `web/` - FastAPI app (`app.py`) + `WebGUIManager` (`gui_manager.py`) composing per-concern managers
@@ -112,7 +113,8 @@ watch events are POSTed to the Spade endpoint instead).
 `Twitch.sync_game_libraries()` runs during `GAMES_UPDATE` (and on `POST /api/library/sync`): it
 fetches owned games from enabled providers (Steam - needs a Steam Web API key and
 SteamID64/vanity name, game details set to public; Ubisoft Connect - needs a `rememberMeTicket`
-copied from the browser after logging in at connect.ubisoft.com, which also covers 2FA accounts),
+copied from the browser after logging in at connect.ubisoft.com, which also covers 2FA accounts;
+Xbox/Microsoft Store - see below),
 matches them against campaign games by
 normalized name, and filters through the blacklist/whitelist (`settings.library_sync.list_mode`).
 The result is the runtime `Twitch.auto_watch_games` list, ordered by the platform's last-played
@@ -126,7 +128,55 @@ tracked, shown in the channels panel, and mined once the higher tiers have nothi
 not just a display preview. Each queue entry is tagged with a `source` of
 `"manual"`, `"auto"`, or `"idle"` (shown as a badge in the web GUI's Wanted Drop Queue). Provider
 failures are logged but never break the mining loop. New platforms subclass `LibraryProvider` and
-get registered in `LibrarySyncService._providers`.
+get registered in `LibrarySyncService._providers`. A provider with a connection model that doesn't
+fit "paste a credential into the settings" can report it to the web GUI by overriding
+`LibraryProvider.status_extra()`, which `get_status()` merges into that provider's entry.
+
+#### Xbox / Microsoft Store (`xbox.py`, `xbox_auth.py`)
+
+Five independent sources, each separately toggleable in `settings.library_sync.xbox`:
+
+- **Account library** (needs a connected Microsoft account): `titlehub` title history (the only
+  source with real last-played timestamps) plus purchase entitlements from `inventory.xboxlive.com`,
+  whose title ids are resolved to names through titlehub's batch endpoint.
+- **Subscription catalogs** (`include_gamepass_pc`, `include_gamepass_console`, `include_ea_play`):
+  public `catalog.gamepass.com` sigls resolved to names via `displaycatalog.mp.microsoft.com`,
+  batched 20 bigIds per request. These need **no credentials at all**, so the provider counts as
+  configured with only a catalog enabled and no sign-in. Each catalog is hundreds of titles and
+  carries no play history, so those games sort into the deadline-ordered tail like any other
+  not-recently-played game (no separate tier or `source` badge).
+
+`settings.library_sync.xbox.market` picks the store region for the catalogs. Only the 86 regions in
+`XBOX_MARKETS` are valid - determined by probing every ISO 3166-1 alpha-2 code against the PC Game
+Pass catalog, which either serves a full catalogue (449-526 titles) or nothing at all, so an
+unsupported region would silently sync zero games. The web GUI renders it as a dropdown fed by
+`GET /api/library/xbox/markets` (same pattern as `/api/languages`), and both `XboxProvider.market`
+and the settings sanitizer fall back to `DEFAULT_MARKET` for anything outside the set.
+
+Because switching region or a catalogue toggle changes the result set without changing the clock,
+`LibraryProvider.fetch_fingerprint()` (overridden by `XboxProvider` with market + enabled catalogs +
+signed-in state) is cached next to `last_sync`; `LibrarySyncService.sync()` refetches as soon as it
+differs, so those settings take effect immediately instead of after the 12h cache expiry. A cache
+file written before fingerprinting existed has no entry, so the first sync after upgrading refetches
+once.
+
+`XboxAuth` (`xbox_auth.py`) owns the auth chain: MSA **device code** (login.live.com, same UX as the
+Twitch login) → Xbox user token (`user.auth.xboxlive.com`) → XSTS token (`xsts.auth.xboxlive.com`),
+using the public Xbox client id with the `MBI_SSL` scope. Only the rotating refresh token and the
+gamertag/XUID persist, in `DATA_DIR/xbox_auth.json`; XSTS tokens are cached in memory per relying
+party. **No Xbox credential is ever stored in `settings.json`**, which is why `xbox` needs no entry in
+`SettingsManager._LIBRARY_CREDENTIAL_KEYS`. Sign-in is driven from the settings page via
+`POST /api/library/xbox/login` (returns the code + URL, then polls Microsoft in a background task)
+and `POST /api/library/xbox/logout`; the frontend watches `/api/library/status` until the account
+flips to signed in. A rejected refresh token signs the account out rather than retrying forever.
+Any single source failing is logged and skipped - only an all-sources failure raises.
+
+Microsoft product titles carry platform/edition qualifiers that no Twitch category has
+("… - PC", "… - Windows", "… (Game Preview)", "Minecraft: Windows 10 Edition"), so
+`XboxProvider.clean_product_title()` trims them off an allowlist of known qualifiers before
+matching. Relatedly, `normalize_game_name()` strips ™/®/© *before* its NFKD pass, because NFKD
+decomposes ™ into the letters "TM" - the Microsoft catalog is full of ™ and would otherwise never
+match.
 
 `StreamSelector.get_unlinked_auto_tracked_tree()` surfaces manually-watched and auto-tracked games
 that have at least one campaign whose account isn't linked yet - manual games first, then

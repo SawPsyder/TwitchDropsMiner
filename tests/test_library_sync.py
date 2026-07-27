@@ -29,6 +29,13 @@ def make_library_settings(**overrides):
             "enabled": False,
             "remember_me_ticket": "",
         },
+        "xbox": {
+            "enabled": False,
+            "include_gamepass_pc": False,
+            "include_gamepass_console": False,
+            "include_ea_play": False,
+            "market": "US",
+        },
     }
     settings.update(overrides)
     return settings
@@ -56,6 +63,17 @@ class TestNormalizeGameName(unittest.TestCase):
             normalize_game_name("Tom Clancy's Rainbow Six® Siege"),
             normalize_game_name("Tom Clancy's Rainbow Six Siege"),
         )
+
+    def test_tm_sign_ignored(self):
+        # NFKD decomposes ™ into the letters "TM", so it has to be stripped before
+        # the unicode normalization or "MySims™" never matches "MySims"
+        for name in ("MySims™", "EA SPORTS FC™ 26", "A Game About Digging A Hole™"):
+            self.assertEqual(
+                normalize_game_name(name),
+                normalize_game_name(name.replace("™", "")),
+                name,
+            )
+        self.assertEqual(normalize_game_name("MySims™"), "mysims")
 
     def test_punctuation_and_spacing_ignored(self):
         self.assertEqual(
@@ -530,6 +548,9 @@ class TestLibrarySyncServiceSync(unittest.IsolatedAsyncioTestCase):
         service, provider = self.make_service_with_mock_provider(settings)
         service._provider_cache("steam")["last_sync"] = datetime.now(timezone.utc)
         service._provider_cache("steam")["games"] = []
+        # a real previous sync also records the fetch fingerprint; without it the
+        # cache counts as invalidated and would be refetched (see fetch_fingerprint)
+        service._provider_cache("steam")["fingerprint"] = str(provider.fetch_fingerprint())
 
         results = await service.sync()
         self.assertFalse(results["steam"]["synced"])

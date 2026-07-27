@@ -173,15 +173,12 @@
                         </label>
                     </div>
                     <div class="filter-search">
-                        <div class="game-dropdown-container">
-                            <div class="game-tags-display" id="selected-game-tags">
-                                <!-- Selected game tags will appear here -->
-                            </div>
-                            <input type="text" id="inventory-game-search" placeholder="Type to search games..."
-                                autocomplete="off" />
-                            <div class="game-dropdown-list" id="game-dropdown-list">
-                                <!-- Dropdown options will appear here -->
-                            </div>
+                        <div class="inventory-search-container">
+                            <input type="search" id="inventory-search" autocomplete="off"
+                                placeholder="Search games, campaigns or drops..."
+                                aria-label="Search games, campaigns or drops" />
+                            <button type="button" id="inventory-search-clear" class="inventory-search-clear"
+                                aria-label="Clear search" title="Clear search" hidden>×</button>
                         </div>
                         <button id="clear-filters-btn" class="small-btn">Clear Filters</button>
                         <div class="segmented-control inventory-view-mode-control" id="inventory-view-mode-control"
@@ -442,6 +439,73 @@
                                             target="_blank" rel="noopener">Ubisoft login page</a> with "Remember me"
                                         checked (2FA works fine), then press F12 → Application → Local Storage →
                                         connect.ubisoft.com and paste the <code>PRODrememberMe</code> value here.</small>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="library-provider-card">
+                            <div class="provider-card-header">
+                                <div class="provider-identity">
+                                    <span class="provider-logo xbox" aria-hidden="true">
+                                        <svg viewBox="0 0 24 24" width="28" height="28" fill="currentColor">
+                                            <path d="M4.102 21.033A11.947 11.947 0 0 0 12 24a11.96 11.96 0 0 0 7.902-2.967c1.877-1.912-4.316-8.709-7.902-11.417-3.582 2.708-9.779 9.505-7.898 11.417zm11.16-14.406c2.5 2.961 7.484 10.313 6.076 12.912A11.942 11.942 0 0 0 24 12.004a11.95 11.95 0 0 0-3.57-8.536s-.027-.022-.082-.042a.784.784 0 0 0-.281-.05c-.313 0-.855.156-1.75.62-1.293.669-2.567 1.679-3.055 2.631zM3.654 3.44a11.955 11.955 0 0 0-1.24 14.799c-.093-.164-.135-.356-.135-.591 0-1.234 1.161-3.51 3.093-6.093 1.128-1.51 2.344-2.874 3.223-3.797-.488-.952-1.762-1.962-3.055-2.63-.895-.465-1.437-.62-1.75-.62a.786.786 0 0 0-.281.05c-.055.02-.082.042-.082.042.093-.099.19-.196.288-.293l-.061.133zM12 5.494S9.185 3.87 7.038 3.8c-.813-.027-1.32.213-1.516.334A11.946 11.946 0 0 1 12 0c2.457 0 4.734.738 6.633 2.004a1.9 1.9 0 0 0-.176-.006c-.192 0-.463.026-.807.104C16.264 2.44 12 5.494 12 5.494z"/>
+                                        </svg>
+                                    </span>
+                                    <div>
+                                        <h3 id="library-xbox-header">Xbox / Microsoft Store</h3>
+                                        <div id="xbox-status-line" class="provider-status">Not configured</div>
+                                    </div>
+                                </div>
+                                <label class="toggle-switch" title="Enable Xbox / Microsoft Store">
+                                    <input type="checkbox" id="xbox-sync-enabled">
+                                    <span class="toggle-slider"></span>
+                                </label>
+                            </div>
+                            <div class="provider-card-body">
+                                <div class="library-field">
+                                    <div class="xbox-account-row">
+                                        <button id="xbox-login-btn" class="small-btn">Connect Microsoft account</button>
+                                        <button id="xbox-logout-btn" class="small-btn" hidden>Disconnect</button>
+                                        <span id="xbox-account-label" class="xbox-account-label"></span>
+                                    </div>
+                                    <div id="xbox-login-prompt" class="xbox-login-prompt" hidden>
+                                        <span id="xbox-login-instructions">Open the link and enter this code:</span>
+                                        <a id="xbox-login-link" class="xbox-login-link" target="_blank"
+                                            rel="noopener">microsoft.com/link</a>
+                                        <code id="xbox-login-code" class="xbox-login-code"></code>
+                                    </div>
+                                    <small id="xbox-account-hint" class="help-text-inline">Sign in to sync the games
+                                        you've played and bought. Not needed for the subscription catalogs
+                                        below.</small>
+                                </div>
+                                <div class="library-field">
+                                    <span class="library-field-label" id="xbox-catalogs-label">Also include games
+                                        available through</span>
+                                    <div class="xbox-catalog-toggles">
+                                        <label class="filter-checkbox">
+                                            <input type="checkbox" id="xbox-gamepass-pc">
+                                            <span id="xbox-gamepass-pc-text">PC Game Pass</span>
+                                        </label>
+                                        <label class="filter-checkbox">
+                                            <input type="checkbox" id="xbox-gamepass-console">
+                                            <span id="xbox-gamepass-console-text">Console Game Pass</span>
+                                        </label>
+                                        <label class="filter-checkbox">
+                                            <input type="checkbox" id="xbox-ea-play">
+                                            <span id="xbox-ea-play-text">EA Play</span>
+                                        </label>
+                                    </div>
+                                    <small id="xbox-catalogs-hint" class="help-text-inline">Each catalog adds every
+                                        game currently included with that subscription (hundreds of titles), so
+                                        consider whitelist mode when using these.</small>
+                                </div>
+                                <div class="library-field">
+                                    <label for="xbox-market" id="xbox-market-label">Store region</label>
+                                    <select id="xbox-market" class="xbox-market-select">
+                                        <!-- populated from /api/library/xbox/markets -->
+                                    </select>
+                                    <small id="xbox-market-hint" class="help-text-inline">Only regions the
+                                        subscription catalogs are served in are listed.</small>
                                 </div>
                             </div>
                         </div>

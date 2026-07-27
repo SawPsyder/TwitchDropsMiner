@@ -44,6 +44,7 @@ from .paths import (
     NOTIFICATIONS_STATE_PATH,
     SETTINGS_PATH,
     UBISOFT_AUTH_PATH,
+    XBOX_AUTH_PATH,
     _merge_vars,
 )
 
@@ -84,6 +85,7 @@ __all__ = [
     "SETTINGS_PATH",
     "LIBRARY_CACHE_PATH",
     "UBISOFT_AUTH_PATH",
+    "XBOX_AUTH_PATH",
     "NOTIFICATIONS_STATE_PATH",
     "CLAIMED_DROPS_PATH",
     "_merge_vars",

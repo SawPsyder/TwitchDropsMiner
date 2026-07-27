@@ -20,6 +20,17 @@ class UbisoftLibrarySettings(TypedDict):
     remember_me_ticket: str
 
 
+class XboxLibrarySettings(TypedDict):
+    enabled: bool
+    # the Microsoft account itself is connected via a device-code sign-in and lives
+    # in DATA_DIR/xbox_auth.json - no Xbox credential is ever stored in the settings
+    include_gamepass_pc: bool
+    include_gamepass_console: bool
+    include_ea_play: bool
+    # store region for the subscription catalogs (they differ slightly per market)
+    market: str
+
+
 class LibrarySyncSettings(TypedDict):
     enabled: bool
     list_mode: str  # "blacklist" | "whitelist"
@@ -27,6 +38,7 @@ class LibrarySyncSettings(TypedDict):
     whitelist: list[str]
     steam: SteamLibrarySettings
     ubisoft: UbisoftLibrarySettings
+    xbox: XboxLibrarySettings
 
 
 class NotificationEventSettings(TypedDict):
@@ -62,7 +74,9 @@ class IdleBehaviorSettings(TypedDict):
 
 
 class InventoryFilters(TypedDict):
-    game_name_search: list[str]
+    # free-text inventory search (game / campaign / drop / benefit names); replaced the
+    # former game multi-select, whose list value merge_json coerces back to the default
+    search_text: str
     show_active: bool
     show_benefit_badge: bool
     show_benefit_emote: bool
@@ -89,7 +103,7 @@ default_settings = {
     },
     "language": DEFAULT_LANG,
     "inventory_filters": {
-        "game_name_search": [],
+        "search_text": "",
         "show_active": False,
         "show_benefit_badge": True,
         "show_benefit_emote": True,
@@ -113,6 +127,13 @@ default_settings = {
         "ubisoft": {
             "enabled": False,
             "remember_me_ticket": "",
+        },
+        "xbox": {
+            "enabled": False,
+            "include_gamepass_pc": False,
+            "include_gamepass_console": False,
+            "include_ea_play": False,
+            "market": "US",
         },
     },
     "minimum_refresh_interval_minutes": 30,

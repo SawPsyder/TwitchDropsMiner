@@ -25,6 +25,7 @@ from src.config import LIBRARY_CACHE_PATH
 from src.library_sync.base import LibraryProvider, LibrarySyncError, OwnedGame, normalize_game_name
 from src.library_sync.steam import SteamProvider
 from src.library_sync.ubisoft import UbisoftProvider
+from src.library_sync.xbox import XboxProvider
 from src.utils import json_load, json_save
 
 
@@ -58,6 +59,7 @@ class LibrarySyncService:
         self._providers: list[LibraryProvider] = [
             SteamProvider(settings),
             UbisoftProvider(settings),
+            XboxProvider(settings),
         ]
         self._cache: dict[str, Any] = json_load(cache_path, {"providers": {}}, merge=False)
         self._last_errors: dict[str, str] = {}
@@ -132,6 +134,12 @@ class LibrarySyncService:
                         continue
                     provider_cache = self._provider_cache(provider.name)
                     last_sync = self._last_sync(provider.name)
+                    # a changed fetch fingerprint (e.g. a different store region)
+                    # invalidates the cache regardless of how fresh it is; str()
+                    # because it gets persisted to the cache file as JSON
+                    fingerprint = str(provider.fetch_fingerprint())
+                    if fingerprint != str(provider_cache.get("fingerprint", "")):
+                        last_sync = None
                     if not force and last_sync is not None and now - last_sync < self.SYNC_INTERVAL:
                         results[provider.name] = {
                             "synced": False,
@@ -156,6 +164,7 @@ class LibrarySyncService:
                         for game in owned
                     ]
                     provider_cache["last_sync"] = now
+                    provider_cache["fingerprint"] = fingerprint
                     results[provider.name] = {
                         "synced": True,
                         "game_count": len(owned),
@@ -187,6 +196,13 @@ class LibrarySyncService:
                 entry["last_played"] = max(entry["last_played"], game.last_played)
         return sorted(merged.values(), key=lambda entry: str(entry["name"]).casefold())
 
+    def get_provider(self, name: str) -> LibraryProvider | None:
+        """Look up a registered provider by its name (settings key)."""
+        for provider in self._providers:
+            if provider.name == name:
+                return provider
+        return None
+
     def get_status(self) -> dict[str, Any]:
         """Current sync status for display in the web GUI."""
         providers: dict[str, Any] = {}
@@ -198,6 +214,7 @@ class LibrarySyncService:
                 "last_sync": last_sync.isoformat() if last_sync is not None else None,
                 "game_count": len(self._provider_cache(provider.name).get("games", [])),
                 "last_error": self._last_errors.get(provider.name),
+                **provider.status_extra(),
             }
         return {
             "enabled": self.enabled,

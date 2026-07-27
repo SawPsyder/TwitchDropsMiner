@@ -744,66 +744,16 @@ body.reduce-motion .progress-fill::after {
     height: 42px;
 }
 
-.game-dropdown-container {
+.inventory-search-container {
     position: relative;
-    margin-top:auto;
+    margin-top: auto;
     flex: 1;
     min-width: 0;
 }
 
-.game-tags-display {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 6px;
-    margin-bottom: 8px;
-    min-height: 0;
-}
-
-.game-tag {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    padding: 4px 8px;
-    background: var(--accent-color);
-    color: white;
-    border-radius: 6px;
-    font-size: 13px;
-    transition: all 0.2s;
-}
-
-.game-tag:hover {
-    background: #7d39e0;
-}
-
-.game-tag-name {
-    line-height: 1.2;
-}
-
-.game-tag-remove {
-    background: none;
-    border: none;
-    color: white;
-    font-size: 18px;
-    line-height: 1;
-    cursor: pointer;
-    padding: 0;
-    margin: 0;
-    width: 16px;
-    height: 16px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    border-radius: 6px;
-    transition: background 0.2s;
-}
-
-.game-tag-remove:hover {
-    background: rgba(255, 255, 255, 0.2);
-}
-
-#inventory-game-search {
+#inventory-search {
     width: 100%;
-    padding: 10px;
+    padding: 10px 36px 10px 10px;
     border: 1px solid var(--border-color);
     border-radius: 6px;
     background: var(--bg-secondary);
@@ -812,66 +762,44 @@ body.reduce-motion .progress-fill::after {
     height: 42px;
 }
 
-.game-dropdown-list {
-    position: absolute;
-    top: 100%;
-    left: 0;
-    right: 0;
-    max-height: 300px;
-    overflow-y: auto;
-    background: var(--bg-panel);
-    border: 1px solid var(--border-color);
-    border-radius: 6px;
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
-    z-index: 1000;
-    display: none;
-    margin-top: 4px;
+#inventory-search:focus {
+    outline: none;
+    border-color: var(--accent-color);
 }
 
-.dropdown-item {
+/* the native search clear affordance is inconsistent across browsers - we render our own */
+#inventory-search::-webkit-search-cancel-button {
+    display: none;
+}
+
+.inventory-search-clear {
+    position: absolute;
+    top: 50%;
+    right: 8px;
+    transform: translateY(-50%);
+    width: 24px;
+    height: 24px;
     display: flex;
     align-items: center;
-    gap: 10px;
-    padding: 10px 12px;
-    cursor: pointer;
-    transition: background 0.2s;
-    border-bottom: 1px solid var(--border-color);
-}
-
-.dropdown-item:last-child {
-    border-bottom: none;
-}
-
-.dropdown-item:hover,
-.dropdown-item.focused {
-    background: var(--bg-secondary);
-}
-
-.dropdown-item input[type="checkbox"] {
-    cursor: pointer;
-    width: 16px;
-    height: 16px;
-    margin: 0;
-}
-
-.dropdown-item label {
-    flex: 1;
-    cursor: pointer;
-    user-select: none;
-    font-size: 14px;
-    color: var(--text-primary);
-    margin: 0;
-}
-
-.dropdown-item.no-results {
-    color: var(--text-secondary);
-    cursor: default;
-    text-align: center;
-    font-style: italic;
-}
-
-.dropdown-item.no-results:hover {
+    justify-content: center;
+    padding: 0;
+    border: none;
+    border-radius: 6px;
     background: none;
+    color: var(--text-secondary);
+    font-size: 18px;
+    line-height: 1;
+    cursor: pointer;
+    transition: background 0.2s, color 0.2s;
+}
+
+.inventory-search-clear[hidden] {
+    display: none;
+}
+
+.inventory-search-clear:hover {
+    background: var(--bg-secondary);
+    color: var(--text-primary);
 }
 
 /* Inventory Tree (Game > Campaign > Drop), sectioned by status */
@@ -1785,6 +1713,11 @@ body.reduce-motion .progress-fill::after {
     color: #f2f2f2;
 }
 
+.provider-logo.xbox {
+    background: linear-gradient(135deg, #0e7a0d 0%, #107c10 100%);
+    color: #ffffff;
+}
+
 .provider-status {
     font-size: 0.85em;
     color: var(--text-secondary);
@@ -1837,6 +1770,89 @@ body.reduce-motion .progress-fill::after {
 }
 
 .library-field input:focus {
+    outline: none;
+    border-color: var(--accent-color);
+}
+
+/* Xbox provider card: device-code sign-in row and the per-catalog toggles.
+   The account is connected via OAuth rather than a pasted credential, so this
+   card shows buttons and a code prompt where the others show text inputs. */
+.library-field-label {
+    font-size: 0.85em;
+    font-weight: 600;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+
+.xbox-account-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+}
+
+.xbox-account-label {
+    font-size: 0.85em;
+    color: var(--text-secondary);
+}
+
+.xbox-account-label.status-ok {
+    color: var(--success-color);
+}
+
+.xbox-login-prompt {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+    padding: 10px 12px;
+    border: 1px solid var(--accent-color);
+    border-radius: 6px;
+    background: rgba(145, 70, 255, 0.08);
+    font-size: 0.9em;
+}
+
+.xbox-login-prompt[hidden] {
+    display: none;
+}
+
+.xbox-login-link {
+    color: var(--accent-color);
+    font-weight: 600;
+}
+
+.xbox-login-code {
+    padding: 4px 10px;
+    border-radius: 4px;
+    background: var(--bg-secondary);
+    color: var(--text-primary);
+    font-family: monospace;
+    font-size: 1.15em;
+    letter-spacing: 0.18em;
+    user-select: all;
+}
+
+.xbox-catalog-toggles {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+}
+
+.xbox-market-select {
+    width: 100%;
+    max-width: 280px;
+    padding: 9px 12px;
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    background: var(--bg-panel);
+    color: var(--text-primary);
+    font-size: 14px;
+    cursor: pointer;
+    transition: border-color 0.15s ease;
+}
+
+.xbox-market-select:focus {
     outline: none;
     border-color: var(--accent-color);
 }

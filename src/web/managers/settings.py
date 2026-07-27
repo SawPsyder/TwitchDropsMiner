@@ -7,7 +7,7 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 from src.i18n.translator import _
-from src.library_sync import LIST_MODES
+from src.library_sync import DEFAULT_MARKET, LIST_MODES, XBOX_MARKET_CODES
 from src.models.game import Game
 from src.utils import merge_json
 
@@ -139,9 +139,11 @@ class SettingsManager:
             "minimum_refresh_interval_minutes",
             settings_data.get("minimum_refresh_interval_minutes"),
         )
-        should_trigger_update |= self.check_and_update_setting(
-            "inventory_filters", settings_data.get("inventory_filters")
-        )
+        if settings_data.get("inventory_filters") is not None:
+            should_trigger_update |= self.check_and_update_setting(
+                "inventory_filters",
+                self._sanitize_inventory_filters(settings_data["inventory_filters"]),
+            )
         should_trigger_update |= self.check_and_update_setting(
             "mining_benefits", settings_data.get("mining_benefits"), True
         )
@@ -210,6 +212,19 @@ class SettingsManager:
         sanitized["mine_all_when_idle"] = bool(sanitized["mine_all_when_idle"])
         return sanitized
 
+    def _sanitize_inventory_filters(self, value: dict[str, Any]) -> dict[str, Any]:
+        """Coerce an incoming inventory_filters object into the expected value shapes.
+
+        `search_text` holds the inventory's free-text search; a cached older frontend
+        still sends the replaced game multi-select's list of names there, and that must
+        never be persisted as a list (Settings.load would then reset it anyway).
+        """
+        sanitized: dict[str, Any] = dict(value)
+        if "search_text" in sanitized:
+            search_text = sanitized["search_text"]
+            sanitized["search_text"] = search_text.strip() if isinstance(search_text, str) else ""
+        return sanitized
+
     def _sanitize_library_sync(self, value: dict[str, Any]) -> dict[str, Any]:
         """Validate an incoming library_sync settings object against the current one.
 
@@ -225,6 +240,38 @@ class SettingsManager:
             sanitized[list_key] = [
                 str(name).strip() for name in sanitized[list_key] if str(name).strip()
             ]
+        # .get: settings files written before the Xbox provider existed have no
+        # xbox block until Settings.load merges the defaults back in
+        sanitized["xbox"] = self._sanitize_xbox(
+            sanitized.get("xbox") or {}, current.get("xbox") or {}
+        )
+        return sanitized
+
+    @classmethod
+    def _sanitize_xbox(
+        cls, value: dict[str, Any], current: dict[str, Any]
+    ) -> dict[str, Any]:
+        """
+        Normalize the Xbox provider settings.
+
+        The Microsoft account is connected through a device-code sign-in rather
+        than a pasted credential, so there's nothing secret in here - only the
+        per-catalog toggles and the store region.
+        """
+        sanitized = dict(value)
+        for toggle in (
+            "enabled",
+            "include_gamepass_pc",
+            "include_gamepass_console",
+            "include_ea_play",
+        ):
+            sanitized[toggle] = bool(sanitized.get(toggle, False))
+        # only regions the catalogs are actually served in - an unsupported one
+        # would sync zero games with no error to show for it
+        market = str(sanitized.get("market") or "").strip().upper()
+        if market not in XBOX_MARKET_CODES:
+            market = str(current.get("market") or "").strip().upper()
+        sanitized["market"] = market if market in XBOX_MARKET_CODES else DEFAULT_MARKET
         return sanitized
 
     # per-provider settings keys that hold credentials rather than automation config

@@ -48,9 +48,14 @@ def normalize_game_name(name: str) -> str:
 
     Platform catalogs (Steam) and Twitch categories often differ in trademark
     symbols, punctuation, casing and unicode variants of the same title.
+
+    The trademark symbols have to go *before* the unicode normalization: NFKD
+    decomposes U+2122 (™) into the letters "TM", so normalizing first would turn
+    "MySims™" into "mysims tm" and stop it ever matching Twitch's "MySims". The
+    Microsoft Store catalog is full of ™, which is how this surfaced.
     """
-    name = unicodedata.normalize("NFKD", name)
     name = _TRADEMARK_CHARS.sub("", name)
+    name = unicodedata.normalize("NFKD", name)
     name = name.casefold()
     name = _NON_ALNUM.sub(" ", name)
     return " ".join(name.split())
@@ -81,6 +86,29 @@ class LibraryProvider(ABC):
     def is_configured(self) -> bool:
         """Whether the provider has all the configuration it needs to fetch."""
         raise NotImplementedError
+
+    def fetch_fingerprint(self) -> str:
+        """
+        Identity of the settings that determine *what* this provider fetches.
+
+        LibrarySyncService caches it next to the last sync time and refetches as
+        soon as it changes, so switching a store region or toggling a catalogue
+        takes effect immediately instead of after the next cache expiry. Only
+        include settings that change the result set - never credentials, which
+        are persisted to the cache file.
+        """
+        return ""
+
+    def status_extra(self) -> dict[str, Any]:
+        """
+        Extra provider-specific status for the web GUI.
+
+        Merged into this provider's entry by LibrarySyncService.get_status, so a
+        provider with its own connection model (an OAuth sign-in rather than a
+        pasted credential) can report it without the service knowing about it.
+        Must never include credentials.
+        """
+        return {}
 
     def _sensitive_values(self) -> tuple[str, ...]:
         """Credential values that must never appear in error messages/logs."""

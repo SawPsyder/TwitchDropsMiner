@@ -5,6 +5,7 @@ import logging
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+import aiohttp
 import socketio
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -12,6 +13,7 @@ from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
+from src.library_sync import DEFAULT_MARKET, XBOX_MARKETS, LibrarySyncError, XboxProvider
 from src.notifications import DiscordProvider, NotificationError
 
 
@@ -351,6 +353,51 @@ async def get_library_games():
         raise HTTPException(status_code=503, detail="Twitch client not initialized")
 
     return {"games": twitch_client.library_sync.get_owned_games_summary()}
+
+
+def _get_xbox_provider() -> XboxProvider:
+    """The registered Xbox provider, or a 503/404 if it isn't available."""
+    if not twitch_client:
+        raise HTTPException(status_code=503, detail="Twitch client not initialized")
+    provider = twitch_client.library_sync.get_provider(XboxProvider.name)
+    if not isinstance(provider, XboxProvider):
+        raise HTTPException(status_code=404, detail="Xbox library provider is not registered")
+    return provider
+
+
+@app.get("/api/library/xbox/markets")
+async def get_xbox_markets():
+    """Store regions the Xbox subscription catalogs are served in, in display order."""
+    return {
+        "markets": [{"code": code, "name": name} for code, name in XBOX_MARKETS],
+        "default": DEFAULT_MARKET,
+    }
+
+
+@app.post("/api/library/xbox/login")
+async def start_xbox_login():
+    """
+    Begin the Microsoft account device-code sign-in for the Xbox provider.
+
+    Returns the code and URL the user has to approve; approval is then polled in
+    the background, so the frontend just watches /api/library/status.
+    """
+    provider = _get_xbox_provider()
+    timeout = aiohttp.ClientTimeout(total=30)
+    try:
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            prompt = await provider.start_login(session)
+    except LibrarySyncError as exc:
+        return {"success": False, "message": str(exc), "login": provider.login_state()}
+    return {"success": True, "prompt": prompt.as_dict(), "login": provider.login_state()}
+
+
+@app.post("/api/library/xbox/logout")
+async def xbox_logout():
+    """Disconnect the Microsoft account (drops the stored refresh token)."""
+    provider = _get_xbox_provider()
+    provider.sign_out()
+    return {"success": True, "login": provider.login_state()}
 
 
 @app.post("/api/library/sync")

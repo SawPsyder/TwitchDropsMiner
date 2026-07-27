@@ -932,14 +932,14 @@ function updateDrop(campaignId, dropData) {
 // ==================== Inventory Filtering ====================
 
 function getInventoryFilters() {
-    // Get filter state from UI checkboxes and selected games array
+    // Get filter state from UI checkboxes and the free-text search box
     return {
         show_active: document.getElementById('filter-active')?.checked || false,
         show_not_linked: document.getElementById('filter-not-linked')?.checked || false,
         show_expired: document.getElementById('filter-expired')?.checked || false,
         show_finished: document.getElementById('filter-finished')?.checked || false,
         show_favorites: document.getElementById('filter-favorites')?.checked || false,
-        game_name_search: [...selectedInventoryGames],  // Array of selected game names
+        search_text: document.getElementById('inventory-search')?.value || '',
         // Benefit type filters (default to true if checkbox doesn't exist)
         show_benefit_item: document.getElementById('filter-benefit-item')?.checked !== false,
         show_benefit_badge: document.getElementById('filter-benefit-badge')?.checked !== false,
@@ -1032,9 +1032,26 @@ function dropMatchesBenefitFilter(drop, filters) {
     return drop.benefits.some(benefit => filters[`show_benefit_${benefitTypeFilterKey(benefit.type)}`]);
 }
 
-function campaignMatchesGameFilter(campaign, filters) {
-    if (!filters.game_name_search || filters.game_name_search.length === 0) return true;
-    return filters.game_name_search.includes(campaign.game_name);
+// Everything the free-text search looks at for one campaign: the game, the campaign
+// itself, and every drop/benefit it grants - so searching for a reward name ("emote",
+// a skin, a currency pack) surfaces the campaign handing it out, not just game names.
+function campaignSearchText(campaign) {
+    const parts = [campaign.game_name, campaign.name];
+    (campaign.drops || []).forEach(drop => {
+        parts.push(drop.name);
+        (drop.benefits || []).forEach(benefit => parts.push(benefit.name));
+    });
+    return parts.filter(Boolean).join(' ').toLowerCase();
+}
+
+// Whitespace-separated terms are AND'ed, each matching anywhere in the campaign's
+// searchable text - so "rust twitch" finds a Rust campaign named "Twitch Drops Round 2"
+// regardless of the order the words appear in.
+function campaignMatchesSearch(campaign, filters) {
+    const terms = (filters.search_text || '').toLowerCase().split(/\s+/).filter(Boolean);
+    if (terms.length === 0) return true;
+    const haystack = campaignSearchText(campaign);
+    return terms.every(term => haystack.includes(term));
 }
 
 
@@ -1070,17 +1087,13 @@ function clearInventoryFilters() {
     document.getElementById('filter-expired').checked = false;
     document.getElementById('filter-finished').checked = false;
     document.getElementById('filter-favorites').checked = false;
-    document.getElementById('inventory-game-search').value = '';
+    setInventorySearchValue('');
 
     // Reset benefit type filters to checked (show all)
     if (document.getElementById('filter-benefit-item')) document.getElementById('filter-benefit-item').checked = true;
     if (document.getElementById('filter-benefit-badge')) document.getElementById('filter-benefit-badge').checked = true;
     if (document.getElementById('filter-benefit-emote')) document.getElementById('filter-benefit-emote').checked = true;
     if (document.getElementById('filter-benefit-other')) document.getElementById('filter-benefit-other').checked = true;
-
-    // Clear selected games
-    selectedInventoryGames = [];
-    updateGameTagsDisplay();
 
     // Save and re-render
     applyStatusFilterSmartExpand();
@@ -1089,186 +1102,43 @@ function clearInventoryFilters() {
 }
 
 
-// ==================== Game Dropdown & Tags ====================
+// ==================== Inventory Search ====================
 
-// Track selected games for inventory filter
-let selectedInventoryGames = [];
-let gameDropdownFocusedIndex = -1;
-let gameDropdownVisible = false;
+// Realtime free-text search over the inventory. The text is a normal (debounced-persisted)
+// filter like the checkboxes, so it survives a reload - and stays visible in the box, so a
+// filtered-down inventory is never a mystery.
+const INVENTORY_SEARCH_SAVE_DELAY = 400;
+let inventorySearchSaveTimer = null;
 
-function getAvailableGamesForDropdown() {
-    // Combine games from campaigns and availableGames Set
-    const gamesFromCampaigns = Object.values(state.campaigns).map(c => c.game_name);
-    const gamesFromSettings = Array.from(availableGames || []);
-
-    // Merge and deduplicate
-    const allGames = [...new Set([...gamesFromCampaigns, ...gamesFromSettings])];
-
-    // Sort alphabetically
-    return allGames.sort((a, b) => a.localeCompare(b));
+function updateInventorySearchClearButton() {
+    const input = document.getElementById('inventory-search');
+    const clearBtn = document.getElementById('inventory-search-clear');
+    if (!input || !clearBtn) return;
+    clearBtn.hidden = input.value.length === 0;
 }
 
-function renderGameDropdown(searchTerm = '') {
-    const dropdown = document.getElementById('game-dropdown-list');
-    const allGames = getAvailableGamesForDropdown();
-
-    // Filter games by search term (case-insensitive)
-    const searchLower = searchTerm.toLowerCase().trim();
-    const filteredGames = searchLower
-        ? allGames.filter(game => game.toLowerCase().includes(searchLower))
-        : allGames;
-
-    dropdown.innerHTML = '';
-
-    if (filteredGames.length === 0) {
-        dropdown.replaceChildren(makeElement('div', { class: 'dropdown-item no-results' }, 'No games found'));
-        gameDropdownFocusedIndex = -1;
-        return;
-    }
-
-    filteredGames.forEach((gameName, index) => {
-        const isSelected = selectedInventoryGames.includes(gameName);
-        const isFocused = index === gameDropdownFocusedIndex;
-
-        const item = document.createElement('div');
-        item.className = 'dropdown-item' + (isFocused ? ' focused' : '');
-        item.dataset.gameName = gameName;
-        item.dataset.index = index;
-
-        const checkbox = document.createElement('input');
-        checkbox.type = 'checkbox';
-        checkbox.checked = isSelected;
-        checkbox.id = `game-dropdown-${index}`;
-
-        const label = document.createElement('label');
-        label.setAttribute('for', `game-dropdown-${index}`);
-        label.textContent = gameName;
-
-        item.appendChild(checkbox);
-        item.appendChild(label);
-
-        // Click handler for the entire item
-        item.addEventListener('click', (e) => {
-            e.stopPropagation();
-            toggleGameSelection(gameName);
-        });
-
-        dropdown.appendChild(item);
-    });
+function setInventorySearchValue(value) {
+    const input = document.getElementById('inventory-search');
+    if (input) input.value = value;
+    updateInventorySearchClearButton();
 }
 
-function toggleGameSelection(gameName) {
-    const index = selectedInventoryGames.indexOf(gameName);
-    if (index >= 0) {
-        // Remove game
-        selectedInventoryGames.splice(index, 1);
-    } else {
-        // Add game
-        selectedInventoryGames.push(gameName);
-    }
-
-    updateGameTagsDisplay();
-    renderGameDropdown(document.getElementById('inventory-game-search').value);
-    saveSettings();
+function onInventorySearchInput() {
+    updateInventorySearchClearButton();
+    // Re-render on every keystroke (that's the "realtime" part), but coalesce the
+    // settings POSTs so typing doesn't hammer /api/settings.
     renderInventory();
-}
-
-function removeGameTag(gameName) {
-    const index = selectedInventoryGames.indexOf(gameName);
-    if (index >= 0) {
-        selectedInventoryGames.splice(index, 1);
-        updateGameTagsDisplay();
-        renderGameDropdown(document.getElementById('inventory-game-search').value);
+    if (inventorySearchSaveTimer !== null) clearTimeout(inventorySearchSaveTimer);
+    inventorySearchSaveTimer = setTimeout(() => {
+        inventorySearchSaveTimer = null;
         saveSettings();
-        renderInventory();
-    }
+    }, INVENTORY_SEARCH_SAVE_DELAY);
 }
 
-function updateGameTagsDisplay() {
-    const container = document.getElementById('selected-game-tags');
-    container.innerHTML = '';
-
-    selectedInventoryGames.forEach(gameName => {
-        const tag = document.createElement('div');
-        tag.className = 'game-tag';
-
-        const nameSpan = document.createElement('span');
-        nameSpan.className = 'game-tag-name';
-        nameSpan.textContent = gameName;
-
-        const removeBtn = document.createElement('button');
-        removeBtn.className = 'game-tag-remove';
-        removeBtn.textContent = '×';
-        removeBtn.setAttribute('aria-label', `Remove ${gameName}`);
-        removeBtn.addEventListener('click', (e) => {
-            e.stopPropagation();
-            removeGameTag(gameName);
-        });
-
-        tag.appendChild(nameSpan);
-        tag.appendChild(removeBtn);
-        container.appendChild(tag);
-    });
-}
-
-function showGameDropdown() {
-    const dropdown = document.getElementById('game-dropdown-list');
-    dropdown.style.display = 'block';
-    gameDropdownVisible = true;
-    gameDropdownFocusedIndex = -1;
-    renderGameDropdown(document.getElementById('inventory-game-search').value);
-}
-
-function closeGameDropdown() {
-    const dropdown = document.getElementById('game-dropdown-list');
-    dropdown.style.display = 'none';
-    gameDropdownVisible = false;
-    gameDropdownFocusedIndex = -1;
-}
-
-function handleGameSearchKeydown(event) {
-    if (!gameDropdownVisible) {
-        return;
-    }
-
-    const dropdown = document.getElementById('game-dropdown-list');
-    const items = dropdown.querySelectorAll('.dropdown-item:not(.no-results)');
-    const maxIndex = items.length - 1;
-
-    if (event.key === 'ArrowDown') {
-        event.preventDefault();
-        gameDropdownFocusedIndex = Math.min(gameDropdownFocusedIndex + 1, maxIndex);
-        renderGameDropdown(document.getElementById('inventory-game-search').value);
-
-        // Scroll focused item into view
-        const focusedItem = dropdown.querySelector('.dropdown-item.focused');
-        if (focusedItem) {
-            focusedItem.scrollIntoView({ block: 'nearest' });
-        }
-    } else if (event.key === 'ArrowUp') {
-        event.preventDefault();
-        gameDropdownFocusedIndex = Math.max(gameDropdownFocusedIndex - 1, 0);
-        renderGameDropdown(document.getElementById('inventory-game-search').value);
-
-        // Scroll focused item into view
-        const focusedItem = dropdown.querySelector('.dropdown-item.focused');
-        if (focusedItem) {
-            focusedItem.scrollIntoView({ block: 'nearest' });
-        }
-    } else if (event.key === 'Enter') {
-        event.preventDefault();
-        if (gameDropdownFocusedIndex >= 0 && gameDropdownFocusedIndex <= maxIndex) {
-            const focusedItem = items[gameDropdownFocusedIndex];
-            const gameName = focusedItem.dataset.gameName;
-            if (gameName) {
-                toggleGameSelection(gameName);
-            }
-        }
-    } else if (event.key === 'Escape') {
-        event.preventDefault();
-        closeGameDropdown();
-        document.getElementById('inventory-game-search').blur();
-    }
+function clearInventorySearch() {
+    setInventorySearchValue('');
+    document.getElementById('inventory-search')?.focus();
+    onInventorySearchInput();
 }
 
 // ==================== Inventory Tree (Game > Campaign > Drop) ====================
@@ -1321,7 +1191,7 @@ function collectFilteredEntries(campaigns, filters) {
     const byCampaignId = {};
     const order = [];
     campaigns.forEach(campaign => {
-        if (!campaignMatchesGameFilter(campaign, filters)) return;
+        if (!campaignMatchesSearch(campaign, filters)) return;
         campaign.drops.forEach(drop => {
             const bucket = inventoryBucketForDrop(drop, campaign, now);
             if (!dropMatchesStatusFilter(bucket, filters)) return;
@@ -1348,7 +1218,7 @@ function buildInventoryTree(campaigns, filters) {
     const seenByBucket = { active: {}, not_linked: {}, upcoming: {}, finished: {}, expired: {} };
 
     campaigns.forEach(campaign => {
-        if (!campaignMatchesGameFilter(campaign, filters)) return;
+        if (!campaignMatchesSearch(campaign, filters)) return;
         campaign.drops.forEach(drop => {
             const bucket = inventoryBucketForDrop(drop, campaign, now);
             if (!dropMatchesStatusFilter(bucket, filters)) return;
@@ -1727,11 +1597,13 @@ function updateSettingsUI(settings) {
         document.getElementById('filter-finished').checked = settings.inventory_filters.show_finished || false;
         document.getElementById('filter-favorites').checked = settings.inventory_filters.show_favorites || false;
 
-        // Restore selected games array
-        selectedInventoryGames = Array.isArray(settings.inventory_filters.game_name_search)
-            ? [...settings.inventory_filters.game_name_search]
-            : [];  // Handle old string format gracefully
-        updateGameTagsDisplay();
+        // Restore the free-text search (older settings stored a list of selected games -
+        // that multi-select is gone, so anything but a string starts out empty)
+        setInventorySearchValue(
+            typeof settings.inventory_filters.search_text === 'string'
+                ? settings.inventory_filters.search_text
+                : ''
+        );
 
         // Restore benefit type filters (default to true if not set)
         if (document.getElementById('filter-benefit-item')) document.getElementById('filter-benefit-item').checked = settings.inventory_filters.show_benefit_item !== false;
@@ -2164,6 +2036,17 @@ function updateLibrarySyncUI(librarySync) {
     const ubisoftTicket = document.getElementById('ubisoft-ticket');
     if (ubisoftTicket && document.activeElement !== ubisoftTicket) ubisoftTicket.value = ubisoft.remember_me_ticket || '';
 
+    // Xbox has no pasted credential - the account is connected via device-code
+    // sign-in, so only the catalog toggles and the store region live in settings
+    const xbox = librarySync.xbox || {};
+    const xboxEnabled = document.getElementById('xbox-sync-enabled');
+    if (xboxEnabled) xboxEnabled.checked = xbox.enabled || false;
+    XBOX_CATALOG_TOGGLES.forEach(([elementId, settingKey]) => {
+        const checkbox = document.getElementById(elementId);
+        if (checkbox) checkbox.checked = xbox[settingKey] || false;
+    });
+    applyXboxMarketSelection();
+
     // keep the provider status lines in sync with the new configuration
     fetchLibraryStatus();
 
@@ -2198,6 +2081,13 @@ function getLibrarySyncFromUI() {
         ubisoft: {
             enabled: document.getElementById('ubisoft-sync-enabled')?.checked || false,
             remember_me_ticket: document.getElementById('ubisoft-ticket')?.value.trim() || '',
+        },
+        xbox: {
+            enabled: document.getElementById('xbox-sync-enabled')?.checked || false,
+            ...Object.fromEntries(XBOX_CATALOG_TOGGLES.map(([elementId, settingKey]) => [
+                settingKey, document.getElementById(elementId)?.checked || false,
+            ])),
+            market: document.getElementById('xbox-market')?.value || 'US',
         },
     };
 }
@@ -2329,10 +2219,144 @@ async function fetchLibraryStatus() {
     }
 }
 
-const LIBRARY_PROVIDERS = ['steam', 'ubisoft'];
+// ==================== Xbox store region ====================
+
+// The catalogs are only served in a fixed set of regions (an unsupported one syncs
+// zero games silently), so the options come from the backend rather than being a
+// free-text field. Settings can arrive before or after this resolves, so the
+// selection is re-applied once the options exist.
+async function fetchAndPopulateXboxMarkets() {
+    const select = document.getElementById('xbox-market');
+    if (!select) return;
+    try {
+        const response = await fetch('/api/library/xbox/markets');
+        const data = await response.json();
+        select.replaceChildren(...(data.markets || []).map(
+            market => makeElement('option', { value: market.code }, market.name)
+        ));
+        select.dataset.defaultMarket = data.default || 'US';
+        applyXboxMarketSelection();
+    } catch (error) {
+        console.error('Failed to fetch Xbox store regions:', error);
+    }
+}
+
+function applyXboxMarketSelection() {
+    const select = document.getElementById('xbox-market');
+    if (!select || select.options.length === 0) return;
+    const configured = state.settings.library_sync?.xbox?.market;
+    const fallback = select.dataset.defaultMarket || 'US';
+    const wanted = configured || fallback;
+    // an unknown code would leave the select blank - fall back to the default
+    select.value = [...select.options].some(option => option.value === wanted) ? wanted : fallback;
+}
+
+// ==================== Xbox account sign-in ====================
+
+// While a device code is outstanding the backend polls Microsoft for approval,
+// so the UI just re-reads the library status until the account flips to signed in.
+const XBOX_LOGIN_POLL_INTERVAL = 3000;
+let xboxLoginPollTimer = null;
+
+function stopXboxLoginPolling() {
+    if (xboxLoginPollTimer !== null) {
+        clearInterval(xboxLoginPollTimer);
+        xboxLoginPollTimer = null;
+    }
+}
+
+function startXboxLoginPolling() {
+    if (xboxLoginPollTimer !== null) return;
+    xboxLoginPollTimer = setInterval(fetchLibraryStatus, XBOX_LOGIN_POLL_INTERVAL);
+}
+
+function updateXboxLoginUI(login) {
+    const loginBtn = document.getElementById('xbox-login-btn');
+    const logoutBtn = document.getElementById('xbox-logout-btn');
+    const accountLabel = document.getElementById('xbox-account-label');
+    const prompt = document.getElementById('xbox-login-prompt');
+    if (!loginBtn || !logoutBtn || !accountLabel || !prompt) return;
+
+    const library = state.translations.gui?.settings?.library || {};
+    const signedIn = !!login?.signed_in;
+    const pending = login?.pending || null;
+
+    loginBtn.hidden = signedIn;
+    logoutBtn.hidden = !signedIn;
+    loginBtn.disabled = !!pending;
+
+    if (signedIn) {
+        const template = library.xbox_signed_in || 'Connected{gamertag}';
+        const gamertag = login.gamertag ? ` as ${login.gamertag}` : '';
+        accountLabel.textContent = template.replace('{gamertag}', gamertag);
+        accountLabel.classList.add('status-ok');
+    } else {
+        accountLabel.textContent = library.xbox_not_signed_in || 'Not connected';
+        accountLabel.classList.remove('status-ok');
+    }
+
+    prompt.hidden = !pending;
+    if (pending) {
+        const link = document.getElementById('xbox-login-link');
+        const code = document.getElementById('xbox-login-code');
+        if (link) {
+            link.href = pending.verification_uri;
+            link.textContent = pending.verification_uri.replace(/^https?:\/\//, '');
+        }
+        if (code) code.textContent = pending.user_code;
+        startXboxLoginPolling();
+    } else {
+        stopXboxLoginPolling();
+    }
+}
+
+async function startXboxLogin() {
+    const loginBtn = document.getElementById('xbox-login-btn');
+    if (loginBtn) loginBtn.disabled = true;
+    try {
+        const response = await fetch('/api/library/xbox/login', { method: 'POST' });
+        const data = await response.json();
+        if (!data.success) {
+            const library = state.translations.gui?.settings?.library || {};
+            showToast(
+                'warning',
+                library.xbox_login_failed || 'Xbox sign-in failed',
+                data.message || 'Could not start the Microsoft account sign-in.'
+            );
+            if (loginBtn) loginBtn.disabled = false;
+            return;
+        }
+        updateXboxLoginUI(data.login);
+    } catch (error) {
+        console.error('Failed to start Xbox sign-in:', error);
+        if (loginBtn) loginBtn.disabled = false;
+    }
+}
+
+async function xboxSignOut() {
+    try {
+        const response = await fetch('/api/library/xbox/logout', { method: 'POST' });
+        const data = await response.json();
+        updateXboxLoginUI(data.login);
+        fetchLibraryStatus();
+    } catch (error) {
+        console.error('Failed to disconnect the Xbox account:', error);
+    }
+}
+
+const LIBRARY_PROVIDERS = ['steam', 'ubisoft', 'xbox'];
+
+// [checkbox element id, library_sync.xbox settings key] - each subscription
+// catalog is an independent secondary toggle on top of the provider switch
+const XBOX_CATALOG_TOGGLES = [
+    ['xbox-gamepass-pc', 'include_gamepass_pc'],
+    ['xbox-gamepass-console', 'include_gamepass_console'],
+    ['xbox-ea-play', 'include_ea_play'],
+];
 
 function updateProviderStatusLines(status) {
     const library = state.translations.gui?.settings?.library || {};
+    updateXboxLoginUI(status?.providers?.xbox?.login);
     LIBRARY_PROVIDERS.forEach(providerName => {
         const line = document.getElementById(`${providerName}-status-line`);
         if (!line) return;
@@ -3152,6 +3176,18 @@ function applyTranslations(t) {
             setLibraryText('library-ubisoft-header', library.ubisoft);
             setLibraryText('ubisoft-ticket-label', library.ubisoft_ticket);
             // ubisoft-hint stays untranslated HTML - it contains the login link
+            setLibraryText('library-xbox-header', library.xbox);
+            setLibraryText('xbox-login-btn', library.xbox_connect);
+            setLibraryText('xbox-logout-btn', library.xbox_disconnect);
+            setLibraryText('xbox-account-hint', library.xbox_account_hint);
+            setLibraryText('xbox-login-instructions', library.xbox_login_instructions);
+            setLibraryText('xbox-catalogs-label', library.xbox_catalogs);
+            setLibraryText('xbox-catalogs-hint', library.xbox_catalogs_hint);
+            setLibraryText('xbox-gamepass-pc-text', library.xbox_gamepass_pc);
+            setLibraryText('xbox-gamepass-console-text', library.xbox_gamepass_console);
+            setLibraryText('xbox-ea-play-text', library.xbox_ea_play);
+            setLibraryText('xbox-market-label', library.xbox_market);
+            setLibraryText('xbox-market-hint', library.xbox_market_hint);
             setLibraryText('library-mode-header', library.mode);
             setLibraryText('library-mode-blacklist-label', library.mode_blacklist_name);
             setLibraryText('library-mode-whitelist-label', library.mode_whitelist_name);
@@ -3277,8 +3313,17 @@ function applyTranslations(t) {
             if (categoryLabel && viewMode.category) categoryLabel.textContent = viewMode.category;
         }
 
-        const searchInput = document.getElementById('games-filter');
-        if (searchInput) searchInput.placeholder = f.search_placeholder;
+        const searchInput = document.getElementById('inventory-search');
+        if (searchInput && f.search_placeholder) {
+            searchInput.placeholder = f.search_placeholder;
+            searchInput.setAttribute('aria-label', f.search_placeholder);
+        }
+
+        const searchClearBtn = document.getElementById('inventory-search-clear');
+        if (searchClearBtn && f.search_clear) {
+            searchClearBtn.title = f.search_clear;
+            searchClearBtn.setAttribute('aria-label', f.search_clear);
+        }
 
         // Update Mining Benefit Labels in Settings (re-using inventory filter keys)
         // IDs: mining-benefit-item, mining-benefit-badge, mining-benefit-emote, mining-benefit-unknown
@@ -3697,14 +3742,22 @@ document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('steam-id').addEventListener('change', saveSettings);
     document.getElementById('ubisoft-sync-enabled').addEventListener('change', saveSettings);
     document.getElementById('ubisoft-ticket').addEventListener('change', saveSettings);
+    document.getElementById('xbox-sync-enabled').addEventListener('change', saveSettings);
+    XBOX_CATALOG_TOGGLES.forEach(([elementId]) => {
+        document.getElementById(elementId)?.addEventListener('change', saveSettings);
+    });
+    document.getElementById('xbox-market').addEventListener('change', saveSettings);
+    document.getElementById('xbox-login-btn').addEventListener('click', startXboxLogin);
+    document.getElementById('xbox-logout-btn').addEventListener('click', xboxSignOut);
     document.getElementById('library-mode-blacklist').addEventListener('change', onLibraryModeChange);
     document.getElementById('library-mode-whitelist').addEventListener('change', onLibraryModeChange);
     document.getElementById('library-game-search').addEventListener('input', renderLibraryOwnedList);
     document.getElementById('library-sync-now-btn').addEventListener('click', syncLibraryNow);
 
-    // Load library data for the picker and provider status
+    // Load library data for the picker, provider status and the store-region options
     fetchOwnedGames();
     fetchLibraryStatus();
+    fetchAndPopulateXboxMarkets();
 
     // Notifications
     document.getElementById('notifications-enabled').addEventListener('change', () => {
@@ -3731,23 +3784,17 @@ document.addEventListener('DOMContentLoaded', () => {
     fetchNotificationsStatus();
 
 
-    // Inventory game search dropdown
-    const gameSearchInput = document.getElementById('inventory-game-search');
-    gameSearchInput.addEventListener('focus', () => {
-        showGameDropdown();
-    });
-    gameSearchInput.addEventListener('input', (e) => {
-        renderGameDropdown(e.target.value);
-    });
-    gameSearchInput.addEventListener('keydown', handleGameSearchKeydown);
-
-    // Click outside to close dropdown
-    document.addEventListener('click', (e) => {
-        const container = document.querySelector('.game-dropdown-container');
-        if (container && !container.contains(e.target) && gameDropdownVisible) {
-            closeGameDropdown();
+    // Inventory free-text search
+    const inventorySearchInput = document.getElementById('inventory-search');
+    inventorySearchInput.addEventListener('input', onInventorySearchInput);
+    inventorySearchInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape' && inventorySearchInput.value) {
+            e.preventDefault();
+            clearInventorySearch();
         }
     });
+    document.getElementById('inventory-search-clear').addEventListener('click', clearInventorySearch);
+    updateInventorySearchClearButton();
 
     // Manual mode controls
     const exitManualBtn = document.getElementById('exit-manual-btn');

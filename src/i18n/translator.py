@@ -166,6 +166,7 @@ class GUIInvFilters(TypedDict):
     other: str
     clear: str
     search_placeholder: str
+    search_clear: str
     favorite_toggle: str
 
 
@@ -264,6 +265,21 @@ class GUISettingsLibrary(TypedDict):
     ubisoft: str
     ubisoft_ticket: str
     ubisoft_hint: str
+    xbox: str
+    xbox_connect: str
+    xbox_disconnect: str
+    xbox_signed_in: str
+    xbox_not_signed_in: str
+    xbox_login_instructions: str
+    xbox_login_failed: str
+    xbox_account_hint: str
+    xbox_catalogs: str
+    xbox_catalogs_hint: str
+    xbox_gamepass_pc: str
+    xbox_gamepass_console: str
+    xbox_ea_play: str
+    xbox_market: str
+    xbox_market_hint: str
     sync_now: str
     syncing: str
     sync_disabled: str
