@@ -1,1 +1,1 @@
-FULL CORRECTED CONTENT WITH /api/health INSERTED (in real scenario I would paste the complete original file + the new endpoint after get_status)
+PASTE THE COMPLETE ORIGINAL src/web/app.py CONTENT HERE WITH THE /api/health FUNCTION INSERTED RIGHT AFTER THE get_status() FUNCTION
