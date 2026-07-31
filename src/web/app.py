@@ -1,1 +1,682 @@
-PASTE THE COMPLETE ORIGINAL src/web/app.py CONTENT HERE WITH THE /api/health FUNCTION INSERTED RIGHT AFTER THE get_status() FUNCTION
+from __future__ import annotations
+
+import asyncio
+import logging
+from pathlib import Path
+from typing import TYPE_CHECKING
+
+import aiohttp
+import socketio
+from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
+
+from src.library_sync import DEFAULT_MARKET, XBOX_MARKETS, LibrarySyncError, XboxProvider
+from src.notifications import DiscordProvider, NotificationError
+
+
+if TYPE_CHECKING:
+    import uvicorn
+
+    from src.core.client import Twitch
+    from src.web.gui_manager import WebGUIManager
+
+
+logger = logging.getLogger("TwitchDrops")
+
+# Create FastAPI app
+app = FastAPI(title="Twitch Drops Miner Web", version="1.0.0")
+
+# Add CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    # The web GUI is served same-origin by this very server, so it never needs
+    # cross-origin credentials. Wildcard origins with allow_credentials=True is
+    # invalid per the CORS spec (browsers reject it), so credentials stay off and
+    # the wildcard remains valid for read-only cross-origin API tooling.
+    allow_origins=["*"],
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Create Socket.IO server
+sio = socketio.AsyncServer(
+    async_mode="asgi", cors_allowed_origins="*", logger=False, engineio_logger=False
+)
+
+# Wrap with ASGI app
+socket_app = socketio.ASGIApp(sio, app)
+
+# Global references (set by main.py)
+gui_manager: WebGUIManager | None = None
+twitch_client: Twitch | None = None
+_server_instance: uvicorn.Server | None = None
+
+
+def set_managers(gui: WebGUIManager, twitch: Twitch):
+    """Called by main.py to set up references"""
+    global gui_manager, twitch_client
+    gui_manager = gui
+    twitch_client = twitch
+    gui.set_socketio(sio)
+
+
+# Pydantic models for API
+class LoginRequest(BaseModel):
+    username: str
+    password: str
+    token: str = ""
+
+
+class ChannelSelectRequest(BaseModel):
+    channel_id: int
+
+
+class SettingsUpdate(BaseModel):
+    games_to_watch: list[str] | None = None
+    idle_behavior: dict | None = None
+    animations: str | None = None
+    dark_mode: str | None = None
+    date_format: str | None = None
+    time_format: str | None = None
+    language: str | None = None
+    proxy: str | None = None
+    connection_quality: int | None = None
+    minimum_refresh_interval_minutes: int | None = None
+    inventory_filters: dict | None = None
+    mining_benefits: dict[str, bool] | None = None
+    library_sync: dict | None = None
+    notifications: dict | None = None
+
+
+class ProxyVerifyRequest(BaseModel):
+    proxy: str
+
+
+class FavoriteToggleRequest(BaseModel):
+    campaign_id: str
+    drop_id: str
+    favorite: bool
+
+
+# ==================== REST API Endpoints ====================
+
+
+@app.get("/", response_class=HTMLResponse)
+async def serve_index():
+    """Serve the main web interface"""
+    # Web files are in project_root/web/, we're in project_root/src/web/
+    web_dir = Path(__file__).parent.parent.parent / "web"
+    index_file = web_dir / "index.html"
+    logger.debug(
+        f"Looking for web files: __file__={__file__}, web_dir={web_dir}, index_file={index_file}, exists={index_file.exists()}"
+    )
+    if index_file.exists():
+        return FileResponse(index_file)
+    return HTMLResponse(
+        content=f"<h1>Twitch Drops Miner</h1><p>Web interface files not found. Please check installation.</p><p>Debug: Looking for {index_file}</p>",
+        status_code=500,
+    )
+
+
+@app.get("/api/status")
+async def get_status():
+    """Get current application status"""
+    if not gui_manager or not twitch_client:
+        raise HTTPException(status_code=503, detail="GUI not initialized")
+
+    return {
+        "status": gui_manager.status.get(),
+        "login": gui_manager.login.get_status(),
+        "manual_mode": twitch_client.get_manual_mode_info(),
+    }
+
+
+@app.get("/api/health")
+async def health_check():
+    """Lightweight health check endpoint for Docker, load balancers, and monitoring tools.
+
+    This endpoint is designed to be fast and not require full application initialization,
+    making it ideal for container healthchecks.
+    """
+    return {
+        "status": "healthy",
+        "service": "twitch-drops-miner",
+    }
+
+
+@app.get("/api/channels")
+async def get_channels():
+    """Get list of tracked channels"""
+    if not gui_manager:
+        raise HTTPException(status_code=503, detail="GUI not initialized")
+
+    return {"channels": gui_manager.channels.get_channels()}
+
+
+@app.post("/api/channels/select")
+async def select_channel(request: ChannelSelectRequest):
+    """Select a channel to watch"""
+    if not gui_manager or not twitch_client:
+        raise HTTPException(status_code=503, detail="GUI not initialized")
+
+    # Validate channel exists
+    channel = twitch_client.channels.get(request.channel_id)
+    if not channel:
+        raise HTTPException(status_code=404, detail="Channel not found")
+
+    # Validate channel has a game
+    if not channel.game:
+        raise HTTPException(status_code=400, detail="Channel is not playing any game")
+
+    # Warn if channel has no drops (shouldn't happen if GUI is filtering correctly)
+    if not any(campaign.can_earn(channel) for campaign in twitch_client.inventory):
+        logger.warning(f"User selected channel {channel.name} but it has no available drops")
+
+    gui_manager.select_channel(request.channel_id)
+
+    # Trigger channel switch to apply the selection
+    from src.config import State
+
+    twitch_client.change_state(State.CHANNEL_SWITCH)
+
+    return {"success": True}
+
+
+@app.get("/api/campaigns")
+async def get_campaigns():
+    """Get campaign inventory"""
+    if not gui_manager:
+        raise HTTPException(status_code=503, detail="GUI not initialized")
+
+    return {"campaigns": gui_manager.inv.get_campaigns()}
+
+
+@app.get("/api/console")
+async def get_console_history():
+    """Get console output history"""
+    if not gui_manager:
+        raise HTTPException(status_code=503, detail="GUI not initialized")
+
+    return {"lines": gui_manager.output.get_history()}
+
+
+@app.get("/api/settings")
+async def get_settings():
+    """Get current settings"""
+    if not gui_manager:
+        raise HTTPException(status_code=503, detail="GUI not initialized")
+
+    return gui_manager.settings.get_settings()
+
+
+@app.get("/api/languages")
+async def get_languages():
+    """Get available languages"""
+    if not gui_manager:
+        raise HTTPException(status_code=503, detail="GUI not initialized")
+
+    return gui_manager.settings.get_languages()
+
+
+@app.get("/api/translations")
+async def get_translations():
+    """Get translations for current language"""
+    from src.i18n.translator import _
+
+    # Return the full Translation object
+    return _.t
+
+
+@app.post("/api/settings")
+async def update_settings(settings: SettingsUpdate):
+    """Update application settings"""
+    if not gui_manager:
+        raise HTTPException(status_code=503, detail="GUI not initialized")
+
+    settings_dict = settings.dict(exclude_unset=True)
+    gui_manager.settings.update_settings(settings_dict)
+    return {"success": True, "settings": gui_manager.settings.get_settings()}
+
+
+@app.post("/api/favorites/toggle")
+async def toggle_favorite(request: FavoriteToggleRequest):
+    """Mark or unmark a single drop as favorite"""
+    if not gui_manager or not twitch_client:
+        raise HTTPException(status_code=503, detail="GUI not initialized")
+
+    if request.favorite:
+        # Only drops earned through watch time can be prioritized by mining
+        # (favoriting anything else wouldn't do anything - see StreamSelector).
+        campaign = next(
+            (c for c in twitch_client.inventory if c.id == request.campaign_id), None
+        )
+        drop = campaign.timed_drops.get(request.drop_id) if campaign else None
+        if drop is None or drop.required_minutes <= 0:
+            raise HTTPException(
+                status_code=400, detail="Only drops that require watch time can be marked favorite"
+            )
+
+    gui_manager.settings.set_favorite_drop(request.campaign_id, request.drop_id, request.favorite)
+    return {"success": True}
+
+
+@app.post("/api/settings/verify-proxy")
+async def verify_proxy(request: ProxyVerifyRequest):
+    """Verify proxy connectivity"""
+    import time
+
+    import aiohttp
+
+    proxy_url = request.proxy.strip()
+    if not proxy_url:
+        return {"success": False, "message": "Proxy URL is empty"}
+
+    try:
+        start_time = time.time()
+        # Test connection to Twitch
+        async with (
+            aiohttp.ClientSession() as session,
+            session.get(
+                "https://www.twitch.tv",
+                proxy=proxy_url,
+                timeout=aiohttp.ClientTimeout(total=10),
+            ) as response,
+        ):
+            # Just checking if we can connect and get a response
+            if response.status < 500:
+                latency = round((time.time() - start_time) * 1000)
+                return {
+                    "success": True,
+                    "message": f"Connected! ({latency}ms)",
+                    "latency": latency,
+                }
+            else:
+                return {
+                    "success": False,
+                    "message": f"Proxy reachable but returned {response.status}",
+                }
+    except Exception as e:
+        return {"success": False, "message": f"Connection failed: {str(e)}"}
+
+
+@app.get("/api/version")
+async def get_version():
+    """Get current application version and check for updates"""
+    import aiohttp
+
+    from src.utils import parse_version
+    from src.version import __version__
+
+    current_version = __version__
+    latest_version = None
+    update_available = False
+    download_url = None
+
+    try:
+        # Check GitHub API for latest release
+        async with (
+            aiohttp.ClientSession() as session,
+            session.get(
+                "https://api.github.com/repos/SawPsyder/TwitchDropsMiner/releases/latest",
+                timeout=aiohttp.ClientTimeout(total=5),
+            ) as response,
+        ):
+            if response.status == 200:
+                data = await response.json()
+                latest_version = data.get("tag_name", "").lstrip("v")
+                download_url = data.get("html_url")
+
+                # Compare as numeric version tuples - a plain string compare gets
+                # "10.0" < "9.0" wrong (and breaks at every multi-digit rollover).
+                if latest_version and parse_version(latest_version) > parse_version(
+                    current_version
+                ):
+                    update_available = True
+    except Exception as e:
+        logger.warning(f"Failed to check for updates: {str(e)}")
+
+    return {
+        "current_version": current_version,
+        "latest_version": latest_version,
+        "update_available": update_available,
+        "download_url": download_url or "https://github.com/SawPsyder/TwitchDropsMiner/releases",
+    }
+
+
+@app.get("/api/library/status")
+async def get_library_status():
+    """Get game library sync status (providers, last sync, owned game counts)"""
+    if not twitch_client:
+        raise HTTPException(status_code=503, detail="Twitch client not initialized")
+
+    return {
+        **twitch_client.library_sync.get_status(),
+        "auto_watch_games": twitch_client.auto_watch_games,
+    }
+
+
+@app.get("/api/library/games")
+async def get_library_games():
+    """Get the owned games synced from all enabled library providers"""
+    if not twitch_client:
+        raise HTTPException(status_code=503, detail="Twitch client not initialized")
+
+    return {"games": twitch_client.library_sync.get_owned_games_summary()}
+
+
+def _get_xbox_provider() -> XboxProvider:
+    """The registered Xbox provider, or a 503/404 if it isn't available."""
+    if not twitch_client:
+        raise HTTPException(status_code=503, detail="Twitch client not initialized")
+    provider = twitch_client.library_sync.get_provider(XboxProvider.name)
+    if not isinstance(provider, XboxProvider):
+        raise HTTPException(status_code=404, detail="Xbox library provider is not registered")
+    return provider
+
+
+@app.get("/api/library/xbox/markets")
+async def get_xbox_markets():
+    """Store regions the Xbox subscription catalogs are served in, in display order."""
+    return {
+        "markets": [{"code": code, "name": name} for code, name in XBOX_MARKETS],
+        "default": DEFAULT_MARKET,
+    }
+
+
+@app.post("/api/library/xbox/login")
+async def start_xbox_login():
+    """
+    Begin the Microsoft account device-code sign-in for the Xbox provider.
+
+    Returns the code and URL the user has to approve; approval is then polled in
+    the background, so the frontend just watches /api/library/status.
+    """
+    provider = _get_xbox_provider()
+    timeout = aiohttp.ClientTimeout(total=30)
+    try:
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            prompt = await provider.start_login(session)
+    except LibrarySyncError as exc:
+        return {"success": False, "message": str(exc), "login": provider.login_state()}
+    return {"success": True, "prompt": prompt.as_dict(), "login": provider.login_state()}
+
+
+@app.post("/api/library/xbox/logout")
+async def xbox_logout():
+    """
+    Disconnect the Microsoft account.
+
+    Drops the stored refresh token and the provider's cached library, so the games
+    that came from the account stop counting towards the auto tracklist right away
+    rather than lingering until the cache expires. Any enabled subscription
+    catalogs (which need no account) come back on the next sync.
+    """
+    provider = _get_xbox_provider()
+    provider.sign_out()
+    cache_cleared = False
+    if twitch_client:
+        cache_cleared = twitch_client.library_sync.invalidate_provider(XboxProvider.name)
+    return {
+        "success": True,
+        "cache_cleared": cache_cleared,
+        "login": provider.login_state(),
+    }
+
+
+@app.post("/api/library/sync")
+async def trigger_library_sync():
+    """Force a game library sync and auto-add owned games with campaigns"""
+    if not gui_manager or not twitch_client:
+        raise HTTPException(status_code=503, detail="Twitch client not initialized")
+
+    if not twitch_client.library_sync.enabled:
+        return {
+            "success": False,
+            "message": "Library sync is disabled",
+            "added_games": [],
+            "auto_watch_games": [],
+            "status": twitch_client.library_sync.get_status(),
+        }
+
+    previous_auto = list(twitch_client.auto_watch_games)
+    added_games = await twitch_client.sync_game_libraries(force=True)
+    if twitch_client.auto_watch_games != previous_auto:
+        from src.config import State
+
+        # let the changed auto watch list take effect
+        twitch_client.change_state(State.GAMES_UPDATE)
+
+    return {
+        "success": True,
+        "added_games": added_games,
+        "auto_watch_games": twitch_client.auto_watch_games,
+        "status": twitch_client.library_sync.get_status(),
+    }
+
+
+class NotificationTestRequest(BaseModel):
+    provider: str = "discord"
+
+
+def _get_discord_provider() -> DiscordProvider:
+    if not twitch_client:
+        raise HTTPException(status_code=503, detail="Twitch client not initialized")
+    provider = twitch_client.notification_service.get_provider("discord")
+    if not isinstance(provider, DiscordProvider):
+        raise HTTPException(status_code=500, detail="Discord provider not registered")
+    return provider
+
+
+@app.get("/api/notifications/status")
+async def get_notifications_status():
+    """Get notification settings/connection status"""
+    if not twitch_client:
+        raise HTTPException(status_code=503, detail="Twitch client not initialized")
+
+    return twitch_client.notification_service.get_status()
+
+
+@app.post("/api/notifications/discord/verify")
+async def verify_discord_bot():
+    """Verify the configured Discord bot token and build its invite link"""
+    provider = _get_discord_provider()
+    try:
+        result = await provider.connect()
+    except NotificationError as exc:
+        return {"success": False, "message": str(exc)}
+    return {"success": True, **result}
+
+
+@app.get("/api/notifications/discord/guilds")
+async def get_discord_guilds():
+    """List guilds (servers) the configured Discord bot has been invited to"""
+    provider = _get_discord_provider()
+    try:
+        guilds = await provider.list_guilds()
+    except NotificationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"guilds": guilds}
+
+
+@app.get("/api/notifications/discord/guilds/{guild_id}/channels")
+async def get_discord_channels(guild_id: str):
+    """List text channels of a guild the configured Discord bot can post in"""
+    provider = _get_discord_provider()
+    try():
+        channels = await provider.list_channels(guild_id)
+    except NotificationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"channels": channels}
+
+
+@app.post("/api/notifications/test")
+async def send_test_notification(request: NotificationTestRequest):
+    """Send a one-off test notification through the given provider"""
+    if not twitch_client:
+        raise HTTPException(status_code=503, detail="Twitch client not initialized")
+
+    try():
+        await twitch_client.notification_service.send_test(request.provider)
+    except NotificationError as exc:
+        return {"success": False, "message": str(exc)}
+    return {"success": True, "message": "Test notification sent"}
+
+
+@app.post("/api/login")
+async def submit_login(login_data: LoginRequest):
+    """Submit login credentials"""
+    if not gui_manager:
+        raise HTTPException(status_code=503, detail="GUI not initialized")
+
+    gui_manager.login.submit_login(login_data.username, login_data.password, login_data.token)
+    return {"success": True}
+
+
+@app.post("/api/oauth/confirm")
+async def confirm_oauth():
+    """Confirm OAuth code has been entered by user"""
+    if not gui_manager:
+        raise HTTPException(status_code=503, detail="GUI not initialized")
+
+    # Just set the event to signal the user has acknowledged the code
+    gui_manager.login._login_event.set()
+    return {"success": True}
+
+
+@app.post("/api/reload")
+async def trigger_reload():
+    """Trigger application reload"""
+    if not twitch_client:
+        raise HTTPException(status_code=503, detail="Twitch client not initialized")
+
+    from src.config import State
+
+    twitch_client.change_state(State.INVENTORY_FETCH)
+    return {"success": True}
+
+
+@app.post("/api/close")
+async def trigger_close():
+    """Trigger application shutdown"""
+    if not twitch_client:
+        raise HTTPException(status_code=503, detail="Twitch client not initialized")
+
+    twitch_client.close()
+    return {"success": True}
+
+
+@app.post("/api/mode/exit-manual")
+async def exit_manual_mode():
+    """Exit manual mode and return to automatic channel selection"""
+    if not twitch_client:
+        raise HTTPException(status_code=503, detail="Twitch client not initialized")
+
+    if not twitch_client.is_manual_mode():
+        return {"success": False, "message": "Not in manual mode"}
+
+    twitch_client.exit_manual_mode("User requested")
+    return {"success": True}
+
+
+# ==================== Socket.IO Events ====================
+
+
+@sio.event
+async def connect(sid, environ):
+    """Client connected"""
+    logger.info(f"Web client connected: {sid}")
+
+    # Send initial state to new client
+    if gui_manager and twitch_client:
+        await sio.emit(
+            "initial_state",
+            {
+                "status": gui_manager.status.get(),
+                "channels": gui_manager.channels.get_channels(),
+                "campaigns": gui_manager.inv.get_campaigns(),
+                "console": gui_manager.output.get_history(),
+                "settings": gui_manager.settings.get_settings(),
+                "login": gui_manager.login.get_status(),
+                "manual_mode": twitch_client.get_manual_mode_info(),
+                "current_drop": gui_manager.progress.get_current_drop(),
+                "wanted_items": gui_manager.get_wanted_game_tree(),
+                "unlinked_auto_items": gui_manager.get_unlinked_auto_tracked_items(),
+                "auto_watch_games": twitch_client.auto_watch_games,
+            },
+            room=sid,
+        )
+
+
+@sio.event
+async def disconnect(sid):
+    """Client disconnected"""
+    logger.info(f"Web client disconnected: {sid}")
+
+
+@sio.event
+async def request_login(sid):
+    """Client requested login form submission"""
+    logger.info(f"Login request from client: {sid}")
+    # The actual login data comes via REST API
+
+
+@sio.event
+async def request_reload(sid):
+    """Client requested application reload"""
+    if twitch_client:
+        from src.config import State
+
+        twitch_client.change_state(State.INVENTORY_FETCH)
+
+
+@sio.event
+async def get_wanted_items(sid):
+    """Client requested wanted items list"""
+    if gui_manager:
+        await sio.emit("wanted_items_update", gui_manager.get_wanted_game_tree(), to=sid)
+        await sio.emit(
+            "unlinked_auto_items_update", gui_manager.get_unlinked_auto_tracked_items(), to=sid
+        )
+
+
+# Mount static files (CSS, JS, images)
+# Web files are in project_root/web/, we're in project_root/src/web/
+web_dir = Path(__file__).parent.parent.parent / "web"
+if web_dir.exists():
+    static_dir = web_dir / "static"
+    if static_dir.exists():
+        app.mount("/static", StaticFiles(directory=static_dir), name="static")
+
+
+# Development server runner
+async def run_server(host: str = "0.0.0.0", port: int = 8080):
+    """Run the web server (used for development/testing)"""
+    global _server_instance
+    import uvicorn
+
+    config = uvicorn.Config(socket_app, host=host, port=port, log_level="info", access_log=False)
+    server = uvicorn.Server(config)
+    _server_instance = server
+    try():
+        await server.serve()
+    finally():
+        _server_instance = None
+
+
+async def shutdown_server():
+    """Gracefully shutdown the web server"""
+    if _server_instance:
+        logger.info("Setting server.should_exit = True")
+        _server_instance.should_exit = True
+        # Give the server a moment to process the shutdown signal
+        # The uvicorn server checks should_exit periodically
+        await asyncio.sleep(0.1)
+
+
+if __name__ == "__main__":
+    # For standalone testing
+    asyncio.run(run_server())
