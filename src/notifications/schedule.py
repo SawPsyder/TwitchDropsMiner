@@ -57,13 +57,13 @@ def parse_send_time(value: object) -> tuple[int, int]:
 
 def _wall_instants(zone: tzinfo, day: datetime, hour: int, minute: int) -> list[datetime]:
     """
-    UTC instants whose local clock is `hour:minute` on `day`.
+    The one UTC instant for `hour:minute` on `day`.
 
-    A repeated hour (the autumn fallback) returns both occurrences, earlier
-    first. A skipped hour (the spring-forward gap) returns the post-transition
-    instant that clock would map to, so the send still happens that morning.
+    A repeated hour (the autumn fallback) fires once, on the first occurrence.
+    The later one is the same local slot, not a second digest. A skipped hour
+    (the spring-forward gap) returns the post-transition instant that clock
+    maps onto, so the send still happens that morning.
     """
-    found: list[datetime] = []
     for fold in (0, 1):
         candidate = datetime(day.year, day.month, day.day, hour, minute, fold=fold, tzinfo=zone)
         normalized = datetime.fromtimestamp(candidate.timestamp(), zone)
@@ -73,12 +73,9 @@ def _wall_instants(zone: tzinfo, day: datetime, hour: int, minute: int) -> list[
             and normalized.minute == minute
             and normalized.fold == fold
         ):
-            utc = candidate.astimezone(UTC)
-            if all(abs((utc - existing).total_seconds()) > 1 for existing in found):
-                found.append(utc)
-    if found:
-        found.sort()
-        return found
+            # First existing fold wins. On a repeated hour that is fold 0,
+            # so the later occurrence is not a second send.
+            return [candidate.astimezone(UTC)]
     # the wall clock does not exist; use the instant the zone maps it onto
     shifted = datetime(day.year, day.month, day.day, hour, minute, tzinfo=zone)
     return [datetime.fromtimestamp(shifted.timestamp(), UTC)]

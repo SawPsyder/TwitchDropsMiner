@@ -41,7 +41,6 @@ jobs:
         run: |
           mypy src/
           echo "✅ Mypy checks passed!"
-        continue-on-error: true  # Don't fail CI on mypy errors yet
 
   test:
     name: Unit Tests (pytest)

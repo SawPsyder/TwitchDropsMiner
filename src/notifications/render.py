@@ -416,7 +416,7 @@ def _build_unlinked(events: list[dict[str, Any]]) -> _Section | None:
     )
 
 
-def _urgent_line(group: dict[str, Any], window_end: datetime, long_window: bool) -> str:
+def _urgent_line(group: dict[str, Any], long_window: bool) -> str:
     """One urgent line. Identical events collapse to a count and the latest time."""
     latest: datetime = group["latest"]
     when = _list_time(latest, long_window)
@@ -424,8 +424,9 @@ def _urgent_line(group: dict[str, Any], window_end: datetime, long_window: bool)
     if group["type"] == "mining_stalled":
         label = "**Mining stalled**"
         if count == 1:
-            elapsed = max(0, int((window_end - latest).total_seconds() // 60))
-            line = f"{label} · no progress for {format_remaining(elapsed)} · {when}"
+            # the relative tag is the stall start, so Discord shows how long
+            # ago it began, not the gap between the stall and this digest
+            line = f"{label} · no progress since {discord_tag(latest, 'R')}"
         else:
             line = f"{label} ×{count}, last {when}"
     else:
@@ -490,7 +491,7 @@ def _build_attention(
         return None
 
     urgent_lines = [
-        (int(group["count"]), _urgent_line(group, window_end, long_window))
+        (int(group["count"]), _urgent_line(group, long_window))
         for group in _collapse_urgent(urgent)
     ]
 
@@ -607,7 +608,7 @@ def _build_header(
             lines.append("Queue limit reached: 1 older event wasn't kept.")
         else:
             lines.append(f"Queue limit reached: {dropped_count} older events weren't kept.")
-    # a final digest (shutdown or leaving digest mode) has no following send
+    # leaving digest mode has no following send; shutdown does not post at all
     if next_at is not None:
         lines.append(f"Next digest {discord_tag(next_at, 'f')}")
     return _Section(kind="header", title=title, color=HEADER_COLOR, fixed=lines)

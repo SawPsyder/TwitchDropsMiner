@@ -10,8 +10,8 @@ token could be extracted from the source/image and abused.
 
 from __future__ import annotations
 
-import contextlib
 import logging
+import math
 from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
 from typing import TYPE_CHECKING, Any
@@ -47,40 +47,62 @@ REQUEST_TIMEOUT = 15
 # when a 429 carries no usable delay, wait at least this long and double it
 RATE_LIMIT_BACKOFF_MIN = 5.0
 RATE_LIMIT_BACKOFF_MAX = 300.0
+# a day-long or year-long Retry-After must not stall the digest queue
+MAX_RETRY_AFTER_SECONDS = 3600.0
+
+
+def clamp_retry_seconds(value: object) -> float | None:
+    """
+    A usable delay in seconds, capped at one hour.
+
+    Non-finite values (inf, nan), negatives, and values that do not parse are
+    rejected. Finite values above the cap are clamped, so timedelta never sees
+    a number large enough to raise OverflowError.
+    """
+    if isinstance(value, bool) or not isinstance(value, int | float | str):
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    if not math.isfinite(number) or number <= 0:
+        return None
+    return min(number, MAX_RETRY_AFTER_SECONDS)
 
 
 def rate_limit_delay(body: object, headers: Any) -> float | None:
     """
     Seconds to wait after a 429, from the JSON body and the rate-limit headers.
 
-    Returns None when none of them parse, so the caller can apply its backoff.
-    A positive value is honoured as given (a header of 120s waits 120s).
+    Each source (JSON retry_after, Retry-After seconds or HTTP-date, and
+    X-RateLimit-Reset-After) is clamped to one hour. Returns None when none of
+    them parse, so the caller can apply its backoff. A header of 120s waits 120s.
     """
     candidates: list[float] = []
     if isinstance(body, dict) and body.get("retry_after") is not None:
-        with contextlib.suppress(TypeError, ValueError):
-            candidates.append(float(body["retry_after"]))
+        delay = clamp_retry_seconds(body.get("retry_after"))
+        if delay is not None:
+            candidates.append(delay)
     for name in ("Retry-After", "X-RateLimit-Reset-After"):
         raw = headers.get(name) if headers is not None else None
         if raw is None or raw == "":
             continue
-        try:
-            candidates.append(float(raw))
-        except (TypeError, ValueError):
-            pass
-        else:
+        delay = clamp_retry_seconds(raw)
+        if delay is not None:
+            candidates.append(delay)
             continue
         try:
             when = parsedate_to_datetime(str(raw))
-        except (TypeError, ValueError, IndexError):
+        except (TypeError, ValueError, IndexError, OverflowError):
             continue
         if when.tzinfo is None:
             when = when.replace(tzinfo=UTC)
-        candidates.append((when - datetime.now(UTC)).total_seconds())
-    positive = [value for value in candidates if value > 0]
-    if not positive:
+        delay = clamp_retry_seconds((when - datetime.now(UTC)).total_seconds())
+        if delay is not None:
+            candidates.append(delay)
+    if not candidates:
         return None
-    return max(positive)
+    return max(candidates)
 
 
 class DiscordProvider(NotificationProvider):

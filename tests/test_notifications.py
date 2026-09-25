@@ -117,6 +117,16 @@ class TestDiscordProvider(unittest.TestCase):
         self.assertEqual(rate_limit_delay({"retry_after": 12}, {"Retry-After": "30"}), 30.0)
         self.assertEqual(rate_limit_delay({}, {"X-RateLimit-Reset-After": "8"}), 8.0)
         self.assertIsNone(rate_limit_delay({"message": "slow"}, {}))
+        self.assertEqual(rate_limit_delay({}, {"Retry-After": "86400"}), 3600.0)
+        self.assertEqual(rate_limit_delay({"retry_after": 86400}, {}), 3600.0)
+        self.assertEqual(
+            rate_limit_delay({}, {"Retry-After": "Tue, 01 Jan 2099 00:00:00 GMT"}),
+            3600.0,
+        )
+        self.assertIsNone(rate_limit_delay({"retry_after": float("inf")}, {}))
+        self.assertIsNone(rate_limit_delay({"retry_after": float("nan")}, {}))
+        self.assertIsNone(rate_limit_delay({"retry_after": -5}, {}))
+        self.assertEqual(rate_limit_delay({"retry_after": 1e12}, {}), 3600.0)
 
     def test_request_honours_retry_after_header_and_backs_off(self):
         asyncio.run(self._assert_retry_after())
@@ -442,6 +452,74 @@ class TestDigestQueue(unittest.IsolatedAsyncioTestCase):
         service, provider = self.make_service()
         await service.notify_drop_received("Game A", ["Badge"], campaign="Camp", channel="chan")
         started = asyncio.Event()
+
+        async def slow(_embeds):
+            started.set()
+            await asyncio.Event().wait()
+
+        provider.send_digest.side_effect = slow
+        service._state["digest_flush_pending"] = True
+        service._mode_switch_task = asyncio.create_task(service.flush_digest(final=True))
+        await started.wait()
+        await asyncio.wait_for(service.stop(), timeout=2)
+        self.assertIsNone(service._mode_switch_task)
+        self.assertIsNone(service._digest_task)
+        self.assertEqual(provider.send_digest.await_count, 1)
+        self.assertEqual(len(service._state["digest_queue"]), 1)
+
+    async def test_stop_persists_the_queue_and_does_not_post(self):
+        service, provider = self.make_service()
+        await service.notify_drop_received("Game A", ["Badge"], campaign="Camp", channel="chan")
+        await service.stop()
+        provider.send_digest.assert_not_awaited()
+        self.assertEqual(len(service._state["digest_queue"]), 1)
+        self.assertTrue(self.state_path.exists())
+
+    async def test_stop_returns_while_discord_hangs(self):
+        service, provider = self.make_service()
+        await service.notify_drop_received("Game A", ["Badge"], campaign="Camp", channel="chan")
+        service._state["digest_next_at"] = (datetime.now(UTC) - timedelta(minutes=1)).isoformat()
+        started = asyncio.Event()
+
+        async def hang(_embeds):
+            started.set()
+            await asyncio.Event().wait()
+
+        provider.send_digest.side_effect = hang
+        service.start()
+        await started.wait()
+        began = asyncio.get_running_loop().time()
+        await service.stop()
+        self.assertLess(asyncio.get_running_loop().time() - began, 3)
+        self.assertEqual(provider.send_digest.await_count, 1)
+        self.assertEqual(len(service._state["digest_queue"]), 1)
+
+    async def test_missed_slot_is_caught_up_on_startup(self):
+        service, provider = self.make_service()
+        await service.notify_drop_received("Game A", ["Badge"], campaign="Camp", channel="chan")
+        service._state["digest_next_at"] = (datetime.now(UTC) - timedelta(minutes=10)).isoformat()
+        await service.stop()
+        provider.send_digest.assert_not_awaited()
+        restarted = NotificationService(service._settings, state_path=self.state_path)
+        restarted_provider = restarted.get_provider("discord")
+        assert restarted_provider is not None
+        restarted_provider.send_digest = AsyncMock()
+        restarted.start()
+        for _ in range(50):
+            if restarted_provider.send_digest.await_count:
+                break
+            await asyncio.sleep(0.02)
+        restarted_provider.send_digest.assert_awaited()
+        self.assertEqual(restarted._state["digest_queue"], [])
+        await restarted.stop()
+
+    async def test_full_queue_keeps_events_that_arrive_during_send(self):
+        service, provider = self.make_service()
+        for index in range(500):
+            await service.notify_drop_received(
+                f"Old {index}", ["Badge"], campaign="Camp", drop_name="Drop", channel="chan"
+            )
+        started = asyncio.Event()
         release = asyncio.Event()
 
         async def slow(_embeds):
@@ -449,15 +527,144 @@ class TestDigestQueue(unittest.IsolatedAsyncioTestCase):
             await release.wait()
 
         provider.send_digest.side_effect = slow
-        service._state["digest_flush_pending"] = True
-        service._mode_switch_task = asyncio.create_task(service.flush_digest(final=True))
+        flushing = asyncio.create_task(service.flush_digest())
         await started.wait()
-        stopping = asyncio.create_task(service.stop())
-        await asyncio.sleep(0.05)
+        for index in range(200):
+            await service.notify_drop_received(
+                f"New {index}", ["Badge"], campaign="Camp", drop_name="Drop", channel="chan"
+            )
         release.set()
-        await asyncio.wait_for(stopping, timeout=2)
-        self.assertIsNone(service._mode_switch_task)
-        self.assertIsNone(service._digest_task)
+        self.assertTrue(await flushing)
+        games = [event["data"]["game"] for event in service._state["digest_queue"]]
+        self.assertEqual(games, [f"New {index}" for index in range(200)])
+
+    async def test_loaded_queue_items_without_seq_receive_one(self):
+        self.state_path.write_text(
+            json.dumps(
+                {
+                    "digest_queue": [
+                        {"type": "drop_received", "ts": "2026-01-01T00:00:00+00:00", "data": {}},
+                        {"type": "drop_received", "ts": "2026-01-01T00:01:00+00:00", "data": {}},
+                    ]
+                }
+            ),
+            encoding="utf8",
+        )
+        service, _provider = self.make_service()
+        self.assertEqual([item["seq"] for item in service._state["digest_queue"]], [1, 2])
+        self.assertEqual(service._state["digest_seq"], 2)
+
+    async def test_stored_retry_at_is_clamped_to_one_hour(self):
+        far = (datetime.now(UTC) + timedelta(days=365 * 73)).isoformat()
+        self.state_path.write_text(
+            json.dumps({"last_digest": {"at": far, "ok": False, "retry_at": far}}),
+            encoding="utf8",
+        )
+        service, _provider = self.make_service()
+        retry_at = service._retry_at()
+        assert retry_at is not None
+        self.assertLessEqual(
+            (retry_at - datetime.now(UTC)).total_seconds(),
+            3600 + 5,
+        )
+
+    async def test_infinite_retry_after_does_not_overflow(self):
+        service, provider = self.make_service()
+        await service.notify_drop_received("Game A", ["Badge"], campaign="Camp", channel="chan")
+        provider.send_digest.side_effect = NotificationError("429", retry_after=float("inf"))
+        self.assertFalse(await service.flush_digest())
+        retry_at = service._retry_at()
+        assert retry_at is not None
+        self.assertLessEqual((retry_at - datetime.now(UTC)).total_seconds(), 3600)
+        self.assertGreater((retry_at - datetime.now(UTC)).total_seconds(), 0)
+
+    async def test_older_state_write_cannot_overwrite_a_newer_one(self):
+        import threading
+        from unittest.mock import patch
+
+        service, _provider = self.make_service()
+        started = threading.Event()
+        release = threading.Event()
+        finished: list[int] = []
+        real_save = json_save
+
+        def slow_save(path, contents, **kwargs):
+            count = len(contents.get("digest_queue") or [])
+            finished.append(count)
+            if count == 1:
+                started.set()
+                release.wait(timeout=5)
+            real_save(path, contents, **kwargs)
+
+        with patch("src.notifications.service.json_save", side_effect=slow_save):
+            await service.notify_drop_received(
+                "Game A", ["Badge"], campaign="Camp", channel="chan"
+            )
+            first = asyncio.create_task(service._write_latest())
+            self.assertTrue(await asyncio.to_thread(started.wait, 2))
+            await service.notify_drop_received(
+                "Game B", ["Badge"], campaign="Camp", channel="chan"
+            )
+            second = asyncio.create_task(service._write_latest())
+            release.set()
+            await first
+            await second
+        self.assertIn(2, finished)
+        self.assertEqual(finished[-1], 2)
+        saved = json.loads(self.state_path.read_text(encoding="utf8"))
+        games = [item["data"]["game"] for item in saved["digest_queue"]]
+        self.assertEqual(games, ["Game A", "Game B"])
+
+    def test_dead_loop_service_does_not_write_on_a_new_loop(self):
+        first = asyncio.new_event_loop()
+        holder: dict[str, NotificationService] = {}
+
+        async def bind() -> None:
+            service, _provider = self.make_service()
+            holder["service"] = service
+            service.record_log_event(
+                logging.LogRecord(
+                    name="TwitchDrops.websocket",
+                    level=logging.WARNING,
+                    pathname=__file__,
+                    lineno=1,
+                    msg="socket dropped",
+                    args=(),
+                    exc_info=None,
+                )
+            )
+            await asyncio.sleep(0)
+
+        first.run_until_complete(bind())
+        service = holder["service"]
+        writer = service._writer_task
+        assert writer is not None
+        writer.cancel()
+        first.run_until_complete(asyncio.sleep(0))
+        first.close()
+
+        second = asyncio.new_event_loop()
+
+        async def later() -> None:
+            service.record_log_event(
+                logging.LogRecord(
+                    name="TwitchDrops.websocket",
+                    level=logging.WARNING,
+                    pathname=__file__,
+                    lineno=1,
+                    msg="socket dropped again",
+                    args=(),
+                    exc_info=None,
+                )
+            )
+            await asyncio.sleep(0)
+            task = service._writer_task
+            if task is not None and not task.done():
+                await task
+
+        second.run_until_complete(later())
+        second.close()
+        self.assertIsNone(service._writer_task)
 
     async def test_preview_endpoint_uses_saved_settings_and_keeps_the_queue(self):
         from src.web import app as webapp
@@ -722,6 +929,9 @@ class TestDigestPersistence(unittest.TestCase):
         self.assertEqual(notes["digest_sections"], {"progress": True, "errors": True})
         self.assertTrue(notes["digest_urgent_immediate"])
         self.assertFalse(notes["digest_send_empty"])
+
+
+class TestDigestSchedule(unittest.TestCase):
     def test_daily_send_stays_on_local_hour_across_dst(self):
         zone = ZoneInfo("America/New_York")
         # 2026-03-07 14:00 UTC is 09:00 EST, the day before US clocks spring forward.
@@ -763,24 +973,21 @@ class TestDigestPersistence(unittest.TestCase):
         local = result.astimezone(zone)
         self.assertEqual((local.hour, local.minute), (3, 30))
 
-    def test_repeated_hour_uses_the_occurrence_still_ahead(self):
+    def test_repeated_hour_sends_once_on_the_first_occurrence(self):
         zone = ZoneInfo("America/New_York")
         # 2026-11-01 01:30 happens twice: 05:30 UTC (EDT) and 06:30 UTC (EST).
+        # The slot fires on the first of those, then not again until the next day.
         before_both = datetime(2026, 11, 1, 5, 0, tzinfo=UTC)
         between = datetime(2026, 11, 1, 5, 45, tzinfo=UTC)
         after_both = datetime(2026, 11, 1, 6, 45, tzinfo=UTC)
-        self.assertEqual(
-            next_digest_at(before_both, 1440, "01:30", 0, tz=zone),
-            datetime(2026, 11, 1, 5, 30, tzinfo=UTC),
-        )
-        self.assertEqual(
-            next_digest_at(between, 1440, "01:30", 0, tz=zone),
-            datetime(2026, 11, 1, 6, 30, tzinfo=UTC),
-        )
-        following = next_digest_at(after_both, 1440, "01:30", 0, tz=zone)
-        self.assertEqual(following.astimezone(zone).hour, 1)
-        self.assertEqual(following.astimezone(zone).minute, 30)
-        self.assertGreater(following, after_both)
+        first = datetime(2026, 11, 1, 5, 30, tzinfo=UTC)
+        self.assertEqual(next_digest_at(before_both, 1440, "01:30", 0, tz=zone), first)
+        following = next_digest_at(between, 1440, "01:30", 0, tz=zone)
+        self.assertNotEqual(following, datetime(2026, 11, 1, 6, 30, tzinfo=UTC))
+        self.assertEqual(following, datetime(2026, 11, 2, 6, 30, tzinfo=UTC))
+        self.assertEqual(next_digest_at(after_both, 1440, "01:30", 0, tz=zone), following)
+        local = following.astimezone(zone)
+        self.assertEqual((local.hour, local.minute), (1, 30))
 
 
 class TestDigestLogHandler(unittest.IsolatedAsyncioTestCase):
@@ -964,7 +1171,8 @@ class TestDigestRenderer(unittest.TestCase):
         self.assertEqual(embeds[0]["color"], 0x9146FF)
         self.assertEqual(embeds[1]["color"], 0xE74C3C)
         self.assertIn("alerted at the time", embeds[1]["description"])
-        self.assertIn("no progress for", embeds[1]["description"])
+        self.assertIn("no progress since <t:", embeds[1]["description"])
+        self.assertNotIn("no progress for", embeds[1]["description"])
         self.assertNotIn("no channels", embeds[1]["description"])
         drops = next(embed for embed in embeds if embed["title"].startswith("🎁"))
         self.assertEqual(drops["color"], 0x2ECC71)
@@ -1009,7 +1217,7 @@ class TestDigestRenderer(unittest.TestCase):
                 self.assertIn(">", line[start:])
 
     def test_truncate_never_splits_a_timestamp_or_bold_marker(self):
-        line = "**Mining stalled** · no progress for 20 min · <t:1790318000:t>"
+        line = "**Mining stalled** · no progress since <t:1790318000:R>"
         text = "\n".join([line] * 20)
         cut = _safe_truncate(text, 90)
         self.assertLessEqual(discord_units(cut), 90)

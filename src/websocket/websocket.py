@@ -177,8 +177,9 @@ class Websocket:
                 await asyncio.sleep(delay)
             except RuntimeError:
                 ws_logger.warning(
-                    f"Websocket[{self._idx}] exiting backoff connect loop "
-                    "because session is closed (RuntimeError)"
+                    "Websocket[%s] exiting backoff connect loop "
+                    "because session is closed (RuntimeError)",
+                    self._idx,
                 )
                 break
 
@@ -218,7 +219,9 @@ class Websocket:
                 if exc.received:
                     # server closed the connection, not us - reconnect
                     ws_logger.warning(
-                        f"Websocket[{self._idx}] to wss://pubsub-edge.twitch.tv/v1 closed unexpectedly: {websocket.close_code}"
+                        "Websocket[%s] to wss://pubsub-edge.twitch.tv/v1 closed unexpectedly: %s",
+                        self._idx,
+                        websocket.close_code,
                     )
                 elif self._closed.is_set():
                     # we closed it - exit
@@ -229,11 +232,13 @@ class Websocket:
                     return
             except Exception:
                 ws_logger.exception(
-                    f"Exception in Websocket[{self._idx}] to wss://pubsub-edge.twitch.tv/v1"
+                    "Exception in Websocket[%s] to wss://pubsub-edge.twitch.tv/v1",
+                    self._idx,
                 )
             self.set_status(_.t["gui"]["websocket"]["reconnecting"])
             ws_logger.warning(
-                f"Websocket[{self._idx}] to wss://pubsub-edge.twitch.tv/v1 reconnecting..."
+                "Websocket[%s] to wss://pubsub-edge.twitch.tv/v1 reconnecting...",
+                self._idx,
             )
 
     async def _handle_ping(self):
@@ -317,7 +322,9 @@ class Websocket:
                 pass  # skip these
             elif raw_message.type is WSMsgType.ERROR:
                 ws_logger.error(
-                    f"Websocket[{self._idx}] error: {format_traceback(raw_message.data)}"
+                    "Websocket[%s] error: %s",
+                    self._idx,
+                    format_traceback(raw_message.data),
                 )
                 raise WebsocketClosed(raw_message=raw_message.data)
             else:

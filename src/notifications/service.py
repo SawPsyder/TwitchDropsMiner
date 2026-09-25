@@ -24,7 +24,11 @@ from typing import TYPE_CHECKING, Any, cast
 from src.config import NOTIFICATIONS_STATE_PATH
 from src.notifications.base import NotificationError, NotificationProvider
 from src.notifications.digest_style import ERROR_GROUP_CAP, QUEUE_CAP
-from src.notifications.discord import DiscordProvider
+from src.notifications.discord import (
+    MAX_RETRY_AFTER_SECONDS,
+    DiscordProvider,
+    clamp_retry_seconds,
+)
 from src.notifications.events import NotificationEvent
 from src.notifications.logging_handler import NOTIFICATIONS_LOGGER, register_service
 from src.notifications.render import render_digest
@@ -44,6 +48,8 @@ URGENT_EVENTS = frozenset({"auth_attention", "mining_stalled"})
 RETRY_BACKOFF = timedelta(minutes=5)
 # coalesce a burst of queue/log writes into one disk save
 STATE_SAVE_DELAY = 2.0
+# shutdown must return inside Docker's 10s stop grace even if Discord hangs
+STOP_TIMEOUT = 2.0
 
 
 def _idle_progress() -> dict[str, Any]:
@@ -73,6 +79,7 @@ def _empty_state() -> dict[str, Any]:
         "digest_error_overflow_types": 0,
         "digest_error_overflow_count": 0,
         "digest_flush_pending": False,
+        "digest_seq": 0,
         "last_digest": None,
     }
 
@@ -128,9 +135,43 @@ def _load_state(path: Path) -> dict[str, Any]:
         "digest_error_overflow_count",
     ):
         raw[key] = _coerce_count(raw.get(key))
+    _ensure_queue_seqs(raw)
+    _clamp_stored_retry(raw)
     if dropped_bad:
         logger.warning("Dropped invalid items from the notifications digest queue")
     return raw
+
+
+def _ensure_queue_seqs(raw: dict[str, Any]) -> None:
+    """Give every queued event a stable seq and keep the counter ahead of them."""
+    counter = _coerce_count(raw.get("digest_seq"))
+    for item in raw["digest_queue"]:
+        seq = item.get("seq")
+        if isinstance(seq, bool) or not isinstance(seq, int) or seq <= 0:
+            counter += 1
+            item["seq"] = counter
+        elif seq > counter:
+            counter = seq
+    raw["digest_seq"] = counter
+
+
+def _clamp_stored_retry(raw: dict[str, Any]) -> None:
+    """A persisted retry_at more than an hour ahead is pulled back to that cap."""
+    last = raw.get("last_digest")
+    if not isinstance(last, dict):
+        return
+    retry_raw = last.get("retry_at")
+    if not isinstance(retry_raw, str) or not retry_raw:
+        return
+    try:
+        stamp = datetime.fromisoformat(retry_raw)
+    except ValueError:
+        return
+    if stamp.tzinfo is None:
+        stamp = stamp.replace(tzinfo=UTC)
+    cap = datetime.now(UTC) + timedelta(seconds=MAX_RETRY_AFTER_SECONDS)
+    if stamp > cap:
+        last["retry_at"] = cap.isoformat()
 
 
 def _coerce_count(value: object) -> int:
@@ -156,6 +197,14 @@ def short_discord_error(exc: NotificationError) -> str:
     return "Discord request failed"
 
 
+def _bound_loop(obj: object) -> asyncio.AbstractEventLoop | None:
+    """Loop an asyncio primitive bound itself to, without touching it."""
+    loop = getattr(obj, "_loop", None)
+    if isinstance(loop, asyncio.AbstractEventLoop):
+        return loop
+    return None
+
+
 class NotificationService:
     """Fires outbound notifications for mining events across all providers."""
 
@@ -174,7 +223,10 @@ class NotificationService:
         self._wake = asyncio.Event()
         self._state_lock = threading.RLock()
         self._dirty = False
-        self._save_handle: asyncio.TimerHandle | None = None
+        self._write_generation = 0
+        self._write_lock = asyncio.Lock()
+        self._write_now = asyncio.Event()
+        self._writer_task: asyncio.Task[None] | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
         register_service(self)
 
@@ -234,30 +286,51 @@ class NotificationService:
     def _mark_dirty(self) -> None:
         with self._state_lock:
             self._dirty = True
+            self._write_generation += 1
         self._schedule_save()
 
     def _running_loop(self) -> asyncio.AbstractEventLoop | None:
+        """The loop this service writes on.
+
+        The first running loop wins. A closed loop is not replaced: a log
+        record from a later loop must not attach a writer to primitives that
+        are still bound to the dead one.
+        """
+        owned = self._loop
+        if owned is not None:
+            if owned.is_closed() or not owned.is_running():
+                return None
+            return owned
         try:
-            loop: asyncio.AbstractEventLoop | None = asyncio.get_running_loop()
+            loop = asyncio.get_running_loop()
         except RuntimeError:
-            loop = self._loop
-        else:
+            return None
+        if loop.is_running():
             self._loop = loop
-        if loop is not None and loop.is_running():
             return loop
         return None
 
     def _schedule_save(self) -> None:
-        """Coalesce state writes. A burst of warnings becomes one save about 2s later."""
+        """Coalesce a burst of edits onto the one tracked writer."""
         loop = self._running_loop()
         if loop is None:
+            if self._loop is not None and (
+                self._loop.is_closed() or not self._loop.is_running()
+            ):
+                # Drop the task reference so a finished service can be collected
+                # instead of handling logs on whatever loop is current.
+                self._writer_task = None
+                return
             self._write_state_now()
             return
 
         def arm() -> None:
-            if self._save_handle is not None:
-                self._save_handle.cancel()
-            self._save_handle = loop.call_later(STATE_SAVE_DELAY, self._on_save_due)
+            self._rebind_writer(loop)
+            task = self._writer_task
+            if task is None or task.done():
+                self._writer_task = loop.create_task(
+                    self._debounced_write(), name="notification-state"
+                )
 
         try:
             current = asyncio.get_running_loop()
@@ -268,46 +341,80 @@ class NotificationService:
         else:
             loop.call_soon_threadsafe(arm)
 
-    def _on_save_due(self) -> None:
-        self._save_handle = None
-        try:
-            loop = asyncio.get_running_loop()
-        except RuntimeError:
-            self._write_state_now()
+    def _rebind_writer(self, loop: asyncio.AbstractEventLoop) -> None:
+        """Replace writer primitives left bound to a different loop."""
+        if _bound_loop(self._write_now) not in (None, loop):
+            self._write_now = asyncio.Event()
+        if _bound_loop(self._write_lock) not in (None, loop):
+            self._write_lock = asyncio.Lock()
+        task = self._writer_task
+        if task is None or task.done():
             return
-        loop.create_task(self.flush_pending_state())
+        try:
+            task_loop = task.get_loop()
+        except RuntimeError:
+            task_loop = None
+        if task_loop is not loop:
+            self._writer_task = None
 
-    def _copy_state(self) -> dict[str, Any] | None:
-        with self._state_lock:
-            if not self._dirty:
-                return None
-            self._dirty = False
-            return copy.deepcopy(self._state)
+    async def _debounced_write(self) -> None:
+        with contextlib.suppress(TimeoutError):
+            await asyncio.wait_for(self._write_now.wait(), timeout=STATE_SAVE_DELAY)
+        self._write_now.clear()
+        await self._write_latest()
 
-    def _write_payload(self, payload: dict[str, Any]) -> None:
+    def _write_payload(self, payload: dict[str, Any]) -> bool:
         try:
             if not self._state_path.parent.exists():
-                return
+                return False
             json_save(self._state_path, payload)
         except OSError:
             with self._state_lock:
                 self._dirty = True
             logger.warning("Could not save notifications state to %s", self._state_path)
+            return False
+        return True
 
     def _write_state_now(self) -> None:
-        payload = self._copy_state()
-        if payload is not None:
-            self._write_payload(payload)
+        with self._state_lock:
+            if not self._dirty:
+                return
+            generation = self._write_generation
+            payload = copy.deepcopy(self._state)
+            self._dirty = False
+        if self._write_payload(payload):
+            return
+        with self._state_lock:
+            if self._write_generation == generation:
+                self._dirty = True
+
+    async def _write_latest(self) -> None:
+        """Write the newest state. An older in-flight payload cannot finish last."""
+        async with self._write_lock:
+            while True:
+                with self._state_lock:
+                    generation = self._write_generation
+                    if not self._dirty:
+                        return
+                    payload = copy.deepcopy(self._state)
+                    self._dirty = False
+                wrote = await asyncio.to_thread(self._write_payload, payload)
+                with self._state_lock:
+                    if not wrote:
+                        return
+                    if self._write_generation == generation and not self._dirty:
+                        return
+                    self._dirty = True
 
     async def flush_pending_state(self) -> None:
-        """Write a coalesced state update. Called before a send and on shutdown."""
-        if self._save_handle is not None:
-            self._save_handle.cancel()
-            self._save_handle = None
-        payload = self._copy_state()
-        if payload is None:
+        """Write the latest state now. Used before a send and from stop()."""
+        self._rebind_writer(asyncio.get_running_loop())
+        task = self._writer_task
+        if task is not None and not task.done() and task is not asyncio.current_task():
+            self._write_now.set()
+            await task
             return
-        await asyncio.to_thread(self._write_payload, payload)
+        await self._write_latest()
 
     @staticmethod
     def _cooldown_key(provider_name: str, event_type: str) -> str:
@@ -416,18 +523,28 @@ class NotificationService:
             self._mark_dirty()
         return sent_any
 
+    def _allocate_seq(self) -> int:
+        seq = _coerce_count(self._state.get("digest_seq")) + 1
+        self._state["digest_seq"] = seq
+        return seq
+
     def _enqueue(self, event: NotificationEvent) -> None:
-        queue = cast("list[dict[str, Any]]", self._state.setdefault("digest_queue", []))
-        queue.append(event.to_dict())
-        dropped = 0
-        while len(queue) > QUEUE_CAP:
-            queue.pop(0)
-            dropped += 1
-        if dropped:
-            self._state["digest_dropped"] = int(self._state.get("digest_dropped") or 0) + dropped
-        if not self._state.get("digest_window_start"):
-            self._state["digest_window_start"] = datetime.now(UTC).isoformat()
-        self._ensure_next_at()
+        with self._state_lock:
+            queue = cast("list[dict[str, Any]]", self._state.setdefault("digest_queue", []))
+            item = event.to_dict()
+            item["seq"] = self._allocate_seq()
+            queue.append(item)
+            dropped = 0
+            while len(queue) > QUEUE_CAP:
+                queue.pop(0)
+                dropped += 1
+            if dropped:
+                self._state["digest_dropped"] = (
+                    int(self._state.get("digest_dropped") or 0) + dropped
+                )
+            if not self._state.get("digest_window_start"):
+                self._state["digest_window_start"] = datetime.now(UTC).isoformat()
+            self._ensure_next_at()
         self._mark_dirty()
 
     def record_log_event(self, record: logging.LogRecord) -> None:
@@ -566,7 +683,7 @@ class NotificationService:
         now = now or datetime.now(UTC)
         window_start = self._parse_stamp(self._state.get("digest_window_start")) or now
         # A preview shows the send already on the clock. A digest going out now
-        # announces the one after it. A final digest has no following send.
+        # announces the one after it. Leaving digest mode has no following send.
         stored_next = self._parse_stamp(self._state.get("digest_next_at"))
         if final:
             next_at = None
@@ -599,8 +716,13 @@ class NotificationService:
         with self._state_lock:
             queue = list(self._state.get("digest_queue") or [])
             groups = copy.deepcopy(self._state.get("digest_error_groups") or {})
+            seqs = [
+                item["seq"]
+                for item in queue
+                if isinstance(item, dict) and isinstance(item.get("seq"), int)
+            ]
             return {
-                "queue_ids": [id(item) for item in queue],
+                "queue_seqs": seqs,
                 "groups": groups if isinstance(groups, dict) else {},
                 "dropped": _coerce_count(self._state.get("digest_dropped")),
                 "overflow_types": _coerce_count(self._state.get("digest_error_overflow_types")),
@@ -610,10 +732,16 @@ class NotificationService:
     def _release_snapshot(self, snapshot: dict[str, Any], render_time: datetime) -> None:
         """Drop only what this send rendered. Events that arrived during the POST stay."""
         with self._state_lock:
-            sent = set(snapshot["queue_ids"])
+            sent = {
+                seq
+                for seq in snapshot["queue_seqs"]
+                if isinstance(seq, int) and not isinstance(seq, bool)
+            }
             queue = self._state.get("digest_queue") or []
             self._state["digest_queue"] = [
-                item for item in queue if id(item) not in sent
+                item
+                for item in queue
+                if not (isinstance(item, dict) and item.get("seq") in sent)
             ]
             groups = self._state.get("digest_error_groups")
             if not isinstance(groups, dict):
@@ -704,11 +832,11 @@ class NotificationService:
 
     async def flush_digest(self, *, final: bool = False) -> bool:
         """
-        Send the queued digest. Only the snapshotted items are removed after a 2xx.
+        Send the queued digest. Only the snapshotted seqs are removed after a 2xx.
 
-        `final` is the digest posted on shutdown or when leaving digest mode. It
-        does not announce a next digest. An empty window is skipped unless
-        digest_send_empty is on.
+        `final` is the digest posted when the user leaves digest mode. It does
+        not announce a next digest. Shutdown does not call this. An empty window
+        is skipped unless digest_send_empty is on.
         """
         async with self._send_lock:
             return await self._flush_digest_locked(final=final)
@@ -745,10 +873,13 @@ class NotificationService:
         try:
             await provider.send_digest(embeds)
         except NotificationError as exc:
-            delay = (
+            raw_delay = (
                 exc.retry_after if exc.retry_after is not None else RETRY_BACKOFF.total_seconds()
             )
-            retry = datetime.now(UTC) + timedelta(seconds=max(0.0, float(delay)))
+            delay = clamp_retry_seconds(raw_delay)
+            if delay is None:
+                delay = RETRY_BACKOFF.total_seconds()
+            retry = datetime.now(UTC) + timedelta(seconds=delay)
             self._record_digest(ok=False, error=short_discord_error(exc), retry_at=retry)
             self._last_errors[provider.name] = short_discord_error(exc)
             logger.warning("Discord digest failed: %s", exc)
@@ -792,28 +923,39 @@ class NotificationService:
         self._mode_switch_task = loop.create_task(self.flush_digest(final=True))
 
     def start(self) -> None:
-        """Start the digest scheduler. Safe to call again; a live task is left alone."""
+        """Start the digest scheduler. A next_at already in the past sends on the first pass."""
         if self._digest_task is not None and not self._digest_task.done():
             return
         self._digest_task = asyncio.create_task(self._digest_loop(), name="notification-digest")
 
     async def stop(self) -> None:
-        """Cancel the scheduler and any mode-switch flush, then send and save what's left."""
+        """Cancel in-flight sends and persist the queue. Does not post a digest.
+
+        A missed slot is sent when the scheduler starts again. Every await is
+        bounded so a hung Discord call cannot hold shutdown past Docker's stop grace.
+        """
+        pending: list[asyncio.Task[Any]] = []
         task = self._digest_task
         self._digest_task = None
         if task is not None:
             task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await task
+            pending.append(task)
         mode_task = self._mode_switch_task
         self._mode_switch_task = None
         if mode_task is not None and not mode_task.done():
             mode_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await mode_task
-        if self.has_digest_content():
-            await self.flush_digest(final=True)
-        await self.flush_pending_state()
+            pending.append(mode_task)
+        if pending:
+            await asyncio.wait(pending, timeout=STOP_TIMEOUT)
+        self._rebind_writer(asyncio.get_running_loop())
+        writer = self._writer_task
+        if writer is not None and not writer.done():
+            self._write_now.set()
+            with contextlib.suppress(TimeoutError):
+                await asyncio.wait_for(asyncio.shield(writer), timeout=STOP_TIMEOUT)
+        else:
+            with contextlib.suppress(TimeoutError):
+                await asyncio.wait_for(self._write_latest(), timeout=STOP_TIMEOUT)
 
     async def _digest_loop(self) -> None:
         while True:
