@@ -297,6 +297,70 @@ class GUISettingsLibrary(TypedDict):
     no_new_games: str
 
 
+class GUISettingsNotificationUnits(TypedDict):
+    minutes: str
+    hours: str
+    days: str
+
+
+class GUISettingsNotificationErr(TypedDict):
+    cooldown_range: str
+    interval_range: str
+
+
+class GUISettingsNotificationWeekdays(TypedDict):
+    monday: str
+    tuesday: str
+    wednesday: str
+    thursday: str
+    friday: str
+    saturday: str
+    sunday: str
+
+
+class GUISettingsNotificationDigest(TypedDict):
+    every: str
+    preset_1h: str
+    preset_3h: str
+    preset_6h: str
+    preset_12h: str
+    daily: str
+    weekly: str
+    custom: str
+    on: str
+    at: str
+    tz_help: str
+    relative_help: str
+    include: str
+    section_progress: str
+    section_errors: str
+    urgent: str
+    urgent_help: str
+    send_empty: str
+    send_empty_help: str
+    status_queued: str
+    status_queued_one: str
+    status_empty_skip: str
+    status_empty_send: str
+    status_full: str
+    status_full_dropped_one: str
+    status_sending: str
+    last_ok: str
+    last_failed: str
+    last_failed_no_retry: str
+    last_never: str
+    flush_warning: str
+    flush_warning_one: str
+    preview: str
+    preview_sending: str
+    preview_help: str
+    preview_sent: str
+    preview_failed: str
+    preview_save_first: str
+    preview_connect_first: str
+    weekdays: GUISettingsNotificationWeekdays
+
+
 class GUISettingsNotifications(TypedDict):
     name: str
     help: str
@@ -319,6 +383,21 @@ class GUISettingsNotifications(TypedDict):
     event_new_campaign: str
     test_button: str
     sending_test: str
+    change_button: str
+    save_button: str
+    delivery: str
+    delivery_each: str
+    delivery_digest: str
+    delivery_each_help: str
+    delivery_digest_help: str
+    delivery_connect_help: str
+    repeat_cooldown: str
+    repeat_cooldown_help: str
+    repeat_cooldown_tip: str
+    urgent_cooldown: str
+    digest: GUISettingsNotificationDigest
+    units: GUISettingsNotificationUnits
+    err: GUISettingsNotificationErr
 
 
 class GUISettings(TypedDict):

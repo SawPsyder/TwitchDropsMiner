@@ -3031,6 +3031,116 @@ select:focus {
     box-shadow: 0 0 0 3px rgba(145, 70, 255, 0.15);
 }
 
+/* Discord digest delivery controls */
+.discord-summary-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.discord-summary-actions .action-button {
+    padding: 8px 14px;
+}
+
+.notification-events {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 8px 16px;
+}
+
+.notifications-section .number-unit,
+.notifications-section .digest-clock,
+.notifications-section .digest-every {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+    margin: 8px 0;
+}
+
+.notifications-section input[type="number"],
+.notifications-section input[type="time"] {
+    width: 6.5rem;
+    padding: 8px 10px;
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    background: var(--bg-panel);
+    color: var(--text-primary);
+    font-size: 14px;
+}
+
+.digest-presets {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+
+.digest-preset {
+    border: 1px solid var(--border-color);
+    background: var(--bg-panel);
+    color: var(--text-primary);
+    border-radius: 999px;
+    padding: 6px 12px;
+    cursor: pointer;
+    font-size: 13px;
+}
+
+.digest-preset.selected {
+    background: var(--accent-color);
+    border-color: var(--accent-color);
+    color: #ffffff;
+    font-weight: 600;
+}
+
+.notifications-section .digest-check {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 10px 0 4px;
+}
+
+.form-hint.error,
+.digest-status-line.digest-failed {
+    color: var(--error-color, #e74c3c);
+}
+
+.digest-status-line {
+    margin: 4px 0;
+}
+
+#notifications-flush-warning {
+    color: var(--text-primary);
+    background: color-mix(in srgb, var(--accent-color) 12%, transparent);
+    border-radius: 6px;
+    padding: 8px 10px;
+}
+
+#notifications-delivery.is-disabled {
+    opacity: 0.55;
+}
+
+/* Author rules like `.settings-section label { display: block }` would otherwise
+   beat the user-agent `[hidden]` style and show controls the active mode hides. */
+.notifications-section [hidden] {
+    display: none !important;
+}
+
+#notifications-digest-preview-btn[aria-disabled="true"] {
+    opacity: 0.55;
+    cursor: not-allowed;
+}
+
+.notifications-save-row {
+    display: flex;
+    justify-content: flex-end;
+    margin-top: 16px;
+}
+
+#discord-status-line.status-ok::before {
+    content: "● ";
+}
+
 /* Tab buttons: animated underline */
 .tab-button {
     transition: color 0.15s ease, background-color 0.15s ease;

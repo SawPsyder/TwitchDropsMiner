@@ -18,7 +18,7 @@ import aiohttp
 from src.notifications.base import NotificationError, NotificationProvider
 
 
-logger = logging.getLogger("TwitchDrops")
+logger = logging.getLogger("TwitchDrops.notifications")
 
 API_BASE = "https://discord.com/api/v10"
 
@@ -87,10 +87,18 @@ class DiscordProvider(NotificationProvider):
                 if response.status == 404:
                     raise NotificationError("Discord: server or channel not found (404)")
                 if response.status == 429:
-                    body = await response.json()
-                    retry_after = body.get("retry_after", 1)
+                    try:
+                        body = await response.json()
+                    except Exception:
+                        body = {}
+                    retry_after = body.get("retry_after", 1) if isinstance(body, dict) else 1
+                    try:
+                        retry_seconds = float(retry_after)
+                    except (TypeError, ValueError):
+                        retry_seconds = 1.0
                     raise NotificationError(
-                        f"Discord: rate limited, retry after {retry_after}s (429)"
+                        f"Discord: rate limited, retry after {retry_seconds}s (429)",
+                        retry_after=retry_seconds,
                     )
                 if response.status >= 400:
                     raise NotificationError(f"Discord: request failed ({response.status})")
@@ -164,3 +172,17 @@ class DiscordProvider(NotificationProvider):
                 session, "POST", f"/channels/{self.channel_id}/messages", json=payload
             )
         logger.info("Discord notification sent: %s", event_type)
+
+    async def send_digest(self, embeds: list[dict[str, Any]]) -> None:
+        """Post one digest message. The queue is only cleared by the caller after this returns."""
+        if not self.is_configured:
+            raise NotificationError("Discord: bot token and channel must be configured")
+        if not embeds:
+            return
+        payload = {"embeds": embeds[:10]}
+        timeout = aiohttp.ClientTimeout(total=REQUEST_TIMEOUT)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            await self._request(
+                session, "POST", f"/channels/{self.channel_id}/messages", json=payload
+            )
+        logger.info("Discord digest sent (%d embeds)", len(embeds))

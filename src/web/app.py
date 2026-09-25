@@ -15,6 +15,7 @@ from pydantic import BaseModel
 
 from src.library_sync import DEFAULT_MARKET, XBOX_MARKETS, LibrarySyncError, XboxProvider
 from src.notifications import DiscordProvider, NotificationError
+from src.notifications.service import short_discord_error
 
 
 if TYPE_CHECKING:
@@ -511,6 +512,24 @@ async def send_test_notification(request: NotificationTestRequest):
     except NotificationError as exc:
         return {"success": False, "message": str(exc)}
     return {"success": True, "message": "Test notification sent"}
+
+
+@app.post("/api/notifications/digest/preview")
+async def preview_notification_digest():
+    """
+    Post the digest the saved queue would produce right now.
+
+    Uses the settings already stored on the service, not whatever the form is
+    showing, and does not clear the queue.
+    """
+    if not twitch_client:
+        raise HTTPException(status_code=503, detail="Twitch client not initialized")
+
+    try:
+        await twitch_client.notification_service.send_preview()
+    except NotificationError as exc:
+        return {"success": False, "message": short_discord_error(exc)}
+    return {"success": True}
 
 
 @app.post("/api/login")

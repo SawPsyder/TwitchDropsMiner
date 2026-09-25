@@ -212,8 +212,17 @@ class BaseDrop:
                 self._twitch.gui.notify_drop_collected(
                     self.campaign.game.name, [benefit.name for benefit in self.benefits]
                 )
+            channel_name = "inventory"
+            if not getattr(self._twitch, "_claiming_from_inventory", False):
+                watching = self._twitch.watching_channel.get_with_default(None)
+                if watching is not None and getattr(watching, "name", None):
+                    channel_name = watching.name
             await self._twitch.notification_service.notify_drop_received(
-                self.campaign.game.name, [benefit.name for benefit in self.benefits]
+                self.campaign.game.name,
+                [benefit.name for benefit in self.benefits],
+                campaign=self.campaign.name,
+                drop_name=self.name,
+                channel=channel_name,
             )
         else:
             logger.error(f"Drop claim has potentially failed! Drop ID: {self.id}")

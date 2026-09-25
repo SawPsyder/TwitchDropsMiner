@@ -2544,28 +2544,230 @@ const NOTIFICATION_EVENT_TYPES = [
 
 let discordGuilds = [];
 let discordChannels = [];
+let notificationsFormDirty = false;
+let notificationStatus = null;
+let discordConfigOpen = null;
+let notificationStatusTimer = null;
+
+const DIGEST_PRESET_MINUTES = [60, 180, 360, 720, 1440, 10080];
+
+function notificationCopy() {
+    return state.translations.gui?.settings?.notifications || {};
+}
+
+function fillTemplate(template, values) {
+    return String(template || '').replace(/\{(\w+)\}/g, (_, key) => (
+        values[key] === undefined || values[key] === null ? '' : String(values[key])
+    ));
+}
+
+function markNotificationsDirty() {
+    notificationsFormDirty = true;
+    updateNotificationDeliveryVisibility();
+}
+
+function notificationsMode() {
+    return document.getElementById('notifications-mode-digest')?.checked ? 'digest' : 'immediate';
+}
+
+function setCooldownControl(numberEl, unitEl, minutes) {
+    if (!numberEl || !unitEl) return;
+    const value = Math.max(0, Math.min(1440, parseInt(minutes, 10) || 0));
+    const useHours = value >= 60 && value % 60 === 0;
+    unitEl.value = useHours ? 'hours' : 'minutes';
+    numberEl.max = useHours ? '24' : '1440';
+    numberEl.value = String(useHours ? value / 60 : value);
+}
+
+function readCooldownControl(numberEl, unitEl) {
+    const parsed = parseInt(numberEl?.value, 10);
+    const value = Number.isFinite(parsed) ? parsed : 0;
+    if (unitEl?.value === 'hours') return Math.min(1440, Math.max(0, value) * 60);
+    return Math.min(1440, Math.max(0, value));
+}
+
+let syncingCooldown = false;
+
+function syncCooldownFrom(sourceNumberId) {
+    if (syncingCooldown) return;
+    const repeatNumber = document.getElementById('notifications-cooldown-number');
+    const repeatUnit = document.getElementById('notifications-cooldown-unit');
+    const urgentNumber = document.getElementById('notifications-urgent-cooldown-number');
+    const urgentUnit = document.getElementById('notifications-urgent-cooldown-unit');
+    const sourceIsUrgent = sourceNumberId === 'notifications-urgent-cooldown-number';
+    const minutes = readCooldownControl(
+        sourceIsUrgent ? urgentNumber : repeatNumber,
+        sourceIsUrgent ? urgentUnit : repeatUnit,
+    );
+    syncingCooldown = true;
+    setCooldownControl(
+        sourceIsUrgent ? repeatNumber : urgentNumber,
+        sourceIsUrgent ? repeatUnit : urgentUnit,
+        minutes,
+    );
+    syncingCooldown = false;
+}
+
+function clampCooldownControl(numberEl, unitEl, errorEl) {
+    if (!numberEl || !unitEl) return;
+    const max = unitEl.value === 'hours' ? 24 : 1440;
+    const parsed = parseInt(numberEl.value, 10);
+    let value = Number.isFinite(parsed) ? parsed : 0;
+    const outOfRange = value < 0 || value > max;
+    value = Math.min(max, Math.max(0, value));
+    numberEl.value = String(value);
+    numberEl.max = String(max);
+    if (errorEl) errorEl.hidden = !outOfRange;
+}
+
+function onCooldownUnitChange(numberEl, unitEl, errorEl) {
+    const parsed = parseInt(numberEl.value, 10);
+    const value = Number.isFinite(parsed) ? parsed : 0;
+    if (unitEl.value === 'hours') {
+        numberEl.value = String(Math.ceil(value / 60));
+        numberEl.max = '24';
+    } else {
+        numberEl.value = String(value * 60);
+        numberEl.max = '1440';
+    }
+    clampCooldownControl(numberEl, unitEl, errorEl);
+}
+
+function digestMinutesFromCustom() {
+    const numberEl = document.getElementById('notifications-digest-custom-number');
+    const unitEl = document.getElementById('notifications-digest-custom-unit');
+    const parsed = parseInt(numberEl?.value, 10);
+    const value = Number.isFinite(parsed) ? parsed : 1;
+    if (unitEl?.value === 'days') return Math.min(7, Math.max(1, value)) * 1440;
+    return Math.min(168, Math.max(1, value)) * 60;
+}
+
+function showDigestSchedule(minutes, custom) {
+    document.querySelectorAll('#notifications-digest-presets .digest-preset').forEach(button => {
+        const preset = button.dataset.minutes;
+        const selected = custom ? preset === 'custom' : preset === String(minutes);
+        button.classList.toggle('selected', selected);
+        button.setAttribute('aria-pressed', selected ? 'true' : 'false');
+    });
+    const customBox = document.getElementById('notifications-digest-custom');
+    const clock = document.getElementById('notifications-digest-clock');
+    const showOn = !custom && minutes === 10080;
+    const showAt = !custom && (minutes === 1440 || minutes === 10080);
+    if (customBox) customBox.hidden = !custom;
+    if (clock) clock.hidden = !showAt;
+    const onLabel = document.getElementById('notifications-digest-on-label');
+    const weekday = document.getElementById('notifications-digest-weekday');
+    const atLabel = document.getElementById('notifications-digest-at-label');
+    const time = document.getElementById('notifications-digest-time');
+    if (onLabel) onLabel.hidden = !showOn;
+    if (weekday) weekday.hidden = !showOn;
+    if (atLabel) atLabel.hidden = !showAt;
+    if (time) time.hidden = !showAt;
+    const help = document.getElementById('notifications-schedule-help');
+    const copy = notificationCopy();
+    if (help && copy.digest) {
+        if (showAt) {
+            const zone = notificationStatus?.timezone;
+            help.textContent = zone
+                ? fillTemplate(copy.digest.tz_help, { timezone: zone })
+                : String(copy.digest.tz_help || '').replace(' ({timezone})', '');
+        } else {
+            help.textContent = copy.digest.relative_help || '';
+        }
+    }
+}
+
+function applyDigestInterval(minutes) {
+    const presets = DIGEST_PRESET_MINUTES.includes(minutes);
+    showDigestSchedule(minutes, !presets);
+    if (!presets) {
+        const numberEl = document.getElementById('notifications-digest-custom-number');
+        const unitEl = document.getElementById('notifications-digest-custom-unit');
+        if (numberEl && unitEl) {
+            if (minutes % 1440 === 0) {
+                unitEl.value = 'days';
+                numberEl.max = '7';
+                numberEl.value = String(Math.min(7, Math.max(1, minutes / 1440)));
+            } else {
+                unitEl.value = 'hours';
+                numberEl.max = '168';
+                numberEl.value = String(Math.min(168, Math.max(1, Math.round(minutes / 60))));
+            }
+        }
+    }
+}
+
+function onDigestCustomBlur() {
+    const errorEl = document.getElementById('notifications-interval-error');
+    const numberEl = document.getElementById('notifications-digest-custom-number');
+    const unitEl = document.getElementById('notifications-digest-custom-unit');
+    const max = unitEl?.value === 'days' ? 7 : 168;
+    const parsed = parseInt(numberEl?.value, 10);
+    const raw = Number.isFinite(parsed) ? parsed : 1;
+    const outOfRange = raw < 1 || raw > max;
+    if (numberEl) {
+        numberEl.max = String(max);
+        numberEl.value = String(Math.min(max, Math.max(1, raw)));
+    }
+    if (errorEl) errorEl.hidden = !outOfRange;
+    const minutes = digestMinutesFromCustom();
+    if (DIGEST_PRESET_MINUTES.includes(minutes)) {
+        if (errorEl) errorEl.hidden = true;
+        showDigestSchedule(minutes, false);
+    }
+    markNotificationsDirty();
+}
 
 function updateNotificationsUI(notifications) {
     if (!notifications) return;
+    if (notificationsFormDirty) {
+        fetchNotificationsStatus();
+        return;
+    }
 
     const enabledCheckbox = document.getElementById('notifications-enabled');
     if (enabledCheckbox) enabledCheckbox.checked = notifications.enabled || false;
     updateNotificationsOptionsVisibility();
 
-    const cooldownInput = document.getElementById('notifications-cooldown');
-    if (cooldownInput) {
-        cooldownInput.value = notifications.cooldown_minutes ?? 15;
-        updateSliderVisual(cooldownInput);
-    }
+    const minutes = notifications.cooldown_minutes ?? 15;
+    setCooldownControl(
+        document.getElementById('notifications-cooldown-number'),
+        document.getElementById('notifications-cooldown-unit'),
+        minutes,
+    );
+    setCooldownControl(
+        document.getElementById('notifications-urgent-cooldown-number'),
+        document.getElementById('notifications-urgent-cooldown-unit'),
+        minutes,
+    );
+
+    const mode = notifications.mode === 'digest' ? 'digest' : 'immediate';
+    const immediateRadio = document.getElementById('notifications-mode-immediate');
+    const digestRadio = document.getElementById('notifications-mode-digest');
+    if (immediateRadio) immediateRadio.checked = mode !== 'digest';
+    if (digestRadio) digestRadio.checked = mode === 'digest';
+
+    applyDigestInterval(notifications.digest_interval_minutes ?? 1440);
+    const timeInput = document.getElementById('notifications-digest-time');
+    if (timeInput) timeInput.value = notifications.digest_send_time || '09:00';
+    const weekday = document.getElementById('notifications-digest-weekday');
+    if (weekday) weekday.value = String(notifications.digest_send_weekday ?? 0);
+    const urgent = document.getElementById('notifications-digest-urgent');
+    if (urgent) urgent.checked = notifications.digest_urgent_immediate !== false;
+    const sendEmpty = document.getElementById('notifications-digest-send-empty');
+    if (sendEmpty) sendEmpty.checked = notifications.digest_send_empty === true;
+    const sections = notifications.digest_sections || {};
+    const progress = document.getElementById('notifications-digest-section-progress');
+    const errors = document.getElementById('notifications-digest-section-errors');
+    if (progress) progress.checked = sections.progress !== false;
+    if (errors) errors.checked = sections.errors !== false;
 
     const discord = notifications.discord || {};
     const discordEnabled = document.getElementById('discord-notifications-enabled');
     if (discordEnabled) discordEnabled.checked = discord.enabled || false;
-    // don't clobber the token field while the user is currently typing in it
     const botToken = document.getElementById('discord-bot-token');
     if (botToken && document.activeElement !== botToken) botToken.value = discord.bot_token || '';
 
-    // keep the currently-saved server/channel selected until a refresh replaces the options
     setSelectPlaceholder('discord-guild-select', discord.guild_id, 'discord-guild-placeholder');
     setSelectPlaceholder('discord-channel-select', discord.channel_id, 'discord-channel-placeholder');
 
@@ -2575,7 +2777,17 @@ function updateNotificationsUI(notifications) {
         if (checkbox) checkbox.checked = events[eventType] !== false;
     });
 
+    const configured = Boolean(discord.bot_token && discord.channel_id);
+    if (discordConfigOpen === null) setDiscordConfigOpen(!configured);
+
     fetchNotificationsStatus();
+    updateNotificationDeliveryVisibility();
+}
+
+function setDiscordConfigOpen(open) {
+    discordConfigOpen = open;
+    const panel = document.getElementById('discord-config-panel');
+    if (panel) panel.hidden = !open;
 }
 
 function setSelectPlaceholder(selectId, savedId, placeholderId) {
@@ -2599,9 +2811,31 @@ function getNotificationsFromUI() {
     NOTIFICATION_EVENT_TYPES.forEach(eventType => {
         events[eventType] = document.getElementById(`discord-event-${eventType}`)?.checked !== false;
     });
+    const digestMode = notificationsMode() === 'digest';
+    const cooldown = readCooldownControl(
+        document.getElementById(digestMode ? 'notifications-urgent-cooldown-number' : 'notifications-cooldown-number'),
+        document.getElementById(digestMode ? 'notifications-urgent-cooldown-unit' : 'notifications-cooldown-unit'),
+    );
+    const customSelected = document.getElementById('digest-preset-custom')?.classList.contains('selected');
+    const selectedPreset = document.querySelector('#notifications-digest-presets .digest-preset.selected');
+    let interval = 1440;
+    if (customSelected) interval = digestMinutesFromCustom();
+    else if (selectedPreset && selectedPreset.dataset.minutes !== 'custom') {
+        interval = parseInt(selectedPreset.dataset.minutes, 10) || 1440;
+    }
     return {
         enabled: document.getElementById('notifications-enabled')?.checked || false,
-        cooldown_minutes: parseInt(document.getElementById('notifications-cooldown')?.value, 10) || 0,
+        cooldown_minutes: cooldown,
+        mode: notificationsMode(),
+        digest_interval_minutes: interval,
+        digest_send_time: document.getElementById('notifications-digest-time')?.value || '09:00',
+        digest_send_weekday: parseInt(document.getElementById('notifications-digest-weekday')?.value, 10) || 0,
+        digest_urgent_immediate: document.getElementById('notifications-digest-urgent')?.checked !== false,
+        digest_send_empty: document.getElementById('notifications-digest-send-empty')?.checked === true,
+        digest_sections: {
+            progress: document.getElementById('notifications-digest-section-progress')?.checked !== false,
+            errors: document.getElementById('notifications-digest-section-errors')?.checked !== false,
+        },
         discord: {
             enabled: document.getElementById('discord-notifications-enabled')?.checked || false,
             bot_token: document.getElementById('discord-bot-token')?.value.trim() || '',
@@ -2612,19 +2846,199 @@ function getNotificationsFromUI() {
     };
 }
 
+function updateNotificationDeliveryVisibility() {
+    const mode = notificationsMode();
+    const immediate = document.getElementById('notifications-immediate-options');
+    const digest = document.getElementById('notifications-digest-options');
+    if (immediate) immediate.hidden = mode !== 'immediate';
+    if (digest) digest.hidden = mode !== 'digest';
+    const help = document.getElementById('notifications-delivery-help');
+    const copy = notificationCopy();
+    if (help) {
+        help.textContent = mode === 'digest'
+            ? (copy.delivery_digest_help || '')
+            : (copy.delivery_each_help || '');
+    }
+    const urgentOn = document.getElementById('notifications-digest-urgent')?.checked !== false;
+    const urgentCooldown = document.getElementById('notifications-urgent-cooldown');
+    if (urgentCooldown) urgentCooldown.hidden = !urgentOn;
+    const customSelected = document.getElementById('digest-preset-custom')?.classList.contains('selected');
+    const selectedPreset = document.querySelector('#notifications-digest-presets .digest-preset.selected');
+    if (selectedPreset) {
+        showDigestSchedule(
+            customSelected ? 0 : parseInt(selectedPreset.dataset.minutes, 10),
+            Boolean(customSelected),
+        );
+    }
+
+    const enabled = document.getElementById('notifications-enabled')?.checked;
+    const connected = Boolean(notificationStatus?.providers?.discord?.configured);
+    const delivery = document.getElementById('notifications-delivery');
+    const blocked = !enabled || !connected;
+    if (delivery) delivery.classList.toggle('is-disabled', blocked);
+    const blockedHelp = document.getElementById('notifications-delivery-disabled-help');
+    if (blockedHelp) blockedHelp.hidden = !blocked;
+    if (delivery) {
+        delivery.querySelectorAll('input, select, button').forEach(element => {
+            if (element.id === 'notifications-digest-preview-btn') return;
+            element.disabled = blocked;
+        });
+    }
+    updateFlushWarning();
+    updatePreviewButton();
+    renderDigestStatus();
+}
+
+function updateFlushWarning() {
+    const note = document.getElementById('notifications-flush-warning');
+    if (!note) return;
+    const copy = notificationCopy().digest || {};
+    const saved = state.settings?.notifications?.mode || 'immediate';
+    const queued = notificationStatus?.queued_count || 0;
+    const show = notificationsFormDirty && notificationsMode() === 'immediate' && saved === 'digest' && queued > 0;
+    note.hidden = !show;
+    if (!show) return;
+    const template = queued === 1 ? copy.flush_warning_one : copy.flush_warning;
+    note.textContent = fillTemplate(template, { count: queued });
+}
+
+function updatePreviewButton() {
+    const button = document.getElementById('notifications-digest-preview-btn');
+    if (!button || button.dataset.busy === '1') return;
+    const copy = notificationCopy().digest || {};
+    const connected = Boolean(notificationStatus?.providers?.discord?.configured);
+    const enabled = document.getElementById('notifications-enabled')?.checked;
+    // aria-disabled, not the disabled property: a disabled button does not receive
+    // the hover events the shared tooltip listens for.
+    button.disabled = false;
+    if (!connected || !enabled) {
+        button.setAttribute('aria-disabled', 'true');
+        button.dataset.tooltip = connected ? '' : (copy.preview_connect_first || 'Connect Discord first.');
+    } else if (notificationsFormDirty) {
+        button.setAttribute('aria-disabled', 'true');
+        button.dataset.tooltip = copy.preview_save_first || 'Save first to preview these settings.';
+    } else {
+        button.setAttribute('aria-disabled', 'false');
+        button.dataset.tooltip = '';
+    }
+}
+
+const DIGEST_WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+const DIGEST_MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+function formatClock(date) {
+    const hours = String(date.getHours()).padStart(2, '0');
+    const minutes = String(date.getMinutes()).padStart(2, '0');
+    return `${hours}:${minutes}`;
+}
+
+function formatDigestWhen(iso, { timeOnly = false } = {}) {
+    if (!iso) return '';
+    const date = new Date(iso);
+    if (Number.isNaN(date.getTime())) return '';
+    const time = formatClock(date);
+    if (timeOnly) return time;
+    const start = value => new Date(value.getFullYear(), value.getMonth(), value.getDate()).getTime();
+    const dayDiff = Math.round((start(date) - start(new Date())) / 86400000);
+    if (dayDiff === 0) return `today at ${time}`;
+    if (dayDiff === 1) return `tomorrow at ${time}`;
+    const day = `${DIGEST_WEEKDAYS[date.getDay()]} ${date.getDate()} ${DIGEST_MONTHS[date.getMonth()]}`;
+    return `${day}, ${time}`;
+}
+
+function formatRemain(iso) {
+    if (!iso) return '';
+    const ms = new Date(iso).getTime() - Date.now();
+    const minutes = Math.max(0, Math.round(ms / 60000));
+    if (minutes < 1) return '<1 min';
+    if (minutes < 60) return `${minutes} min`;
+    if (minutes < 24 * 60) {
+        const hours = Math.floor(minutes / 60);
+        const mins = minutes % 60;
+        return mins ? `${hours} h ${mins} min` : `${hours} h`;
+    }
+    const days = Math.floor(minutes / (24 * 60));
+    const hours = Math.floor((minutes % (24 * 60)) / 60);
+    return `${days} d ${hours} h`;
+}
+
+function renderDigestStatus() {
+    const line = document.getElementById('notifications-digest-status-line');
+    const lastLine = document.getElementById('notifications-digest-last-line');
+    const wrap = document.getElementById('notifications-digest-status');
+    if (!line || !lastLine) return;
+    const copy = notificationCopy().digest || {};
+    const savedMode = state.settings?.notifications?.mode || 'immediate';
+    const modeDirty = notificationsFormDirty && notificationsMode() !== savedMode;
+    if (wrap) wrap.hidden = modeDirty || notificationsMode() !== 'digest';
+    if (modeDirty || notificationsMode() !== 'digest') return;
+
+    const status = notificationStatus || {};
+    const queued = status.queued_count || 0;
+    const when = formatDigestWhen(status.next_digest_at);
+    const remain = formatRemain(status.next_digest_at);
+    const sendEmpty = state.settings?.notifications?.digest_send_empty === true;
+    if (status.sending) {
+        line.textContent = copy.status_sending || 'Sending digest…';
+        lastLine.textContent = '';
+        lastLine.classList.remove('digest-failed');
+        return;
+    }
+    if (status.queue_full && queued > 0) {
+        const template = status.dropped_count === 1 ? copy.status_full_dropped_one : copy.status_full;
+        line.textContent = fillTemplate(template, { count: queued, dropped: status.dropped_count || 0 });
+    } else if (queued > 0) {
+        const template = queued === 1 ? copy.status_queued_one : copy.status_queued;
+        line.textContent = fillTemplate(template, { count: queued, when, remain });
+    } else if (sendEmpty) {
+        line.textContent = fillTemplate(copy.status_empty_send, { when, remain });
+    } else {
+        const time = formatDigestWhen(status.next_digest_at, { timeOnly: true })
+            || state.settings?.notifications?.digest_send_time
+            || '09:00';
+        line.textContent = fillTemplate(copy.status_empty_skip, { time });
+    }
+
+    const last = status.last_digest || {};
+    lastLine.classList.remove('digest-failed');
+    if (last.ok === false && last.error) {
+        lastLine.classList.add('digest-failed');
+        const time = formatDigestWhen(last.at, { timeOnly: true });
+        const retry = last.retry_at ? formatDigestWhen(last.retry_at, { timeOnly: true }) : '';
+        lastLine.textContent = retry
+            ? fillTemplate(copy.last_failed, { time, error: last.error, retry })
+            : fillTemplate(copy.last_failed_no_retry, { time, error: last.error });
+    } else if (last.ok && last.at) {
+        lastLine.textContent = fillTemplate(copy.last_ok, { when: formatDigestWhen(last.at) });
+    } else {
+        lastLine.textContent = copy.last_never || 'No digest sent yet';
+    }
+}
+
 async function fetchNotificationsStatus() {
     try {
         const response = await fetch('/api/notifications/status');
-        updateDiscordStatusLine(await response.json());
+        notificationStatus = await response.json();
+        updateDiscordStatusLine(notificationStatus);
+        updateNotificationDeliveryVisibility();
     } catch (error) {
         console.error('Failed to fetch notification status:', error);
     }
 }
 
+function ensureNotificationStatusTimer() {
+    if (notificationStatusTimer) return;
+    notificationStatusTimer = setInterval(() => {
+        const visible = document.visibilityState === 'visible'
+            && document.getElementById('settings-tab')?.classList.contains('active');
+        if (visible) fetchNotificationsStatus();
+    }, 60000);
+}
+
 function updateDiscordStatusLine(status) {
     const line = document.getElementById('discord-status-line');
     if (!line) return;
-    const notifications = state.translations.gui?.settings?.notifications || {};
+    const notifications = notificationCopy();
     const provider = status?.providers?.discord;
 
     line.classList.remove('status-ok', 'status-error');
@@ -2638,7 +3052,54 @@ function updateDiscordStatusLine(status) {
         return;
     }
     line.classList.add('status-ok');
-    line.textContent = notifications.connected || 'Connected';
+    const guildSelect = document.getElementById('discord-guild-select');
+    const channelSelect = document.getElementById('discord-channel-select');
+    const guild = guildSelect?.selectedOptions?.[0]?.textContent || '';
+    const channel = channelSelect?.selectedOptions?.[0]?.textContent || '';
+    const guildOk = guild && !/refresh|select|click/i.test(guild);
+    const channelOk = channel.startsWith('#');
+    let text = notifications.connected || 'Connected';
+    if (guildOk && channelOk) text = `${text} · ${guild} › ${channel}`;
+    else if (channelOk) text = `${text} · ${channel}`;
+    line.textContent = text;
+}
+
+function discordChannelName() {
+    const channel = document.getElementById('discord-channel-select')?.selectedOptions?.[0]?.textContent || '';
+    if (channel.startsWith('#')) return channel.slice(1);
+    return 'Discord';
+}
+
+async function saveNotificationSettings() {
+    notificationsFormDirty = false;
+    await saveSettings({ includeNotifications: true });
+    updateNotificationDeliveryVisibility();
+    fetchNotificationsStatus();
+}
+
+async function sendDigestPreview() {
+    const button = document.getElementById('notifications-digest-preview-btn');
+    const copy = notificationCopy().digest || {};
+    if (!button || button.getAttribute('aria-disabled') === 'true') return;
+    const previous = button.textContent;
+    button.dataset.busy = '1';
+    button.setAttribute('aria-disabled', 'true');
+    button.textContent = copy.preview_sending || 'Sending preview…';
+    try {
+        const response = await fetch('/api/notifications/digest/preview', { method: 'POST' });
+        const data = await response.json();
+        if (data.success) {
+            showToast('success', fillTemplate(copy.preview_sent, { channel: discordChannelName() }));
+        } else {
+            showToast('error', fillTemplate(copy.preview_failed, { reason: data.message || 'Discord request failed' }));
+        }
+    } catch (error) {
+        showToast('error', fillTemplate(copy.preview_failed, { reason: error.message }));
+    } finally {
+        button.dataset.busy = '';
+        button.textContent = previous;
+        fetchNotificationsStatus();
+    }
 }
 
 async function verifyDiscordBot() {
@@ -2656,7 +3117,7 @@ async function verifyDiscordBot() {
 
     try {
         // make sure the backend verifies the freshest token
-        await saveSettings();
+        await saveSettings({ includeNotifications: true });
         const response = await fetch('/api/notifications/discord/verify', { method: 'POST' });
         const data = await response.json();
 
@@ -2773,7 +3234,7 @@ async function sendTestNotification() {
 
     try {
         // make sure the backend tests against the freshest configuration
-        await saveSettings();
+        await saveSettings({ includeNotifications: true });
         const response = await fetch('/api/notifications/test', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -2916,7 +3377,11 @@ async function verifyProxy() {
     }
 }
 
-async function saveSettings() {
+async function saveSettings(options = {}) {
+    const includeNotifications = options.includeNotifications === true;
+    const notifications = includeNotifications
+        ? getNotificationsFromUI()
+        : (state.settings.notifications || getNotificationsFromUI());
     const settings = {
         dark_mode: getDarkModeFromUI(),
         animations: getAnimationsModeFromUI(),
@@ -2943,10 +3408,13 @@ async function saveSettings() {
             "UNKNOWN": document.getElementById('mining-benefit-unknown')?.checked
         },
         library_sync: getLibrarySyncFromUI(),
-        notifications: getNotificationsFromUI()
+        notifications
     };
     state.settings.library_sync = settings.library_sync;
-    state.settings.notifications = settings.notifications;
+    if (includeNotifications) {
+        state.settings.notifications = notifications;
+        notificationsFormDirty = false;
+    }
 
     try {
         await fetch('/api/settings', {
@@ -3284,7 +3752,69 @@ function applyTranslations(t) {
             setNotificationsText('discord-event-auth_attention-label', notifications.event_auth_attention);
             setNotificationsText('discord-event-mining_stalled-label', notifications.event_mining_stalled);
             setNotificationsText('discord-event-new_campaign-label', notifications.event_new_campaign);
+            setNotificationsText('discord-change-btn', notifications.change_button);
+            setNotificationsText('notifications-save-btn', notifications.save_button);
+            setNotificationsText('notifications-delivery-label', notifications.delivery);
+            setNotificationsText('notifications-mode-immediate-label', notifications.delivery_each);
+            setNotificationsText('notifications-mode-digest-label', notifications.delivery_digest);
+            setNotificationsText('notifications-delivery-disabled-help', notifications.delivery_connect_help);
+            setNotificationsText('notifications-repeat-cooldown-label', notifications.repeat_cooldown);
+            setNotificationsText('notifications-repeat-cooldown-help', notifications.repeat_cooldown_help);
+            setNotificationsText('notifications-repeat-cooldown-tip', notifications.repeat_cooldown_tip);
+            setNotificationsText('notifications-urgent-cooldown-label', notifications.urgent_cooldown);
+            setNotificationsText('notifications-cooldown-error', notifications.err?.cooldown_range);
+            setNotificationsText('notifications-urgent-cooldown-error', notifications.err?.cooldown_range);
+            setNotificationsText('notifications-interval-error', notifications.err?.interval_range);
+            const digest = notifications.digest || {};
+            setNotificationsText('notifications-digest-every-label', digest.every);
+            setNotificationsText('digest-preset-1h', digest.preset_1h);
+            setNotificationsText('digest-preset-3h', digest.preset_3h);
+            setNotificationsText('digest-preset-6h', digest.preset_6h);
+            setNotificationsText('digest-preset-12h', digest.preset_12h);
+            setNotificationsText('digest-preset-daily', digest.daily);
+            setNotificationsText('digest-preset-weekly', digest.weekly);
+            setNotificationsText('digest-preset-custom', digest.custom);
+            setNotificationsText('notifications-digest-on-label', digest.on);
+            setNotificationsText('notifications-digest-at-label', digest.at);
+            setNotificationsText('notifications-digest-include-label', digest.include);
+            setNotificationsText('notifications-digest-section-progress-label', digest.section_progress);
+            setNotificationsText('notifications-digest-section-errors-label', digest.section_errors);
+            setNotificationsText('notifications-digest-urgent-help', digest.urgent_help);
+            setNotificationsText('notifications-digest-send-empty-help', digest.send_empty_help);
+            setNotificationsText('notifications-digest-preview-help', digest.preview_help);
+            const urgentLabel = document.querySelector('#notifications-digest-urgent-label span');
+            if (urgentLabel && digest.urgent) urgentLabel.textContent = digest.urgent;
+            const emptyLabel = document.querySelector('#notifications-digest-send-empty-label span');
+            if (emptyLabel && digest.send_empty) emptyLabel.textContent = digest.send_empty;
+            const previewBtn = document.getElementById('notifications-digest-preview-btn');
+            if (previewBtn && digest.preview && previewBtn.dataset.busy !== '1') {
+                previewBtn.textContent = digest.preview;
+            }
+            const weekdays = digest.weekdays || {};
+            const weekdaySelect = document.getElementById('notifications-digest-weekday');
+            if (weekdaySelect) {
+                ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday']
+                    .forEach((name, index) => {
+                        if (weekdaySelect.options[index] && weekdays[name]) {
+                            weekdaySelect.options[index].textContent = weekdays[name];
+                        }
+                    });
+            }
+            const unitText = (id, value) => {
+                const el = document.getElementById(id);
+                if (el && value) el.textContent = value;
+            };
+            unitText('notifications-cooldown-unit-minutes', notifications.units?.minutes);
+            unitText('notifications-cooldown-unit-hours', notifications.units?.hours);
+            unitText('notifications-digest-unit-hours', notifications.units?.hours);
+            unitText('notifications-digest-unit-days', notifications.units?.days);
+            const urgentUnit = document.getElementById('notifications-urgent-cooldown-unit');
+            if (urgentUnit && notifications.units) {
+                if (urgentUnit.options[0]) urgentUnit.options[0].textContent = notifications.units.minutes;
+                if (urgentUnit.options[1]) urgentUnit.options[1].textContent = notifications.units.hours;
+            }
             // discord-bot-token-hint stays untranslated HTML - it contains the developer portal link
+            updateNotificationDeliveryVisibility();
             fetchNotificationsStatus();
         }
 
@@ -3672,6 +4202,7 @@ function switchTab(tabName) {
     // Show selected tab
     document.getElementById(`${tabName}-tab`).classList.add('active');
     document.querySelector(`[data-tab="${tabName}"]`).classList.add('active');
+    if (tabName === 'settings') fetchNotificationsStatus();
 }
 
 // ==================== Event Listeners ====================
@@ -3818,28 +4349,83 @@ document.addEventListener('DOMContentLoaded', () => {
     fetchLibraryStatus();
     fetchAndPopulateXboxMarkets();
 
-    // Notifications
+    // Notifications. The section has its own Save so a digest preview can refuse unsaved edits.
+    const markNotificationField = () => markNotificationsDirty();
     document.getElementById('notifications-enabled').addEventListener('change', () => {
         updateNotificationsOptionsVisibility();
-        saveSettings();
+        markNotificationsDirty();
     });
-    const notificationsCooldownSlider = document.getElementById('notifications-cooldown');
-    notificationsCooldownSlider.addEventListener('input', (e) => updateSliderVisual(e.target));
-    notificationsCooldownSlider.addEventListener('change', saveSettings);
-    updateSliderVisual(notificationsCooldownSlider);
-    document.getElementById('discord-notifications-enabled').addEventListener('change', saveSettings);
-    document.getElementById('discord-bot-token').addEventListener('change', saveSettings);
+    document.getElementById('discord-notifications-enabled').addEventListener('change', markNotificationField);
+    document.getElementById('discord-bot-token').addEventListener('input', markNotificationField);
     document.getElementById('discord-verify-btn').addEventListener('click', verifyDiscordBot);
+    document.getElementById('discord-change-btn').addEventListener('click', () => {
+        setDiscordConfigOpen(!document.getElementById('discord-config-panel') || document.getElementById('discord-config-panel').hidden);
+    });
     document.getElementById('discord-refresh-guilds-btn').addEventListener('click', refreshDiscordGuilds);
     document.getElementById('discord-guild-select').addEventListener('change', (e) => {
         refreshDiscordChannels(e.target.value);
-        saveSettings();
+        markNotificationsDirty();
     });
-    document.getElementById('discord-channel-select').addEventListener('change', saveSettings);
+    document.getElementById('discord-channel-select').addEventListener('change', markNotificationField);
     document.getElementById('discord-test-btn').addEventListener('click', sendTestNotification);
     NOTIFICATION_EVENT_TYPES.forEach(eventType => {
-        document.getElementById(`discord-event-${eventType}`)?.addEventListener('change', saveSettings);
+        document.getElementById(`discord-event-${eventType}`)?.addEventListener('change', markNotificationField);
     });
+    document.querySelectorAll('input[name="notifications-mode"]').forEach(radio => {
+        radio.addEventListener('change', markNotificationField);
+    });
+    const bindCooldown = (numberId, unitId, errorId) => {
+        const numberEl = document.getElementById(numberId);
+        const unitEl = document.getElementById(unitId);
+        const errorEl = document.getElementById(errorId);
+        numberEl?.addEventListener('input', () => {
+            syncCooldownFrom(numberId);
+            markNotificationsDirty();
+        });
+        numberEl?.addEventListener('blur', () => {
+            clampCooldownControl(numberEl, unitEl, errorEl);
+            syncCooldownFrom(numberId);
+            markNotificationsDirty();
+        });
+        unitEl?.addEventListener('change', () => {
+            onCooldownUnitChange(numberEl, unitEl, errorEl);
+            syncCooldownFrom(numberId);
+            markNotificationsDirty();
+        });
+    };
+    bindCooldown('notifications-cooldown-number', 'notifications-cooldown-unit', 'notifications-cooldown-error');
+    bindCooldown('notifications-urgent-cooldown-number', 'notifications-urgent-cooldown-unit', 'notifications-urgent-cooldown-error');
+    document.querySelectorAll('#notifications-digest-presets .digest-preset').forEach(button => {
+        button.addEventListener('click', () => {
+            if (button.dataset.minutes === 'custom') showDigestSchedule(0, true);
+            else showDigestSchedule(parseInt(button.dataset.minutes, 10), false);
+            markNotificationsDirty();
+        });
+    });
+    document.getElementById('notifications-digest-custom-number')?.addEventListener('input', markNotificationField);
+    document.getElementById('notifications-digest-custom-number')?.addEventListener('blur', onDigestCustomBlur);
+    document.getElementById('notifications-digest-custom-unit')?.addEventListener('change', () => {
+        const numberEl = document.getElementById('notifications-digest-custom-number');
+        const unitEl = document.getElementById('notifications-digest-custom-unit');
+        const parsed = parseInt(numberEl?.value, 10);
+        const value = Number.isFinite(parsed) ? parsed : 1;
+        if (unitEl.value === 'days') {
+            numberEl.max = '7';
+            numberEl.value = String(Math.max(1, Math.ceil(value / 24)));
+        } else {
+            numberEl.max = '168';
+            numberEl.value = String(Math.min(168, value * 24));
+        }
+        onDigestCustomBlur();
+    });
+    ['notifications-digest-time', 'notifications-digest-weekday', 'notifications-digest-urgent',
+        'notifications-digest-send-empty', 'notifications-digest-section-progress',
+        'notifications-digest-section-errors'].forEach(id => {
+        document.getElementById(id)?.addEventListener('change', markNotificationField);
+    });
+    document.getElementById('notifications-save-btn')?.addEventListener('click', saveNotificationSettings);
+    document.getElementById('notifications-digest-preview-btn')?.addEventListener('click', sendDigestPreview);
+    ensureNotificationStatusTimer();
     fetchNotificationsStatus();
 
 

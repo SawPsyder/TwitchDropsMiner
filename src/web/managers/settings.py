@@ -4,8 +4,16 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable
+from copy import deepcopy
 from typing import TYPE_CHECKING, Any
 
+from src.config.settings import (
+    COOLDOWN_MINUTES_MAX,
+    DIGEST_INTERVAL_MAX_MINUTES,
+    DIGEST_INTERVAL_MIN_MINUTES,
+    NOTIFICATION_MODES,
+    default_settings,
+)
 from src.i18n.translator import _
 from src.library_sync import DEFAULT_MARKET, LIST_MODES, XBOX_MARKET_CODES
 from src.models.game import Game
@@ -23,6 +31,45 @@ AUTO_ON_OFF_MODES = ("auto", "on", "off")
 # DATE_FORMATS / TIME_FORMATS - "auto" defers to the browser/OS locale)
 DATE_FORMATS = ("auto", "iso", "dmy_dot", "dmy_slash", "mdy_slash", "ymd_slash")
 TIME_FORMATS = ("auto", "24h", "12h")
+
+
+def _overlay_known(template: dict[str, Any], current: dict[str, Any]) -> None:
+    """Copy keys from current onto template, keeping template-only keys (new defaults)."""
+    for key, value in current.items():
+        if key not in template:
+            continue
+        if isinstance(template[key], dict) and isinstance(value, dict):
+            _overlay_known(template[key], value)
+        else:
+            template[key] = value
+
+
+def _clamp_int(value: object, low: int, high: int, fallback: int) -> int:
+    if isinstance(value, bool) or not isinstance(value, (int, float, str)):
+        return fallback
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        return fallback
+    return min(high, max(low, number))
+
+
+def _as_bool(value: object, default: bool) -> bool:
+    if isinstance(value, bool):
+        return value
+    return default
+
+
+def _normalize_hhmm(value: object) -> str | None:
+    if not isinstance(value, str) or ":" not in value:
+        return None
+    hour_text, minute_text, *_rest = value.strip().split(":")
+    if not (hour_text.isdigit() and minute_text.isdigit()):
+        return None
+    hour, minute = int(hour_text), int(minute_text)
+    if not (0 <= hour <= 23 and 0 <= minute <= 59):
+        return None
+    return f"{hour:02d}:{minute:02d}"
 
 
 if TYPE_CHECKING:
@@ -50,6 +97,7 @@ class SettingsManager:
         self._console = console
         self._on_change = on_change
         self._available_games: list[str] = []
+        self._notification_service: Any = None
 
     def get_settings(self) -> dict[str, Any]:
         """Get current settings for display.
@@ -179,6 +227,7 @@ class SettingsManager:
                 # never log the bot token
                 log_value=self._strip_notification_credentials(sanitized_notifications),
             )
+            self._flush_digest_on_mode_switch(current_notifications, sanitized_notifications)
 
         self._settings.save()
         self._broadcaster.emit_soon("settings_updated", self.get_settings())
@@ -291,19 +340,88 @@ class SettingsManager:
             stripped[provider_key] = provider
         return stripped
 
+    def bind_notification_service(self, service: Any) -> None:
+        """Attach the live service so leaving digest mode can flush a queued summary."""
+        self._notification_service = service
+
+    def _flush_digest_on_mode_switch(
+        self, previous: dict[str, Any], new: dict[str, Any]
+    ) -> None:
+        service = self._notification_service
+        if service is None:
+            return
+        previous_mode = previous.get("mode", "immediate")
+        new_mode = new.get("mode", "immediate")
+        if previous_mode == "digest" and new_mode == "immediate" and service.has_digest_content():
+            service.schedule_mode_switch_flush()
+
     def _sanitize_notifications(self, value: dict[str, Any]) -> dict[str, Any]:
         """Validate an incoming notifications settings object against the current one.
 
-        Unknown keys are dropped, missing keys are filled in from the current
-        settings, and invalid values are replaced with their current ones.
+        Unknown keys are dropped, missing keys are filled in from the defaults
+        (so a settings file from before digest mode still gains the new fields),
+        and invalid values are clamped or replaced.
         """
-        sanitized: dict[str, Any] = dict(value)
         current: dict[str, Any] = dict(self._settings.notifications)
-        merge_json(sanitized, current)
-        try:
-            sanitized["cooldown_minutes"] = max(0, int(sanitized["cooldown_minutes"]))
-        except (TypeError, ValueError):
-            sanitized["cooldown_minutes"] = current["cooldown_minutes"]
+        template = deepcopy(default_settings["notifications"])
+        _overlay_known(template, current)
+        sanitized: dict[str, Any] = dict(value)
+        merge_json(sanitized, template)
+        sanitized["cooldown_minutes"] = _clamp_int(
+            sanitized.get("cooldown_minutes"),
+            0,
+            COOLDOWN_MINUTES_MAX,
+            _clamp_int(current.get("cooldown_minutes"), 0, COOLDOWN_MINUTES_MAX, 15),
+        )
+        mode = sanitized.get("mode")
+        if mode not in NOTIFICATION_MODES:
+            current_mode = current.get("mode")
+            sanitized["mode"] = current_mode if current_mode in NOTIFICATION_MODES else "immediate"
+        sanitized["digest_interval_minutes"] = _clamp_int(
+            sanitized.get("digest_interval_minutes"),
+            DIGEST_INTERVAL_MIN_MINUTES,
+            DIGEST_INTERVAL_MAX_MINUTES,
+            _clamp_int(
+                current.get("digest_interval_minutes"),
+                DIGEST_INTERVAL_MIN_MINUTES,
+                DIGEST_INTERVAL_MAX_MINUTES,
+                1440,
+            ),
+        )
+        send_time = _normalize_hhmm(sanitized.get("digest_send_time"))
+        if send_time is None:
+            send_time = _normalize_hhmm(current.get("digest_send_time")) or "09:00"
+        sanitized["digest_send_time"] = send_time
+        sanitized["digest_send_weekday"] = _clamp_int(
+            sanitized.get("digest_send_weekday"),
+            0,
+            6,
+            _clamp_int(current.get("digest_send_weekday"), 0, 6, 0),
+        )
+        sanitized["digest_urgent_immediate"] = _as_bool(
+            sanitized.get("digest_urgent_immediate"),
+            _as_bool(current.get("digest_urgent_immediate"), True),
+        )
+        sanitized["digest_send_empty"] = _as_bool(
+            sanitized.get("digest_send_empty"),
+            _as_bool(current.get("digest_send_empty"), False),
+        )
+        incoming_sections = sanitized.get("digest_sections")
+        current_sections = current.get("digest_sections")
+        if not isinstance(incoming_sections, dict):
+            incoming_sections = {}
+        if not isinstance(current_sections, dict):
+            current_sections = {}
+        sanitized["digest_sections"] = {
+            "progress": _as_bool(
+                incoming_sections.get("progress"),
+                _as_bool(current_sections.get("progress"), True),
+            ),
+            "errors": _as_bool(
+                incoming_sections.get("errors"),
+                _as_bool(current_sections.get("errors"), True),
+            ),
+        }
         return sanitized
 
     # per-provider settings keys that hold credentials rather than connection config

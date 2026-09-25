@@ -112,6 +112,12 @@ class Twitch:
         self._stream_selector: StreamSelector = StreamSelector()
         self.library_sync: LibrarySyncService = LibrarySyncService(settings)
         self.notification_service: NotificationService = NotificationService(settings)
+        self.notification_service.set_progress_provider(self.digest_progress_snapshot)
+        # set while _state_games_update claims drops straight from the inventory,
+        # so those notifications say "inventory" instead of the watched channel
+        self._claiming_from_inventory: bool = False
+        # wall-clock moment mining last had nothing to watch; cleared when a channel starts
+        self._mining_stalled_since: datetime | None = None
 
     def _ensure_api_clients(self) -> None:
         """Ensure API clients are initialized (called after GUI is set)."""
@@ -142,6 +148,7 @@ class Twitch:
 
     async def shutdown(self) -> None:
         start_time = time()
+        await self.notification_service.stop()
         self.stop_watching()
         if self._watching_task is not None:
             self._watching_task.cancel()
@@ -293,6 +300,9 @@ class Twitch:
             ]
         )
         self._full_cleanup = False
+        # digest scheduling is its own task: MaintenanceService is recreated on
+        # every inventory fetch and must not own a timer that has to survive that
+        self.notification_service.start()
 
     async def _state_inventory_fetch(self) -> None:
         # ensure the websocket is running
@@ -305,14 +315,19 @@ class Twitch:
         self.change_state(State.GAMES_UPDATE)
 
     async def _state_games_update(self) -> None:
-        # claim drops from expired and active campaigns
+        # claim drops from expired and active campaigns. Flag the loop so a claim
+        # made here is reported as an inventory claim, not as the watched channel.
         logger.info("Checking for claimable drops")
         logger.debug("Campaigns in inventory: %s", self.inventory)
-        for campaign in self.inventory:
-            if not campaign.upcoming:
-                for drop in campaign.drops:
-                    if drop.can_claim:
-                        await drop.claim()
+        self._claiming_from_inventory = True
+        try:
+            for campaign in self.inventory:
+                if not campaign.upcoming:
+                    for drop in campaign.drops:
+                        if drop.can_claim:
+                            await drop.claim()
+        finally:
+            self._claiming_from_inventory = False
         # sync external game libraries and refresh the auto watch list
         await self.sync_game_libraries()
         # figure out which games we want based on the two-tier watch list
@@ -405,6 +420,7 @@ class Twitch:
         else:
             # with no games available, we switch to IDLE after cleanup
             self.print(_.t["status"]["no_campaign"])
+            self._note_mining_stalled()
             await self.notification_service.notify_mining_stalled(_.t["status"]["no_campaign"])
             self.change_state(State.IDLE)
 
@@ -592,6 +608,7 @@ class Twitch:
                 # the whole queue right now. Fall back to IDLE; the periodic
                 # maintenance reload will resume mining.
                 self.print(_.t["status"]["no_channel"])
+                self._note_mining_stalled()
                 await self.notification_service.notify_mining_stalled(_.t["status"]["no_channel"])
                 self.change_state(State.IDLE)
 
@@ -605,7 +622,55 @@ class Twitch:
 
     def watch(self, channel: Channel, *, update_status: bool = True) -> None:
         """Delegate to WatchService."""
+        self._mining_stalled_since = None
         self._watch_service.watch(channel, update_status=update_status)
+
+    def _note_mining_stalled(self) -> None:
+        """Remember the first moment of the current stall for the digest progress line."""
+        if self._mining_stalled_since is None:
+            self._mining_stalled_since = datetime.now(UTC)
+
+    def digest_progress_snapshot(self) -> dict[str, Any]:
+        """
+        Point-in-time mining picture folded into a digest when it is sent.
+
+        One row per active campaign's current drop. The drop being watched is
+        marked so the renderer can list it first.
+        """
+        watching = self.watching_channel.get_with_default(None)
+        channel_name = getattr(watching, "name", None) if watching is not None else None
+        game = getattr(watching, "game", None) if watching is not None else None
+        game_name = getattr(game, "name", None) if game is not None else None
+        campaigns: list[dict[str, Any]] = []
+        for campaign in self.inventory:
+            if not getattr(campaign, "active", False):
+                continue
+            drop = campaign.first_drop
+            if drop is None:
+                continue
+            campaigns.append(
+                {
+                    "game": campaign.game.name,
+                    "drop": drop.name,
+                    "percent": int(drop.progress * 100),
+                    "remaining_minutes": max(0, int(drop.remaining_minutes)),
+                    "mining_now": bool(game_name) and campaign.game.name == game_name,
+                }
+            )
+        if channel_name and game_name:
+            state = "watching"
+        elif self._mining_stalled_since is not None:
+            state = "stalled"
+        else:
+            state = "idle"
+        stalled = self._mining_stalled_since
+        return {
+            "state": state,
+            "channel": channel_name,
+            "game": game_name,
+            "stalled_since": stalled.isoformat() if stalled is not None else None,
+            "campaigns": campaigns,
+        }
 
     def stop_watching(self) -> None:
         """Delegate to WatchService."""
