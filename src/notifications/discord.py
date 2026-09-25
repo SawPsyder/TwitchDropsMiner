@@ -11,14 +11,21 @@ token could be extracted from the source/image and abused.
 from __future__ import annotations
 
 import logging
-from typing import Any
+import math
+from datetime import UTC, datetime
+from email.utils import parsedate_to_datetime
+from typing import TYPE_CHECKING, Any
 
 import aiohttp
 
 from src.notifications.base import NotificationError, NotificationProvider
 
 
-logger = logging.getLogger("TwitchDrops")
+if TYPE_CHECKING:
+    from src.config.settings import Settings
+
+
+logger = logging.getLogger("TwitchDrops.notifications")
 
 API_BASE = "https://discord.com/api/v10"
 
@@ -37,12 +44,75 @@ EVENT_COLORS: dict[str, int] = {
 # generic request timeout - these calls happen on user action (settings save,
 # test button) or on mining events, never in a hot loop
 REQUEST_TIMEOUT = 15
+# when a 429 carries no usable delay, wait at least this long and double it
+RATE_LIMIT_BACKOFF_MIN = 5.0
+RATE_LIMIT_BACKOFF_MAX = 300.0
+# a day-long or year-long Retry-After must not stall the digest queue
+MAX_RETRY_AFTER_SECONDS = 3600.0
+
+
+def clamp_retry_seconds(value: object) -> float | None:
+    """
+    A usable delay in seconds, capped at one hour.
+
+    Non-finite values (inf, nan), negatives, and values that do not parse are
+    rejected. Finite values above the cap are clamped, so timedelta never sees
+    a number large enough to raise OverflowError.
+    """
+    if isinstance(value, bool) or not isinstance(value, int | float | str):
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    if not math.isfinite(number) or number <= 0:
+        return None
+    return min(number, MAX_RETRY_AFTER_SECONDS)
+
+
+def rate_limit_delay(body: object, headers: Any) -> float | None:
+    """
+    Seconds to wait after a 429, from the JSON body and the rate-limit headers.
+
+    Each source (JSON retry_after, Retry-After seconds or HTTP-date, and
+    X-RateLimit-Reset-After) is clamped to one hour. Returns None when none of
+    them parse, so the caller can apply its backoff. A header of 120s waits 120s.
+    """
+    candidates: list[float] = []
+    if isinstance(body, dict) and body.get("retry_after") is not None:
+        delay = clamp_retry_seconds(body.get("retry_after"))
+        if delay is not None:
+            candidates.append(delay)
+    for name in ("Retry-After", "X-RateLimit-Reset-After"):
+        raw = headers.get(name) if headers is not None else None
+        if raw is None or raw == "":
+            continue
+        delay = clamp_retry_seconds(raw)
+        if delay is not None:
+            candidates.append(delay)
+            continue
+        try:
+            when = parsedate_to_datetime(str(raw))
+        except (TypeError, ValueError, IndexError, OverflowError):
+            continue
+        if when.tzinfo is None:
+            when = when.replace(tzinfo=UTC)
+        delay = clamp_retry_seconds((when - datetime.now(UTC)).total_seconds())
+        if delay is not None:
+            candidates.append(delay)
+    if not candidates:
+        return None
+    return max(candidates)
 
 
 class DiscordProvider(NotificationProvider):
     """Sends notifications to a Discord channel via a user-owned bot token."""
 
     name = "discord"
+
+    def __init__(self, settings: Settings) -> None:
+        super().__init__(settings)
+        self._rate_limit_backoff = RATE_LIMIT_BACKOFF_MIN
 
     @property
     def bot_token(self) -> str:
@@ -87,10 +157,22 @@ class DiscordProvider(NotificationProvider):
                 if response.status == 404:
                     raise NotificationError("Discord: server or channel not found (404)")
                 if response.status == 429:
-                    body = await response.json()
-                    retry_after = body.get("retry_after", 1)
+                    try:
+                        body = await response.json()
+                    except Exception:
+                        body = {}
+                    hinted = rate_limit_delay(body, response.headers)
+                    if hinted is None:
+                        retry_seconds = self._rate_limit_backoff
+                        self._rate_limit_backoff = min(
+                            self._rate_limit_backoff * 2, RATE_LIMIT_BACKOFF_MAX
+                        )
+                    else:
+                        retry_seconds = hinted
+                        self._rate_limit_backoff = RATE_LIMIT_BACKOFF_MIN
                     raise NotificationError(
-                        f"Discord: rate limited, retry after {retry_after}s (429)"
+                        f"Discord: rate limited, retry after {retry_seconds}s (429)",
+                        retry_after=retry_seconds,
                     )
                 if response.status >= 400:
                     raise NotificationError(f"Discord: request failed ({response.status})")
@@ -164,3 +246,17 @@ class DiscordProvider(NotificationProvider):
                 session, "POST", f"/channels/{self.channel_id}/messages", json=payload
             )
         logger.info("Discord notification sent: %s", event_type)
+
+    async def send_digest(self, embeds: list[dict[str, Any]]) -> None:
+        """Post one digest message. The queue is only cleared by the caller after this returns."""
+        if not self.is_configured:
+            raise NotificationError("Discord: bot token and channel must be configured")
+        if not embeds:
+            return
+        payload = {"embeds": embeds[:10]}
+        timeout = aiohttp.ClientTimeout(total=REQUEST_TIMEOUT)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            await self._request(
+                session, "POST", f"/channels/{self.channel_id}/messages", json=payload
+            )
+        logger.info("Discord digest sent (%d embeds)", len(embeds))

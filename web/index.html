@@ -576,8 +576,6 @@
                     </div>
                     <br>
                     <div id="notifications-options" class="library-sync-options">
-                    <div class="library-sync-split">
-                    <div class="library-config-col">
                         <div class="library-provider-card">
                             <div class="provider-card-header">
                                 <div class="provider-identity">
@@ -591,12 +589,17 @@
                                         <div id="discord-status-line" class="provider-status">Not configured</div>
                                     </div>
                                 </div>
-                                <label class="toggle-switch" title="Enable Discord">
-                                    <input type="checkbox" id="discord-notifications-enabled">
-                                    <span class="toggle-slider"></span>
-                                </label>
+                                <div class="discord-summary-actions">
+                                    <label class="toggle-switch" title="Enable Discord">
+                                        <input type="checkbox" id="discord-notifications-enabled">
+                                        <span class="toggle-slider"></span>
+                                    </label>
+                                    <button id="discord-change-btn" class="action-button" type="button">Change</button>
+                                    <button id="discord-test-btn" class="action-button" type="button">Send test message</button>
+                                </div>
                             </div>
-                            <div class="provider-card-body">
+                            <div id="discord-test-result" class="verify-result" style="display: none;"></div>
+                            <div id="discord-config-panel" class="provider-card-body">
                                 <div class="library-field">
                                     <label for="discord-bot-token" id="discord-bot-token-label">Bot token</label>
                                     <input type="password" id="discord-bot-token" autocomplete="off" data-1p-ignore
@@ -637,69 +640,167 @@
                                 </div>
                             </div>
                         </div>
-                    </div>
-
-                    <div class="library-vsep" aria-hidden="true"></div>
-
-                    <div class="library-list-col">
-                        <div class="library-block">
-                            <h3 id="notifications-cooldown-label-text">Cooldown Between Repeat Notifications
-                                (minutes)</h3>
-                            <div class="value-slider">
-                                <div class="value-slider-fill" aria-hidden="true"></div>
-                                <span id="notifications-cooldown-value" class="value-slider-value">15</span>
-                                <input type="range" id="notifications-cooldown" min="0" max="120" step="5" value="15">
-                            </div>
-                        </div>
 
                         <div class="library-block">
-                            <h3 id="notifications-events-label">Notify Me About</h3>
-                            <div class="toggle-list" id="discord-events-list">
+                            <h3 id="notifications-events-label">Events</h3>
+                            <div class="toggle-list notification-events" id="discord-events-list">
                                 <div class="toggle-row">
-                                    <span id="discord-event-drop_received-label">Drop received</span>
+                                    <span id="discord-event-drop_received-label">Drop claimed</span>
                                     <label class="toggle-switch">
-                                        <input type="checkbox" id="discord-event-drop_received">
+                                        <input type="checkbox" id="discord-event-drop_received" checked>
+                                        <span class="toggle-slider"></span>
+                                    </label>
+                                </div>
+                                <div class="toggle-row">
+                                    <span id="discord-event-new_campaign-label">New campaign</span>
+                                    <label class="toggle-switch">
+                                        <input type="checkbox" id="discord-event-new_campaign" checked>
                                         <span class="toggle-slider"></span>
                                     </label>
                                 </div>
                                 <div class="toggle-row">
                                     <span id="discord-event-unlinked_tracked_game-label">Unlinked tracked game</span>
                                     <label class="toggle-switch">
-                                        <input type="checkbox" id="discord-event-unlinked_tracked_game">
-                                        <span class="toggle-slider"></span>
-                                    </label>
-                                </div>
-                                <div class="toggle-row">
-                                    <span id="discord-event-auth_attention-label">Auth needs attention</span>
-                                    <label class="toggle-switch">
-                                        <input type="checkbox" id="discord-event-auth_attention">
+                                        <input type="checkbox" id="discord-event-unlinked_tracked_game" checked>
                                         <span class="toggle-slider"></span>
                                     </label>
                                 </div>
                                 <div class="toggle-row">
                                     <span id="discord-event-mining_stalled-label">Mining stalled</span>
                                     <label class="toggle-switch">
-                                        <input type="checkbox" id="discord-event-mining_stalled">
+                                        <input type="checkbox" id="discord-event-mining_stalled" checked>
                                         <span class="toggle-slider"></span>
                                     </label>
                                 </div>
                                 <div class="toggle-row">
-                                    <span id="discord-event-new_campaign-label">New campaign available</span>
+                                    <span id="discord-event-auth_attention-label">Sign-in needed</span>
                                     <label class="toggle-switch">
-                                        <input type="checkbox" id="discord-event-new_campaign">
+                                        <input type="checkbox" id="discord-event-auth_attention" checked>
                                         <span class="toggle-slider"></span>
                                     </label>
                                 </div>
                             </div>
                         </div>
 
-                        <div class="provider-card-footer">
-                            <button id="discord-test-btn" class="action-button" type="button">Send Test
-                                Notification</button>
-                            <div id="discord-test-result" class="verify-result" style="display: none;"></div>
+                        <div id="notifications-delivery" class="library-block">
+                            <h3 id="notifications-delivery-label">Delivery</h3>
+                            <div class="segmented-control" id="notifications-mode-control" role="radiogroup">
+                                <input type="radio" name="notifications-mode" id="notifications-mode-immediate" value="immediate" checked>
+                                <label for="notifications-mode-immediate" id="notifications-mode-immediate-label">Each event</label>
+                                <input type="radio" name="notifications-mode" id="notifications-mode-digest" value="digest">
+                                <label for="notifications-mode-digest" id="notifications-mode-digest-label">Digest</label>
+                            </div>
+                            <p id="notifications-delivery-help" class="help-text">One message per event, as it happens.</p>
+                            <p id="notifications-flush-warning" class="form-hint" hidden></p>
+                            <p id="notifications-delivery-disabled-help" class="help-text" hidden>Connect Discord to choose how messages are sent.</p>
+
+                            <div id="notifications-immediate-options">
+                                <div class="cooldown-field">
+                                    <label id="notifications-repeat-cooldown-label" for="notifications-cooldown-number">Repeat cooldown</label>
+                                    <div class="number-unit">
+                                        <input type="number" id="notifications-cooldown-number" min="0" max="1440" step="1" value="15">
+                                        <select id="notifications-cooldown-unit">
+                                            <option value="minutes" id="notifications-cooldown-unit-minutes">minutes</option>
+                                            <option value="hours" id="notifications-cooldown-unit-hours">hours</option>
+                                        </select>
+                                    </div>
+                                </div>
+                                <p id="notifications-repeat-cooldown-help" class="help-text">Events of the same type inside this gap are skipped, not saved. 0 means no limit.</p>
+                                <p id="notifications-repeat-cooldown-tip" class="help-text">Digest mode never skips events.</p>
+                                <p id="notifications-cooldown-error" class="form-hint error" hidden>Up to 24 hours.</p>
+                            </div>
+
+                            <div id="notifications-digest-options" hidden>
+                                <div class="digest-every">
+                                    <span id="notifications-digest-every-label">Send every</span>
+                                    <div class="digest-presets" id="notifications-digest-presets" role="radiogroup">
+                                        <button type="button" class="digest-preset" data-minutes="60" id="digest-preset-1h">1 h</button>
+                                        <button type="button" class="digest-preset" data-minutes="180" id="digest-preset-3h">3 h</button>
+                                        <button type="button" class="digest-preset" data-minutes="360" id="digest-preset-6h">6 h</button>
+                                        <button type="button" class="digest-preset" data-minutes="720" id="digest-preset-12h">12 h</button>
+                                        <button type="button" class="digest-preset selected" data-minutes="1440" id="digest-preset-daily" aria-pressed="true">Daily</button>
+                                        <button type="button" class="digest-preset" data-minutes="10080" id="digest-preset-weekly">Weekly</button>
+                                        <button type="button" class="digest-preset" data-minutes="custom" id="digest-preset-custom">Custom</button>
+                                    </div>
+                                </div>
+                                <div id="notifications-digest-custom" class="number-unit" hidden>
+                                    <input type="number" id="notifications-digest-custom-number" min="1" max="168" step="1" value="36">
+                                    <select id="notifications-digest-custom-unit">
+                                        <option value="hours" id="notifications-digest-unit-hours">hours</option>
+                                        <option value="days" id="notifications-digest-unit-days">days</option>
+                                    </select>
+                                </div>
+                                <p id="notifications-interval-error" class="form-hint error" hidden>Between 1 hour and 7 days.</p>
+                                <div id="notifications-digest-clock" class="digest-clock">
+                                    <label id="notifications-digest-on-label" for="notifications-digest-weekday" hidden>On</label>
+                                    <select id="notifications-digest-weekday" hidden>
+                                        <option value="0">Monday</option>
+                                        <option value="1">Tuesday</option>
+                                        <option value="2">Wednesday</option>
+                                        <option value="3">Thursday</option>
+                                        <option value="4">Friday</option>
+                                        <option value="5">Saturday</option>
+                                        <option value="6">Sunday</option>
+                                    </select>
+                                    <label id="notifications-digest-at-label" for="notifications-digest-time">at</label>
+                                    <input type="time" id="notifications-digest-time" value="09:00">
+                                </div>
+                                <p id="notifications-schedule-help" class="help-text">Times use the server's time zone.</p>
+
+                                <h3 id="notifications-digest-include-label">Include in digest</h3>
+                                <div class="toggle-list notification-events">
+                                    <div class="toggle-row">
+                                        <span id="notifications-digest-section-progress-label">Mining progress</span>
+                                        <label class="toggle-switch">
+                                            <input type="checkbox" id="notifications-digest-section-progress" checked>
+                                            <span class="toggle-slider"></span>
+                                        </label>
+                                    </div>
+                                    <div class="toggle-row">
+                                        <span id="notifications-digest-section-errors-label">Warnings &amp; errors</span>
+                                        <label class="toggle-switch">
+                                            <input type="checkbox" id="notifications-digest-section-errors" checked>
+                                            <span class="toggle-slider"></span>
+                                        </label>
+                                    </div>
+                                </div>
+
+                                <label class="digest-check" id="notifications-digest-urgent-label">
+                                    <input type="checkbox" id="notifications-digest-urgent" checked>
+                                    <span>Send urgent alerts right away</span>
+                                </label>
+                                <p id="notifications-digest-urgent-help" class="help-text">Mining stalled and sign-in problems are sent at once and also listed in the digest.</p>
+                                <div id="notifications-urgent-cooldown" class="cooldown-field">
+                                    <label id="notifications-urgent-cooldown-label" for="notifications-urgent-cooldown-number">Urgent alert cooldown</label>
+                                    <div class="number-unit">
+                                        <input type="number" id="notifications-urgent-cooldown-number" min="0" max="1440" step="1" value="15">
+                                        <select id="notifications-urgent-cooldown-unit">
+                                            <option value="minutes">minutes</option>
+                                            <option value="hours">hours</option>
+                                        </select>
+                                    </div>
+                                    <p id="notifications-urgent-cooldown-error" class="form-hint error" hidden>Up to 24 hours.</p>
+                                </div>
+
+                                <label class="digest-check" id="notifications-digest-send-empty-label">
+                                    <input type="checkbox" id="notifications-digest-send-empty">
+                                    <span>Send a digest even when nothing happened</span>
+                                </label>
+                                <p id="notifications-digest-send-empty-help" class="help-text">Otherwise quiet periods are skipped.</p>
+
+                                <div id="notifications-digest-status">
+                                    <p id="notifications-digest-status-line" class="digest-status-line"></p>
+                                    <p id="notifications-digest-last-line" class="digest-status-line"></p>
+                                </div>
+                                <button id="notifications-digest-preview-btn" class="action-button tooltip-target" type="button"
+                                    aria-disabled="true" data-tooltip="Connect Discord first.">Send preview to Discord</button>
+                                <p id="notifications-digest-preview-help" class="help-text">Posts what the next digest would look like right now. The queue isn't cleared.</p>
+                            </div>
                         </div>
-                    </div>
-                    </div>
+
+                        <div class="notifications-save-row">
+                            <button id="notifications-save-btn" class="action-button primary" type="button">Save</button>
+                        </div>
                     </div>
                 </section>
 

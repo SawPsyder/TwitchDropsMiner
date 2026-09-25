@@ -150,7 +150,7 @@ class Stream:
                 if isinstance(available_json, list):
                     available_json = available_json[0]
                 if "error" in available_json:
-                    logger.error(f'Stream URL get error: "{available_json["error"]}"')
+                    logger.error('Stream URL get error: "%s"', available_json["error"])
                     self.channel.set_offline()
                 return None
             # pick the last URL from the list, usually with the lowest quality stream
@@ -492,7 +492,7 @@ class Channel:
             if isinstance(available_json, list):
                 available_json = available_json[0]
             if "error" in available_json:
-                logger.error(f'Send watch error: "{available_json["error"]}"')
+                logger.error('Send watch error: "%s"', available_json["error"])
             return False
         # the list contains ~10-13 chunks of the stream at 2s intervals,
         # pick the last chunk URL available. Ensure it's not the end-of-stream tag,
@@ -520,7 +520,7 @@ class Channel:
             try:
                 self._spade_url = await self.get_spade_url()
             except (MinerException, RequestException) as exc:
-                logger.warning(f"Spade URL extraction failed for {self.name}: {exc}")
+                logger.warning("Spade URL extraction failed for %s: %s", self.name, exc)
                 return False
         try:
             async with self._twitch.request(

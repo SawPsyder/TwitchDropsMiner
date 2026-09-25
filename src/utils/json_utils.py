@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
+import os
+import stat
+import tempfile
 from collections.abc import Callable, Mapping
 from datetime import UTC, datetime
 from enum import Enum
@@ -155,10 +159,29 @@ def json_save(path: Path, contents: Mapping[Any, Any], *, sort: bool = False) ->
     """
     Save data to a JSON file with custom serialization.
 
+    The write is atomic: contents go to a temporary file in the same directory
+    and replace the destination with os.replace, so a crash mid-write cannot
+    leave a half-written file for the next startup to parse.
+
     Args:
         path: Path to save JSON file
         contents: Data to serialize
         sort: If True, sort keys alphabetically
     """
-    with open(path, "w", encoding="utf8") as file:
-        json.dump(contents, file, default=_serialize, sort_keys=sort, indent=4)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    # mkstemp creates the temp file mode 0600. An existing file keeps its mode
+    # so a host user who could already read ./data still can after the replace.
+    previous_mode = stat.S_IMODE(path.stat().st_mode) if path.exists() else None
+    fd, tmp_name = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf8") as file:
+            json.dump(contents, file, default=_serialize, sort_keys=sort, indent=4)
+            file.flush()
+            os.fsync(file.fileno())
+        os.replace(tmp_name, path)
+        if previous_mode is not None:
+            os.chmod(path, previous_mode)
+    except Exception:
+        with contextlib.suppress(OSError):
+            os.unlink(tmp_name)
+        raise
