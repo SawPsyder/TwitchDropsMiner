@@ -257,6 +257,7 @@
                     "at": "at",
                     "tz_help": "Times use the server's time zone ({timezone}).",
                     "relative_help": "Counted from the last digest.",
+                    "tz_invalid": "The server's TZ setting \"{value}\" isn't a known time zone, so digests use {timezone}. Set TZ to a name like Europe/Berlin.",
                     "include": "Include in digest",
                     "section_progress": "Mining progress",
                     "section_errors": "Warnings & errors",

@@ -30,7 +30,9 @@ from src.notifications.digest_style import (
     MAX_EMBEDS,
     MAX_TITLE_CHARS,
     MAX_TOTAL_CHARS,
+    MIN_WINDOW_FOR_RANGE,
     NAME_CHAR_CAP,
+    PROGRESS_BAR_CELLS,
     PROGRESS_COLOR,
     PROGRESS_LINE_CAP,
     TOTAL_CHAR_TARGET,
@@ -523,6 +525,54 @@ def _build_attention(
     )
 
 
+_GENERIC_DROP_NAME = re.compile(r"^(drop|reward)?\s*#?\d*$", re.IGNORECASE)
+
+
+def progress_bar(percent: int) -> str:
+    """
+    A fixed-width bar with the percentage, in inline code.
+
+    Inline code renders monospaced, so every row's bar and percentage line up.
+    The geometric ▰/▱ glyphs fall back to mismatched boxes in Discord's font.
+    """
+    clamped = max(0, min(100, int(percent)))
+    filled = min(PROGRESS_BAR_CELLS, round(clamped * PROGRESS_BAR_CELLS / 100))
+    # a started drop always shows at least one cell, a finished one never looks full early
+    if clamped > 0 and filled == 0:
+        filled = 1
+    if clamped < 100 and filled == PROGRESS_BAR_CELLS:
+        filled -= 1
+    bar = "█" * filled + "░" * (PROGRESS_BAR_CELLS - filled)
+    return f"`{bar} {clamped:>3}%`"
+
+
+def _progress_label(item: dict[str, Any]) -> str:
+    """
+    What the row is about besides the game.
+
+    Twitch often names timed drops just "Drop" or "Drop 2", which says nothing and
+    makes a game's campaigns indistinguishable, so the campaign name stands in.
+    """
+    game = str(item.get("game") or "").strip()
+    drop = str(item.get("drop") or "").strip()
+    campaign = str(item.get("campaign") or "").strip()
+    if drop and not _GENERIC_DROP_NAME.match(drop) and drop.casefold() != game.casefold():
+        return drop
+    if campaign and campaign.casefold() != game.casefold():
+        return campaign
+    return drop
+
+
+def _progress_sort_key(item: dict[str, Any]) -> tuple[int, int, int]:
+    percent = int(item.get("percent") or 0)
+    return (
+        0 if item.get("mining_now") else 1,
+        # started drops before untouched ones, so the rows show real progress
+        0 if percent > 0 else 1,
+        int(item.get("remaining_minutes") or 0),
+    )
+
+
 def _build_progress(progress: dict[str, Any] | None) -> _Section | None:
     if not progress:
         return None
@@ -540,27 +590,20 @@ def _build_progress(progress: dict[str, Any] | None) -> _Section | None:
     else:
         return None
 
-    campaigns = list(progress.get("campaigns") or [])
-    campaigns.sort(
-        key=lambda item: (
-            0 if item.get("mining_now") else 1,
-            int(item.get("remaining_minutes") or 0),
-        )
-    )
+    campaigns = sorted(progress.get("campaigns") or [], key=_progress_sort_key)
     rows: list[str] = []
     for item in campaigns:
-        percent = max(0, min(100, int(item.get("percent") or 0)))
-        filled = max(0, min(10, percent // 10))
-        bar = "▰" * filled + "▱" * (10 - filled)
         remaining = format_remaining(int(item.get("remaining_minutes") or 0))
+        label = _progress_label(item)
+        about = f" · {escape_discord(label)}" if label else ""
         rows.append(
-            f"{bar} {percent}% · **{escape_discord(item.get('game') or '')}**"
-            f" — {escape_discord(item.get('drop') or '')} · {remaining} left"
+            f"{progress_bar(int(item.get('percent') or 0))}"
+            f" **{escape_discord(item.get('game') or '')}**{about} · {remaining} left"
         )
     omitted = max(0, len(rows) - PROGRESS_LINE_CAP)
     return _Section(
         kind="progress",
-        title="📈 Progress right now",
+        title="📈 Mining progress",
         color=PROGRESS_COLOR,
         fixed=[line],
         items=rows[:PROGRESS_LINE_CAP],
@@ -584,10 +627,12 @@ def _build_header(
     unlinked_count: int,
     dropped_count: int,
 ) -> _Section:
-    period = period_label(interval_minutes)
-    title = f"TwitchDropsMiner digest · {period}"
+    # The bot name and footer already say TwitchDropsMiner. A preview covers the
+    # open window so far, not a full interval, so it doesn't claim "last …".
     if preview:
-        title = f"Preview · {title}"
+        title = "📬 Digest preview · so far"
+    else:
+        title = f"📬 Digest · {period_label(interval_minutes)}"
     phrases: list[str] = []
     if drop_count:
         phrases.append(_plural_phrase(drop_count, "drop claimed", "drops claimed"))
@@ -599,10 +644,13 @@ def _build_header(
         phrases.append(_plural_phrase(warning_count, "warning", "warnings"))
     if unlinked_count:
         phrases.append(_plural_phrase(unlinked_count, "unlinked game", "unlinked games"))
-    lines = [
-        f"{discord_tag(window_start, 'f')} – {discord_tag(window_end, 'f')}",
-        " · ".join(phrases) if phrases else "Nothing new in this period.",
-    ]
+    empty = "Nothing new so far." if preview else "Nothing new in this period."
+    lines = [" · ".join(phrases) if phrases else empty]
+    # The end of the window is the message's own timestamp in the footer, so
+    # only the start is spelled out. A window that hasn't opened yet (nothing
+    # recorded since the last send) has no meaningful start to show.
+    if window_end - window_start >= MIN_WINDOW_FOR_RANGE:
+        lines.append(f"Since {discord_tag(window_start, 'f')}")
     if dropped_count > 0:
         if dropped_count == 1:
             lines.append("Queue limit reached: 1 older event wasn't kept.")
@@ -610,7 +658,7 @@ def _build_header(
             lines.append(f"Queue limit reached: {dropped_count} older events weren't kept.")
     # leaving digest mode has no following send; shutdown does not post at all
     if next_at is not None:
-        lines.append(f"Next digest {discord_tag(next_at, 'f')}")
+        lines.append(f"Next digest {discord_tag(next_at, 'f')} ({discord_tag(next_at, 'R')})")
     return _Section(kind="header", title=title, color=HEADER_COLOR, fixed=lines)
 
 

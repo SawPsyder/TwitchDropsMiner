@@ -17,27 +17,46 @@ ANCHORED_DAILY = 1440
 ANCHORED_WEEKLY = 10080
 
 
+def _env_zone() -> ZoneInfo | None:
+    name = os.environ.get("TZ")
+    if not name:
+        return None
+    try:
+        return ZoneInfo(name)
+    except (ZoneInfoNotFoundError, ValueError):
+        return None
+
+
 def local_timezone() -> tzinfo:
     """The container/host zone. `TZ` wins so tests and Docker can pin it."""
-    name = os.environ.get("TZ")
-    if name:
-        try:
-            return ZoneInfo(name)
-        except ZoneInfoNotFoundError:
-            pass
+    zone = _env_zone()
+    if zone is not None:
+        return zone
     current = datetime.now().astimezone().tzinfo
     return current or UTC
 
 
+def invalid_timezone_env() -> str | None:
+    """
+    The `TZ` value when it isn't a zone name Python knows, else None.
+
+    An unknown `TZ` (e.g. "Germany/Berlin" instead of "Europe/Berlin") makes
+    both Python and the C library fall back to UTC, so the digest would go out
+    hours off while the settings page still showed the zone the user typed.
+    """
+    name = os.environ.get("TZ")
+    if name and _env_zone() is None:
+        return name
+    return None
+
+
 def timezone_name() -> str:
-    """A display name such as "Europe/Berlin", or a short fallback."""
+    """The zone digests are actually scheduled in, such as "Europe/Berlin"."""
     zone = local_timezone()
     key = getattr(zone, "key", None)
     if isinstance(key, str) and key:
         return key
-    env_name = os.environ.get("TZ")
-    if env_name:
-        return env_name
+    # never echo an unknown TZ back - the schedule isn't running in it
     named = datetime.now().astimezone().tzname()
     return named or "UTC"
 

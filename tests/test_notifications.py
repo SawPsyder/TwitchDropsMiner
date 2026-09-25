@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import os
 import tempfile
 import unittest
 from datetime import UTC, datetime, timedelta
@@ -15,9 +16,10 @@ from src.notifications.render import (
     _safe_truncate,
     discord_units,
     message_char_count,
+    progress_bar,
     render_digest,
 )
-from src.notifications.schedule import next_digest_at
+from src.notifications.schedule import invalid_timezone_env, next_digest_at, timezone_name
 from src.utils import json_save
 from src.web.managers.settings import SettingsManager
 
@@ -898,8 +900,8 @@ class TestDigestQueue(unittest.IsolatedAsyncioTestCase):
         await service.send_preview()
         provider.send_digest.assert_awaited()
         embeds = provider.send_digest.await_args.args[0]
-        self.assertTrue(embeds[0]["title"].startswith("Preview · "))
-        self.assertIn("last 6 hours", embeds[0]["title"])
+        self.assertIn("preview", embeds[0]["title"])
+        self.assertNotIn("last 6 hours", embeds[0]["title"])
         self.assertEqual(service._state["digest_queue"], before)
         self.assertEqual(service._state.get("last_digest"), last_before)
         self.assertEqual(service._state.get("digest_next_at"), next_before)
@@ -1031,6 +1033,27 @@ class TestDigestPersistence(unittest.TestCase):
         self.assertEqual(notes["digest_sections"], {"progress": True, "errors": True})
         self.assertTrue(notes["digest_urgent_immediate"])
         self.assertFalse(notes["digest_send_empty"])
+
+
+class TestDigestTimezone(unittest.TestCase):
+    def setUp(self):
+        self._saved = os.environ.get("TZ")
+
+    def tearDown(self):
+        if self._saved is None:
+            os.environ.pop("TZ", None)
+        else:
+            os.environ["TZ"] = self._saved
+
+    def test_unknown_tz_is_flagged_and_never_shown_as_the_zone(self):
+        os.environ["TZ"] = "Germany/Berlin"
+        self.assertEqual(invalid_timezone_env(), "Germany/Berlin")
+        self.assertNotEqual(timezone_name(), "Germany/Berlin")
+
+    def test_known_tz_is_not_flagged(self):
+        os.environ["TZ"] = "Europe/Berlin"
+        self.assertIsNone(invalid_timezone_env())
+        self.assertEqual(timezone_name(), "Europe/Berlin")
 
 
 class TestDigestSchedule(unittest.TestCase):
@@ -1343,6 +1366,63 @@ class TestDigestRenderer(unittest.TestCase):
             self.assertNotIn("timestamp", embed)
         self.assertIn("TwitchDropsMiner v1.9.1", embeds[-1]["footer"]["text"])
         self.assertIn("timestamp", embeds[-1])
+
+    def test_progress_bar_is_fixed_width_inline_code(self):
+        bars = [progress_bar(value) for value in (0, 4, 26, 99, 100)]
+        self.assertEqual(len({len(bar) for bar in bars}), 1)
+        self.assertEqual(bars[0], "`░░░░░░░░░░   0%`")
+        # started never looks untouched, unfinished never looks complete
+        self.assertIn("█", bars[1])
+        self.assertIn("░", bars[3])
+        self.assertEqual(bars[4], "`██████████ 100%`")
+
+    def test_generic_drop_names_fall_back_to_the_campaign(self):
+        progress = {
+            "state": "watching",
+            "channel": "streamer",
+            "game": "Tanks",
+            "campaigns": [
+                {"game": "Tanks", "campaign": "Season A", "drop": "Drop", "percent": 0,
+                 "remaining_minutes": 60, "mining_now": True},
+                {"game": "Tanks", "campaign": "Season B", "drop": "Drop 2", "percent": 0,
+                 "remaining_minutes": 90, "mining_now": True},
+                {"game": "Dice", "campaign": "Dice Camp", "drop": "d20 Badge", "percent": 40,
+                 "remaining_minutes": 18, "mining_now": False},
+            ],
+        }
+        embeds = _render(progress=progress)
+        text = next(embed for embed in embeds if embed["title"].startswith("📈"))["description"]
+        self.assertIn("**Tanks** · Season A · 1 h 00 min left", text)
+        self.assertIn("**Tanks** · Season B", text)
+        self.assertIn("**Dice** · d20 Badge", text)
+        self.assertNotIn("Dice Camp", text)
+
+    def test_started_drops_list_before_untouched_ones(self):
+        progress = {
+            "state": "idle",
+            "campaigns": [
+                {"game": "Untouched", "drop": "Hat", "percent": 0, "remaining_minutes": 5},
+                {"game": "Started", "drop": "Cape", "percent": 30, "remaining_minutes": 120},
+            ],
+        }
+        embeds = _render(progress=progress)
+        text = next(embed for embed in embeds if embed["title"].startswith("📈"))["description"]
+        self.assertLess(text.index("Started"), text.index("Untouched"))
+
+    def test_header_shows_window_start_and_relative_next_send(self):
+        embeds = _render()
+        header = embeds[0]
+        self.assertEqual(header["title"], "📬 Digest · last 6 hours")
+        self.assertIn("Since <t:", header["description"])
+        self.assertRegex(header["description"], r"Next digest <t:\d+:f> \(<t:\d+:R>\)")
+
+    def test_preview_of_an_unopened_window_has_no_zero_length_range(self):
+        now = datetime(2026, 9, 25, 12, 0, tzinfo=UTC)
+        embeds = _render(window_start=now, window_end=now, preview=True)
+        header = embeds[0]
+        self.assertEqual(header["title"], "📬 Digest preview · so far")
+        self.assertNotIn("Since", header["description"])
+        self.assertIn("Nothing new so far.", header["description"])
 
     def test_drops_group_by_game_and_use_discord_timestamps(self):
         now = datetime(2026, 9, 25, 12, 0, tzinfo=UTC)

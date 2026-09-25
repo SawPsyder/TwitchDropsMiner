@@ -8,6 +8,8 @@ lines rather than embed fields, spec hex colours, and a single message.
 
 from __future__ import annotations
 
+from datetime import timedelta
+
 
 # spec section colours. Drops, campaigns and unlinked use the hex from the spec
 # (green / blue / orange) rather than the immediate-mode EVENT_COLORS map, whose
@@ -35,7 +37,11 @@ CAMPAIGN_LINE_CAP = 15
 PROGRESS_LINE_CAP = 5
 UNLINKED_LINE_CAP = 20
 WARNING_GROUP_CAP = 10
+PROGRESS_BAR_CELLS = 10
 NAME_CHAR_CAP = 80
+
+# a window shorter than this has no meaningful start to show in the header
+MIN_WINDOW_FOR_RANGE = timedelta(minutes=1)
 LOG_CHAR_CAP = 150
 
 QUEUE_CAP = 500

@@ -356,6 +356,7 @@ class GUISettingsNotificationDigest(TypedDict):
     at: str
     tz_help: str
     relative_help: str
+    tz_invalid: str
     include: str
     section_progress: str
     section_errors: str

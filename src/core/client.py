@@ -644,6 +644,7 @@ class Twitch:
             campaigns.append(
                 {
                     "game": campaign.game.name,
+                    "campaign": campaign.name,
                     "drop": drop.name,
                     "percent": int(drop.progress * 100),
                     "remaining_minutes": max(0, int(drop.remaining_minutes)),

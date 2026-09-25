@@ -32,7 +32,12 @@ from src.notifications.discord import (
 from src.notifications.events import NotificationEvent
 from src.notifications.logging_handler import NOTIFICATIONS_LOGGER, register_service
 from src.notifications.render import render_digest
-from src.notifications.schedule import local_timezone, next_digest_at, timezone_name
+from src.notifications.schedule import (
+    invalid_timezone_env,
+    local_timezone,
+    next_digest_at,
+    timezone_name,
+)
 from src.utils import json_save
 from src.version import __version__
 
@@ -243,6 +248,14 @@ class NotificationService:
         self._closed = False
         self._loop: asyncio.AbstractEventLoop | None = None
         register_service(self)
+        bad_zone = invalid_timezone_env()
+        if bad_zone:
+            logger.warning(
+                "TZ=%s is not a known time zone - digests are scheduled in %s instead."
+                " Use a name like Europe/Berlin.",
+                bad_zone,
+                timezone_name(),
+            )
 
     @property
     def notification_settings(self) -> dict[str, Any]:
@@ -1208,6 +1221,7 @@ class NotificationService:
             "queue_full": len(queue) >= QUEUE_CAP,
             "next_digest_at": self._state.get("digest_next_at"),
             "timezone": timezone_name(),
+            "timezone_invalid": invalid_timezone_env(),
             "last_digest": last_digest,
             "dropped_count": int(self._state.get("digest_dropped") or 0),
             "sending": self._sending,
