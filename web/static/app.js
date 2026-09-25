@@ -2633,13 +2633,32 @@ function onCooldownUnitChange(numberEl, unitEl, errorEl) {
     clampCooldownControl(numberEl, unitEl, errorEl);
 }
 
-function digestMinutesFromCustom() {
+function digestCustomState() {
     const numberEl = document.getElementById('notifications-digest-custom-number');
     const unitEl = document.getElementById('notifications-digest-custom-unit');
+    const days = unitEl?.value === 'days';
+    const max = days ? 7 : 168;
     const parsed = parseInt(numberEl?.value, 10);
-    const value = Number.isFinite(parsed) ? parsed : 1;
-    if (unitEl?.value === 'days') return Math.min(7, Math.max(1, value)) * 1440;
-    return Math.min(168, Math.max(1, value)) * 60;
+    const finite = Number.isFinite(parsed);
+    return {
+        outOfRange: !finite || parsed < 1 || parsed > max,
+        max,
+        minutes: finite ? parsed * (days ? 1440 : 60) : 0,
+    };
+}
+
+function digestMinutesFromCustom() {
+    return digestCustomState().minutes;
+}
+
+function refreshDigestIntervalError() {
+    const errorEl = document.getElementById('notifications-interval-error');
+    const customSelected = document.getElementById('digest-preset-custom')?.classList.contains('selected');
+    const outOfRange = Boolean(customSelected) && digestCustomState().outOfRange;
+    if (errorEl) errorEl.hidden = !outOfRange;
+    const save = document.getElementById('notifications-save-btn');
+    if (save) save.disabled = outOfRange;
+    return outOfRange;
 }
 
 function showDigestSchedule(minutes, custom) {
@@ -2698,22 +2717,13 @@ function applyDigestInterval(minutes) {
 }
 
 function onDigestCustomBlur() {
-    const errorEl = document.getElementById('notifications-interval-error');
+    const state = digestCustomState();
     const numberEl = document.getElementById('notifications-digest-custom-number');
-    const unitEl = document.getElementById('notifications-digest-custom-unit');
-    const max = unitEl?.value === 'days' ? 7 : 168;
-    const parsed = parseInt(numberEl?.value, 10);
-    const raw = Number.isFinite(parsed) ? parsed : 1;
-    const outOfRange = raw < 1 || raw > max;
-    if (numberEl) {
-        numberEl.max = String(max);
-        numberEl.value = String(Math.min(max, Math.max(1, raw)));
-    }
-    if (errorEl) errorEl.hidden = !outOfRange;
-    const minutes = digestMinutesFromCustom();
-    if (DIGEST_PRESET_MINUTES.includes(minutes)) {
-        if (errorEl) errorEl.hidden = true;
-        showDigestSchedule(minutes, false);
+    if (numberEl) numberEl.max = String(state.max);
+    // an in-range value that is a preset can leave the custom field; an
+    // out-of-range value stays as typed so the range hint can show
+    if (!state.outOfRange && DIGEST_PRESET_MINUTES.includes(state.minutes)) {
+        showDigestSchedule(state.minutes, false);
     }
     markNotificationsDirty();
 }
@@ -2887,6 +2897,7 @@ function updateNotificationDeliveryVisibility() {
     updateFlushWarning();
     updatePreviewButton();
     renderDigestStatus();
+    refreshDigestIntervalError();
 }
 
 function updateFlushWarning() {
@@ -3122,8 +3133,9 @@ function discordChannelName() {
 }
 
 async function saveNotificationSettings() {
-    notificationsFormDirty = false;
-    await saveSettings({ includeNotifications: true });
+    if (refreshDigestIntervalError()) return;
+    const saved = await saveSettings({ includeNotifications: true });
+    if (!saved) return;
     updateNotificationDeliveryVisibility();
     fetchNotificationsStatus();
 }
@@ -3462,20 +3474,39 @@ async function saveSettings(options = {}) {
         notifications
     };
     state.settings.library_sync = settings.library_sync;
-    if (includeNotifications) {
-        state.settings.notifications = notifications;
-        notificationsFormDirty = false;
-    }
 
     try {
-        await fetch('/api/settings', {
+        const response = await fetch('/api/settings', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(settings)
         });
+        if (!response.ok) {
+            let detail = 'Could not save settings';
+            try {
+                const data = await response.json();
+                if (typeof data.detail === 'string' && data.detail) detail = data.detail;
+            } catch (_parseError) {
+                /* the status is enough when the body is not JSON */
+            }
+            if (includeNotifications) {
+                notificationsFormDirty = true;
+                updateNotificationDeliveryVisibility();
+            }
+            showToast('error', detail);
+            console.error('Failed to save settings:', detail);
+            return false;
+        }
+        if (includeNotifications) {
+            state.settings.notifications = notifications;
+            notificationsFormDirty = false;
+        }
         console.log('Settings saved automatically');
+        return true;
     } catch (error) {
+        if (includeNotifications) notificationsFormDirty = true;
         console.error('Failed to save settings:', error);
+        return false;
     }
 }
 
@@ -4459,13 +4490,20 @@ document.addEventListener('DOMContentLoaded', () => {
         const numberEl = document.getElementById('notifications-digest-custom-number');
         const unitEl = document.getElementById('notifications-digest-custom-unit');
         const parsed = parseInt(numberEl?.value, 10);
-        const value = Number.isFinite(parsed) ? parsed : 1;
-        if (unitEl.value === 'days') {
-            numberEl.max = '7';
-            numberEl.value = String(Math.max(1, Math.ceil(value / 24)));
-        } else {
-            numberEl.max = '168';
-            numberEl.value = String(Math.min(168, value * 24));
+        const toDays = unitEl?.value === 'days';
+        // the select has already switched, so the previous unit is the other one
+        const previousMax = toDays ? 168 : 7;
+        const previousInRange = Number.isFinite(parsed) && parsed >= 1 && parsed <= previousMax;
+        if (numberEl && previousInRange) {
+            if (toDays) {
+                numberEl.max = '7';
+                numberEl.value = String(Math.max(1, Math.ceil(parsed / 24)));
+            } else {
+                numberEl.max = '168';
+                numberEl.value = String(parsed * 24);
+            }
+        } else if (numberEl) {
+            numberEl.max = toDays ? '7' : '168';
         }
         onDigestCustomBlur();
     });

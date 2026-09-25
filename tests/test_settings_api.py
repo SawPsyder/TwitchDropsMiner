@@ -1,10 +1,12 @@
 import unittest
 from unittest.mock import MagicMock
 
+from fastapi import HTTPException
+
 from src.config.settings import Settings
 from src.web.app import SettingsUpdate
 from src.web.managers.broadcaster import WebSocketBroadcaster
-from src.web.managers.settings import SettingsManager
+from src.web.managers.settings import NotificationSettingsError, SettingsManager
 
 
 class TestSettingsAPI(unittest.IsolatedAsyncioTestCase):
@@ -258,7 +260,7 @@ class TestSettingsAPI(unittest.IsolatedAsyncioTestCase):
                 "notifications": {
                     **mock_settings.notifications,
                     "cooldown_minutes": 5000,
-                    "digest_interval_minutes": 10,
+                    "digest_interval_minutes": 360,
                     "digest_send_weekday": 9,
                     "mode": "weekly",
                     "digest_send_time": "25:99",
@@ -268,7 +270,7 @@ class TestSettingsAPI(unittest.IsolatedAsyncioTestCase):
         )
         saved = mock_settings.notifications
         self.assertEqual(saved["cooldown_minutes"], 1440)
-        self.assertEqual(saved["digest_interval_minutes"], 60)
+        self.assertEqual(saved["digest_interval_minutes"], 360)
         self.assertEqual(saved["digest_send_weekday"], 6)
         self.assertEqual(saved["mode"], "immediate")
         self.assertEqual(saved["digest_send_time"], "09:00")
@@ -280,7 +282,7 @@ class TestSettingsAPI(unittest.IsolatedAsyncioTestCase):
             {
                 "notifications": {
                     "cooldown_minutes": -4,
-                    "digest_interval_minutes": 100000,
+                    "digest_interval_minutes": 720,
                     "digest_send_weekday": "Monday",
                     "mode": "digest",
                     "digest_send_time": "9:05",
@@ -289,7 +291,7 @@ class TestSettingsAPI(unittest.IsolatedAsyncioTestCase):
         )
         saved = mock_settings.notifications
         self.assertEqual(saved["cooldown_minutes"], 0)
-        self.assertEqual(saved["digest_interval_minutes"], 10080)
+        self.assertEqual(saved["digest_interval_minutes"], 720)
         # a non-integer weekday is not parsed; the current valid value is kept
         self.assertEqual(saved["digest_send_weekday"], 6)
         self.assertEqual(saved["mode"], "digest")
@@ -305,6 +307,57 @@ class TestSettingsAPI(unittest.IsolatedAsyncioTestCase):
             }
         )
         self.assertEqual(mock_settings.notifications["digest_send_weekday"], 0)
+
+    async def test_out_of_range_digest_interval_is_rejected(self):
+        from src.web import app as webapp
+
+        mock_broadcaster = MagicMock(spec=WebSocketBroadcaster)
+        mock_settings = MagicMock(spec=Settings)
+        mock_settings.notifications = {
+            "enabled": True,
+            "cooldown_minutes": 15,
+            "mode": "digest",
+            "digest_interval_minutes": 1440,
+            "discord": {
+                "enabled": True,
+                "bot_token": "",
+                "guild_id": "",
+                "channel_id": "",
+                "events": {"drop_received": True},
+            },
+        }
+        manager = SettingsManager(mock_broadcaster, mock_settings, MagicMock())
+        # 0 hours and 200 hours are what the custom field submits
+        for bad in (0, 10, 59, 10081, 12000, 100000, True, "nope"):
+            with self.assertRaises(NotificationSettingsError) as caught:
+                manager.update_settings(
+                    {
+                        "notifications": {
+                            **mock_settings.notifications,
+                            "digest_interval_minutes": bad,
+                        }
+                    }
+                )
+            self.assertEqual(str(caught.exception), "Between 1 hour and 7 days.")
+            self.assertEqual(mock_settings.notifications["digest_interval_minutes"], 1440)
+        mock_settings.save.assert_not_called()
+
+        webapp.gui_manager = type("GUI", (), {"settings": manager})()
+        try:
+            with self.assertRaises(HTTPException) as http_caught:
+                await webapp.update_settings(
+                    SettingsUpdate(
+                        notifications={
+                            **mock_settings.notifications,
+                            "digest_interval_minutes": 0,
+                        }
+                    )
+                )
+            self.assertEqual(http_caught.exception.status_code, 400)
+            self.assertEqual(http_caught.exception.detail, "Between 1 hour and 7 days.")
+            self.assertEqual(mock_settings.notifications["digest_interval_minutes"], 1440)
+        finally:
+            webapp.gui_manager = None
 
     async def test_dark_mode_setting_validation(self):
         mock_broadcaster = MagicMock(spec=WebSocketBroadcaster)

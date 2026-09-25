@@ -16,6 +16,7 @@ from pydantic import BaseModel
 from src.library_sync import DEFAULT_MARKET, XBOX_MARKETS, LibrarySyncError, XboxProvider
 from src.notifications import DiscordProvider, NotificationError
 from src.notifications.service import short_discord_error
+from src.web.managers.settings import NotificationSettingsError
 
 
 if TYPE_CHECKING:
@@ -225,8 +226,11 @@ async def update_settings(settings: SettingsUpdate):
     if not gui_manager:
         raise HTTPException(status_code=503, detail="GUI not initialized")
 
-    settings_dict = settings.dict(exclude_unset=True)
-    gui_manager.settings.update_settings(settings_dict)
+    settings_dict = settings.model_dump(exclude_unset=True)
+    try:
+        gui_manager.settings.update_settings(settings_dict)
+    except NotificationSettingsError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {"success": True, "settings": gui_manager.settings.get_settings()}
 
 

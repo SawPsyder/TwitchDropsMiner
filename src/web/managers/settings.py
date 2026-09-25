@@ -44,6 +44,32 @@ def _overlay_known(template: dict[str, Any], current: dict[str, Any]) -> None:
             template[key] = value
 
 
+class NotificationSettingsError(ValueError):
+    """A notifications payload the server will not store."""
+
+
+def _parse_digest_interval(value: object) -> int | None:
+    """Whole minutes inside 1 hour..7 days, or None when the value is not."""
+    if isinstance(value, bool) or not isinstance(value, (int, float, str)):
+        return None
+    if isinstance(value, float) and not value.is_integer():
+        return None
+    if isinstance(value, str):
+        text = value.strip()
+        if not text.isdigit():
+            return None
+        number = int(text)
+    else:
+        number = int(value)
+    if number < DIGEST_INTERVAL_MIN_MINUTES or number > DIGEST_INTERVAL_MAX_MINUTES:
+        return None
+    return number
+
+
+def _interval_range_error() -> str:
+    return _.t["gui"]["settings"]["notifications"]["err"]["interval_range"]
+
+
 def _clamp_int(value: object, low: int, high: int, fallback: int) -> int:
     if isinstance(value, bool) or not isinstance(value, (int, float, str)):
         return fallback
@@ -132,7 +158,12 @@ class SettingsManager:
 
         Args:
             settings_data: Dictionary of settings to update
+
+        Raises:
+            NotificationSettingsError: The digest interval is outside 1 hour..7 days.
+                Nothing in this request is applied.
         """
+        self._reject_bad_digest_interval(settings_data.get("notifications"))
         should_trigger_update = False
         should_trigger_update |= self.check_and_update_setting(
             "games_to_watch", settings_data.get("games_to_watch"), True
@@ -363,13 +394,22 @@ class SettingsManager:
         if any(previous.get(key) != new.get(key) for key in watched):
             service.reschedule()
 
+    def _reject_bad_digest_interval(self, value: object) -> None:
+        """Refuse a submitted interval outside 1 hour..7 days before anything is saved."""
+        if not isinstance(value, dict) or "digest_interval_minutes" not in value:
+            return
+        if _parse_digest_interval(value.get("digest_interval_minutes")) is None:
+            raise NotificationSettingsError(_interval_range_error())
+
     def _sanitize_notifications(self, value: dict[str, Any]) -> dict[str, Any]:
         """Validate an incoming notifications settings object against the current one.
 
         Unknown keys are dropped, missing keys are filled in from the defaults
         (so a settings file from before digest mode still gains the new fields),
-        and invalid values are clamped or replaced.
+        and invalid values are clamped or replaced. A submitted digest interval
+        outside 1 hour..7 days is refused instead of clamped.
         """
+        self._reject_bad_digest_interval(value)
         current: dict[str, Any] = dict(self._settings.notifications)
         template = cast("dict[str, Any]", deepcopy(default_settings["notifications"]))
         _overlay_known(template, current)

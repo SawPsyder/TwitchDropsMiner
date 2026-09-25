@@ -3137,6 +3137,11 @@ select:focus {
     margin-top: 16px;
 }
 
+#notifications-save-btn:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+}
+
 #discord-status-line.status-ok::before {
     content: "● ";
 }
