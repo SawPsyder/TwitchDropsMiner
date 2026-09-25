@@ -60,6 +60,10 @@ class WebGUIManager:
         self.settings = SettingsManager(
             self._broadcaster, twitch.settings, self.output, on_change=on_settings_change
         )
+        # tests build a spec-limited Twitch stand-in that has no notification service
+        notification_service = getattr(twitch, "notification_service", None)
+        if notification_service is not None:
+            self.settings.bind_notification_service(notification_service)
 
         # Selected channel tracking (set by web client)
         self._selected_channel_id: int | None = None

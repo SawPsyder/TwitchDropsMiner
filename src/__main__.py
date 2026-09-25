@@ -130,7 +130,7 @@ if __name__ == "__main__":
                     except asyncio.CancelledError:
                         logger.info("Web server task force-cancelled")
                 except Exception as e:
-                    logger.error(f"Error while shutting down web server: {e}")
+                    logger.error("Error while shutting down web server: %s", e)
             else:
                 logger.debug(
                     f"Web server task status: task={web_server_task is not None}, done={web_server_task.done() if web_server_task else 'N/A'}"

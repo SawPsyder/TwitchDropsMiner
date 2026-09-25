@@ -187,7 +187,7 @@ class BaseDrop:
             return []
         return [benefit for benefit in self.benefits if benefit.is_wanted(allowed_benefits)]
 
-    async def claim(self) -> bool:
+    async def claim(self, *, source: str | None = None) -> bool:
         result = await self._claim()
         if result:
             self.is_claimed = result
@@ -212,11 +212,22 @@ class BaseDrop:
                 self._twitch.gui.notify_drop_collected(
                     self.campaign.game.name, [benefit.name for benefit in self.benefits]
                 )
+            # source is explicit so a websocket claim that lands while the
+            # inventory loop is awaiting another claim is not labelled inventory
+            channel_name = "inventory" if source == "inventory" else ""
+            if source != "inventory":
+                watching = self._twitch.watching_channel.get_with_default(None)
+                if watching is not None and getattr(watching, "name", None):
+                    channel_name = watching.name
             await self._twitch.notification_service.notify_drop_received(
-                self.campaign.game.name, [benefit.name for benefit in self.benefits]
+                self.campaign.game.name,
+                [benefit.name for benefit in self.benefits],
+                campaign=self.campaign.name,
+                drop_name=self.name,
+                channel=channel_name,
             )
         else:
-            logger.error(f"Drop claim has potentially failed! Drop ID: {self.id}")
+            logger.error("Drop claim has potentially failed! Drop ID: %s", self.id)
         return result
 
     async def _claim(self) -> bool:
@@ -363,8 +374,8 @@ class TimedDrop(BaseDrop):
                 return True
         return False
 
-    async def claim(self) -> bool:
-        result = await super().claim()
+    async def claim(self, *, source: str | None = None) -> bool:
+        result = await super().claim(source=source)
         if result:
             self.real_current_minutes = self.required_minutes
             self.extra_current_minutes = 0

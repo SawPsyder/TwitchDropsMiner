@@ -1,10 +1,16 @@
+import json
+import tempfile
 import unittest
+from pathlib import Path
 from unittest.mock import MagicMock
+
+import pytest
+from fastapi import HTTPException
 
 from src.config.settings import Settings
 from src.web.app import SettingsUpdate
 from src.web.managers.broadcaster import WebSocketBroadcaster
-from src.web.managers.settings import SettingsManager
+from src.web.managers.settings import NotificationSettingsError, SettingsManager
 
 
 class TestSettingsAPI(unittest.IsolatedAsyncioTestCase):
@@ -182,14 +188,13 @@ class TestSettingsAPI(unittest.IsolatedAsyncioTestCase):
         # notifications never affect the mining loop
         mock_callback.assert_not_called()
         self.assertEqual(mock_settings.notifications["discord"]["bot_token"], "secret-token")
-        # never log the raw bot token
-        mock_console.print.assert_called_with(
-            "Setting changed: notifications = "
-            "{'enabled': True, 'cooldown_minutes': 30, "
-            "'discord': {'enabled': True, 'guild_id': '', 'channel_id': '', "
-            "'events': {'drop_received': True, 'unlinked_tracked_game': True, "
-            "'auth_attention': True, 'mining_stalled': True, 'new_campaign': True}}}"
-        )
+        # never log the raw bot token; don't pin the whole dict, new digest keys
+        # would make an exact repr assertion break on every settings addition
+        logged = mock_console.print.call_args.args[0]
+        self.assertIn("Setting changed: notifications = ", logged)
+        self.assertIn("'cooldown_minutes': 30", logged)
+        self.assertIn("'enabled': True", logged)
+        self.assertNotIn("secret-token", logged)
 
     async def test_notifications_token_change_clears_guild_and_channel(self):
         mock_broadcaster = MagicMock(spec=WebSocketBroadcaster)
@@ -232,6 +237,131 @@ class TestSettingsAPI(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(mock_settings.notifications["discord"]["bot_token"], "new-token")
         self.assertEqual(mock_settings.notifications["discord"]["guild_id"], "")
         self.assertEqual(mock_settings.notifications["discord"]["channel_id"], "")
+
+    async def test_notification_sanitizer_enforces_digest_bounds(self):
+        mock_broadcaster = MagicMock(spec=WebSocketBroadcaster)
+        mock_settings = MagicMock(spec=Settings)
+        mock_settings.notifications = {
+            "enabled": True,
+            "cooldown_minutes": 15,
+            "discord": {
+                "enabled": True,
+                "bot_token": "",
+                "guild_id": "",
+                "channel_id": "",
+                "events": {
+                    "drop_received": True,
+                    "unlinked_tracked_game": True,
+                    "auth_attention": True,
+                    "mining_stalled": True,
+                    "new_campaign": True,
+                },
+            },
+        }
+        manager = SettingsManager(mock_broadcaster, mock_settings, MagicMock())
+        manager.update_settings(
+            {
+                "notifications": {
+                    **mock_settings.notifications,
+                    "cooldown_minutes": 5000,
+                    "digest_interval_minutes": 360,
+                    "digest_send_weekday": 9,
+                    "mode": "weekly",
+                    "digest_send_time": "25:99",
+                    "digest_sections": {"progress": False, "drops": True, "errors": "yes"},
+                }
+            }
+        )
+        saved = mock_settings.notifications
+        self.assertEqual(saved["cooldown_minutes"], 1440)
+        self.assertEqual(saved["digest_interval_minutes"], 360)
+        self.assertEqual(saved["digest_send_weekday"], 6)
+        self.assertEqual(saved["mode"], "immediate")
+        self.assertEqual(saved["digest_send_time"], "09:00")
+        self.assertEqual(set(saved["digest_sections"]), {"progress", "errors"})
+        self.assertFalse(saved["digest_sections"]["progress"])
+        self.assertTrue(saved["digest_sections"]["errors"])
+
+        manager.update_settings(
+            {
+                "notifications": {
+                    "cooldown_minutes": -4,
+                    "digest_interval_minutes": 720,
+                    "digest_send_weekday": "Monday",
+                    "mode": "digest",
+                    "digest_send_time": "9:05",
+                }
+            }
+        )
+        saved = mock_settings.notifications
+        self.assertEqual(saved["cooldown_minutes"], 0)
+        self.assertEqual(saved["digest_interval_minutes"], 720)
+        # a non-integer weekday is not parsed; the current valid value is kept
+        self.assertEqual(saved["digest_send_weekday"], 6)
+        self.assertEqual(saved["mode"], "digest")
+        self.assertEqual(saved["digest_send_time"], "09:05")
+
+        manager.update_settings(
+            {
+                "notifications": {
+                    "mode": "digest",
+                    "digest_send_weekday": 0,
+                    "digest_interval_minutes": 10080,
+                }
+            }
+        )
+        self.assertEqual(mock_settings.notifications["digest_send_weekday"], 0)
+
+    async def test_out_of_range_digest_interval_is_rejected(self):
+        from src.web import app as webapp
+
+        mock_broadcaster = MagicMock(spec=WebSocketBroadcaster)
+        mock_settings = MagicMock(spec=Settings)
+        mock_settings.notifications = {
+            "enabled": True,
+            "cooldown_minutes": 15,
+            "mode": "digest",
+            "digest_interval_minutes": 1440,
+            "discord": {
+                "enabled": True,
+                "bot_token": "",
+                "guild_id": "",
+                "channel_id": "",
+                "events": {"drop_received": True},
+            },
+        }
+        manager = SettingsManager(mock_broadcaster, mock_settings, MagicMock())
+        # 0 hours and 200 hours are what the custom field submits
+        for bad in (0, 10, 59, 10081, 12000, 100000, True, "nope"):
+            with self.assertRaises(NotificationSettingsError) as caught:
+                manager.update_settings(
+                    {
+                        "notifications": {
+                            **mock_settings.notifications,
+                            "digest_interval_minutes": bad,
+                        }
+                    }
+                )
+            self.assertEqual(str(caught.exception), "Between 1 hour and 7 days.")
+            self.assertEqual(mock_settings.notifications["digest_interval_minutes"], 1440)
+        mock_settings.save.assert_not_called()
+
+        webapp.gui_manager = type("GUI", (), {"settings": manager})()
+        try:
+            with self.assertRaises(HTTPException) as http_caught:
+                await webapp.update_settings(
+                    SettingsUpdate(
+                        notifications={
+                            **mock_settings.notifications,
+                            "digest_interval_minutes": 0,
+                        }
+                    )
+                )
+            self.assertEqual(http_caught.exception.status_code, 400)
+            self.assertEqual(http_caught.exception.detail, "Between 1 hour and 7 days.")
+            self.assertEqual(mock_settings.notifications["digest_interval_minutes"], 1440)
+        finally:
+            webapp.gui_manager = None
 
     async def test_dark_mode_setting_validation(self):
         mock_broadcaster = MagicMock(spec=WebSocketBroadcaster)
@@ -300,6 +430,49 @@ class TestSettingsAPI(unittest.IsolatedAsyncioTestCase):
         model = SettingsUpdate(date_format="iso", time_format="12h")
         self.assertEqual(model.date_format, "iso")
         self.assertEqual(model.time_format, "12h")
+
+
+@pytest.mark.parametrize(("stored", "expected"), [(30, 60), (0, 60), (20160, 10080)])
+def test_stored_out_of_range_digest_interval_is_clamped_on_load(stored, expected):
+    from src.config import settings as settings_mod
+
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "settings.json"
+        path.write_text(
+            json.dumps(
+                {
+                    "dark_mode": "auto",
+                    "notifications": {"digest_interval_minutes": stored},
+                }
+            ),
+            encoding="utf8",
+        )
+        original = settings_mod.SETTINGS_PATH
+        settings_mod.SETTINGS_PATH = path
+        try:
+            loaded = settings_mod.Settings()
+            assert loaded.notifications["digest_interval_minutes"] == expected
+            on_disk = json.loads(path.read_text(encoding="utf8"))
+            assert on_disk["notifications"]["digest_interval_minutes"] == expected
+            manager = SettingsManager(MagicMock(), loaded, MagicMock())
+            with pytest.raises(NotificationSettingsError):
+                manager.update_settings(
+                    {
+                        "dark_mode": "on",
+                        "notifications": {
+                            **loaded.notifications,
+                            "digest_interval_minutes": stored,
+                        },
+                    }
+                )
+            assert loaded.dark_mode == "auto"
+            manager.update_settings({"dark_mode": "on", "notifications": dict(loaded.notifications)})
+            assert loaded.dark_mode == "on"
+            saved = json.loads(path.read_text(encoding="utf8"))
+            assert saved["dark_mode"] == "on"
+            assert saved["notifications"]["digest_interval_minutes"] == expected
+        finally:
+            settings_mod.SETTINGS_PATH = original
 
 
 if __name__ == "__main__":

@@ -15,6 +15,8 @@ from pydantic import BaseModel
 
 from src.library_sync import DEFAULT_MARKET, XBOX_MARKETS, LibrarySyncError, XboxProvider
 from src.notifications import DiscordProvider, NotificationError
+from src.notifications.service import short_discord_error
+from src.web.managers.settings import NotificationSettingsError
 
 
 if TYPE_CHECKING:
@@ -161,7 +163,7 @@ async def select_channel(request: ChannelSelectRequest):
 
     # Warn if channel has no drops (shouldn't happen if GUI is filtering correctly)
     if not any(campaign.can_earn(channel) for campaign in twitch_client.inventory):
-        logger.warning(f"User selected channel {channel.name} but it has no available drops")
+        logger.warning("User selected channel %s but it has no available drops", channel.name)
 
     gui_manager.select_channel(request.channel_id)
 
@@ -224,8 +226,11 @@ async def update_settings(settings: SettingsUpdate):
     if not gui_manager:
         raise HTTPException(status_code=503, detail="GUI not initialized")
 
-    settings_dict = settings.dict(exclude_unset=True)
-    gui_manager.settings.update_settings(settings_dict)
+    settings_dict = settings.model_dump(exclude_unset=True)
+    try:
+        gui_manager.settings.update_settings(settings_dict)
+    except NotificationSettingsError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {"success": True, "settings": gui_manager.settings.get_settings()}
 
 
@@ -324,7 +329,7 @@ async def get_version():
                 ):
                     update_available = True
     except Exception as e:
-        logger.warning(f"Failed to check for updates: {str(e)}")
+        logger.warning("Failed to check for updates: %s", e)
 
     return {
         "current_version": current_version,
@@ -511,6 +516,24 @@ async def send_test_notification(request: NotificationTestRequest):
     except NotificationError as exc:
         return {"success": False, "message": str(exc)}
     return {"success": True, "message": "Test notification sent"}
+
+
+@app.post("/api/notifications/digest/preview")
+async def preview_notification_digest():
+    """
+    Post the digest the saved queue would produce right now.
+
+    Uses the settings already stored on the service, not whatever the form is
+    showing, and does not clear the queue.
+    """
+    if not twitch_client:
+        raise HTTPException(status_code=503, detail="Twitch client not initialized")
+
+    try:
+        await twitch_client.notification_service.send_preview()
+    except NotificationError as exc:
+        return {"success": False, "message": short_discord_error(exc)}
+    return {"success": True}
 
 
 @app.post("/api/login")
