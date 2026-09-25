@@ -63,7 +63,7 @@ def task_wrapper(
             except ExitRequest:
                 pass
             except Exception:
-                logger.exception(f"Exception in {afunc.__name__} task")
+                logger.exception("Exception in %s task", afunc.__name__)
                 if critical:
                     # critical task's death should trigger a termination.
                     # there isn't an easy and sure way to obtain the Twitch instance here,

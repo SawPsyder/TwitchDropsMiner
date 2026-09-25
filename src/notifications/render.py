@@ -94,15 +94,66 @@ def period_label(interval_minutes: int) -> str:
     return f"last {days} {unit}"
 
 
+def discord_units(text: str) -> int:
+    """UTF-16 code units. Counting this way stays inside Discord's limit either way."""
+    return len(text.encode("utf-16-le")) // 2
+
+
 def message_char_count(embeds: list[dict[str, Any]]) -> int:
-    """Characters Discord counts toward the 6000-character message budget."""
+    """UTF-16 code units Discord's 6000-character message budget is measured in."""
     total = 0
     for embed in embeds:
-        total += len(embed.get("title") or "")
-        total += len(embed.get("description") or "")
+        total += discord_units(embed.get("title") or "")
+        total += discord_units(embed.get("description") or "")
         footer = embed.get("footer") or {}
-        total += len(footer.get("text") or "")
+        total += discord_units(footer.get("text") or "")
     return total
+
+
+def _utf16_prefix(text: str, units: int) -> str:
+    """The longest prefix of `text` that is at most `units` UTF-16 code units."""
+    if units <= 0 or not text:
+        return ""
+    encoded = text.encode("utf-16-le")
+    chunk = encoded[: min(len(encoded), units * 2)]
+    if len(chunk) >= 2:
+        last = int.from_bytes(chunk[-2:], "little")
+        # don't leave a dangling high surrogate
+        if 0xD800 <= last <= 0xDBFF:
+            chunk = chunk[:-2]
+    return chunk.decode("utf-16-le")
+
+
+def _unclosed_timestamp(text: str) -> bool:
+    start = text.rfind("<t:")
+    return start >= 0 and ">" not in text[start:]
+
+
+def _safe_truncate(text: str, budget: int) -> str:
+    """
+    Shorten `text` to `budget` UTF-16 units without cutting a timestamp tag or
+    leaving an unbalanced `**`.
+    """
+    if discord_units(text) <= budget:
+        return text
+    clipped = _utf16_prefix(text, budget)
+    newline = clipped.rfind("\n")
+    if newline > 0:
+        clipped = clipped[:newline]
+    while clipped:
+        if _unclosed_timestamp(clipped) or clipped.count("**") % 2 == 1:
+            tag = clipped.rfind("<t:")
+            bold = clipped.rfind("**")
+            cut = max(tag, bold)
+            clipped = clipped[:cut] if cut > 0 else clipped[:-1]
+            continue
+        clipped = clipped.rstrip()
+        break
+    if not clipped:
+        return ""
+    if discord_units(clipped) + discord_units("…") <= budget and not clipped.endswith("…"):
+        return clipped + "…"
+    return clipped
 
 
 @dataclass
@@ -123,10 +174,15 @@ class _Section:
     more_plural: str = "items"
     more_extra: str = ""
     forced: str | None = None
+    # (event count, line). Oldest first. Trim drops the front so the newest stay.
+    urgent: list[tuple[int, str]] = field(default_factory=list)
+    urgent_omitted: int = 0
 
     def can_trim(self) -> bool:
         if self.kind == "header" or self.forced is not None:
             return False
+        if self.kind == "attention":
+            return bool(self.items) or len(self.urgent) > 1
         if self.kind == "drops":
             return any(isinstance(item, _Group) and item.lines for item in self.items)
         return bool(self.items)
@@ -134,6 +190,14 @@ class _Section:
     def trim(self) -> bool:
         if not self.can_trim():
             return False
+        if self.kind == "attention" and self.items:
+            self.items.pop()
+            self.omitted += 1
+            return True
+        if self.kind == "attention" and len(self.urgent) > 1:
+            count, _line = self.urgent.pop(0)
+            self.urgent_omitted += count
+            return True
         if self.kind == "drops":
             group = self.items[-1]
             if not isinstance(group, _Group) or not group.lines:
@@ -152,6 +216,8 @@ class _Section:
     def description(self) -> str:
         if self.forced is not None:
             return self.forced
+        if self.kind == "attention":
+            return self._attention_description()
         lines = list(self.fixed)
         if self.kind == "drops":
             for index, item in enumerate(self.items):
@@ -162,10 +228,21 @@ class _Section:
                 lines.append(item.header)
                 lines.extend(item.lines)
         else:
-            rendered = [item for item in self.items if isinstance(item, str)]
-            if self.kind == "attention" and self.fixed and (rendered or self.omitted):
-                lines.append("")
-            lines.extend(rendered)
+            lines.extend(item for item in self.items if isinstance(item, str))
+        if self.omitted:
+            noun = self.more_singular if self.omitted == 1 else self.more_plural
+            extra = f" {self.more_extra}" if self.more_extra else ""
+            lines.append(f"…and {self.omitted} more {noun}{extra}")
+        return "\n".join(lines).strip()
+
+    def _attention_description(self) -> str:
+        lines = [line for _count, line in self.urgent]
+        if self.urgent_omitted:
+            lines.append(f"…and {self.urgent_omitted} more urgent")
+        rendered = [item for item in self.items if isinstance(item, str)]
+        if lines and (rendered or self.omitted):
+            lines.append("")
+        lines.extend(rendered)
         if self.omitted:
             noun = self.more_singular if self.omitted == 1 else self.more_plural
             extra = f" {self.more_extra}" if self.more_extra else ""
@@ -339,20 +416,71 @@ def _build_unlinked(events: list[dict[str, Any]]) -> _Section | None:
     )
 
 
+def _urgent_line(group: dict[str, Any], window_end: datetime, long_window: bool) -> str:
+    """One urgent line. Identical events collapse to a count and the latest time."""
+    latest: datetime = group["latest"]
+    when = _list_time(latest, long_window)
+    count = int(group["count"])
+    if group["type"] == "mining_stalled":
+        label = "**Mining stalled**"
+        if count == 1:
+            elapsed = max(0, int((window_end - latest).total_seconds() // 60))
+            line = f"{label} · no progress for {format_remaining(elapsed)} · {when}"
+        else:
+            line = f"{label} ×{count}, last {when}"
+    else:
+        label = "**Sign-in needed**"
+        if count == 1:
+            reason = escape_discord(group.get("reason") or "", LOG_CHAR_CAP)
+            line = f"{label} · {reason} · {when}" if reason else f"{label} · {when}"
+        else:
+            line = f"{label} ×{count}, last {when}"
+    if count == 1 and group.get("alerted"):
+        line += " · alerted at the time"
+    return line
+
+
+def _collapse_urgent(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Group urgent events that share a type and reason. Oldest group first."""
+    groups: list[dict[str, Any]] = []
+    index: dict[tuple[str, str], dict[str, Any]] = {}
+    for event in sorted(events, key=_event_stamp):
+        data = event.get("data") or {}
+        reason = str(data.get("reason") or "").strip()
+        kind = str(event.get("type") or "")
+        stamp = _event_stamp(event)
+        key = (kind, reason)
+        group = index.get(key)
+        if group is None:
+            group = {
+                "type": kind,
+                "reason": reason,
+                "count": 0,
+                "latest": stamp,
+                "alerted": False,
+            }
+            index[key] = group
+            groups.append(group)
+        group["count"] += 1
+        group["alerted"] = bool(group["alerted"] or data.get("alerted"))
+        if stamp >= group["latest"]:
+            group["latest"] = stamp
+    groups.sort(key=lambda group: group["latest"])
+    return groups
+
+
 def _build_attention(
     events: list[dict[str, Any]],
     error_groups: list[dict[str, Any]],
     overflow_types: int,
     long_window: bool,
+    window_end: datetime,
 ) -> _Section | None:
-    urgent = sorted(
-        (
-            event
-            for event in events
-            if event.get("type") in ("auth_attention", "mining_stalled")
-        ),
-        key=_event_stamp,
-    )
+    urgent = [
+        event
+        for event in events
+        if event.get("type") in ("auth_attention", "mining_stalled")
+    ]
     errors = [group for group in error_groups if str(group.get("level")) == "ERROR"]
     warnings = [group for group in error_groups if str(group.get("level")) != "ERROR"]
     errors.sort(key=lambda group: int(group.get("count") or 0), reverse=True)
@@ -361,22 +489,10 @@ def _build_attention(
     if not urgent and not ordered_groups and overflow_types <= 0:
         return None
 
-    fixed: list[str] = []
-    for event in urgent:
-        data = event.get("data") or {}
-        label = (
-            "**Mining stalled**"
-            if event.get("type") == "mining_stalled"
-            else "**Sign-in needed**"
-        )
-        parts = [label]
-        reason = str(data.get("reason") or "").strip()
-        if reason:
-            parts.append(escape_discord(reason, LOG_CHAR_CAP))
-        parts.append(_list_time(_event_stamp(event), long_window))
-        if data.get("alerted"):
-            parts.append("alerted at the time")
-        fixed.append(" · ".join(parts))
+    urgent_lines = [
+        (int(group["count"]), _urgent_line(group, window_end, long_window))
+        for group in _collapse_urgent(urgent)
+    ]
 
     group_lines: list[str] = []
     for group in ordered_groups:
@@ -397,7 +513,7 @@ def _build_attention(
         kind="attention",
         title=f"⚠️ Needs attention ({len(urgent) + group_total})",
         color=ATTENTION_URGENT_COLOR if high else ATTENTION_WARNING_COLOR,
-        fixed=fixed,
+        urgent=urgent_lines,
         items=shown,
         omitted=omitted,
         more_singular="warning type",
@@ -491,17 +607,16 @@ def _build_header(
             lines.append("Queue limit reached: 1 older event wasn't kept.")
         else:
             lines.append(f"Queue limit reached: {dropped_count} older events weren't kept.")
+    # a final digest (shutdown or leaving digest mode) has no following send
     if next_at is not None:
         lines.append(f"Next digest {discord_tag(next_at, 'f')}")
-    else:
-        lines.append(f"Next digest {discord_tag(window_end, 'R')}")
     return _Section(kind="header", title=title, color=HEADER_COLOR, fixed=lines)
 
 
 def _total_chars(sections: list[_Section], footer: str) -> int:
-    return sum(len(section.title) + len(section.description()) for section in sections) + len(
-        footer
-    )
+    return sum(
+        discord_units(section.title) + discord_units(section.description()) for section in sections
+    ) + discord_units(footer)
 
 
 def _trim_to_fit(sections: list[_Section], footer: str) -> None:
@@ -511,14 +626,14 @@ def _trim_to_fit(sections: list[_Section], footer: str) -> None:
             section
             for section in sections
             if section.kind != "header"
-            and len(section.description()) > MAX_DESCRIPTION_CHARS
+            and discord_units(section.description()) > MAX_DESCRIPTION_CHARS
             and section.can_trim()
         ]
         if over_desc:
-            max(over_desc, key=lambda section: len(section.description())).trim()
+            max(over_desc, key=lambda section: discord_units(section.description())).trim()
             continue
         if _total_chars(sections, footer) <= TOTAL_CHAR_TARGET and all(
-            len(section.description()) <= MAX_DESCRIPTION_CHARS for section in sections
+            discord_units(section.description()) <= MAX_DESCRIPTION_CHARS for section in sections
         ):
             break
         if _total_chars(sections, footer) <= TOTAL_CHAR_TARGET:
@@ -528,11 +643,13 @@ def _trim_to_fit(sections: list[_Section], footer: str) -> None:
         ]
         if not trimmable:
             break
-        max(trimmable, key=lambda section: len(section.description())).trim()
+        max(trimmable, key=lambda section: discord_units(section.description())).trim()
 
     for _ in range(20000):
         too_long = [
-            section for section in sections if len(section.description()) > DESCRIPTION_HARD_MAX
+            section
+            for section in sections
+            if discord_units(section.description()) > DESCRIPTION_HARD_MAX
         ]
         over_budget = _total_chars(sections, footer) > MAX_TOTAL_CHARS
         if not too_long and not over_budget:
@@ -542,28 +659,29 @@ def _trim_to_fit(sections: list[_Section], footer: str) -> None:
         ]
         if trimmable:
             pool = [
-                section for section in trimmable if len(section.description()) > DESCRIPTION_HARD_MAX
+                section
+                for section in trimmable
+                if discord_units(section.description()) > DESCRIPTION_HARD_MAX
             ] or trimmable
-            max(pool, key=lambda section: len(section.description())).trim()
+            max(pool, key=lambda section: discord_units(section.description())).trim()
             continue
-        victim = max(sections, key=lambda section: len(section.description()))
-        others = _total_chars(sections, footer) - len(victim.description())
+        victim = max(sections, key=lambda section: discord_units(section.description()))
+        others = _total_chars(sections, footer) - discord_units(victim.description())
         budget = min(DESCRIPTION_HARD_MAX, MAX_TOTAL_CHARS - others)
         if budget < 1:
             if victim.kind != "header":
                 sections.remove(victim)
                 continue
             return
-        text = victim.description()
-        shortened = text[: budget - 1] + "…"
-        if shortened == text or len(shortened) >= len(text):
+        shortened = _safe_truncate(victim.description(), budget)
+        if not shortened or shortened == victim.description():
             if victim.kind != "header":
                 sections.remove(victim)
                 continue
             return
         victim.forced = shortened
         if _total_chars(sections, footer) <= MAX_TOTAL_CHARS and all(
-            len(section.description()) <= DESCRIPTION_HARD_MAX for section in sections
+            discord_units(section.description()) <= DESCRIPTION_HARD_MAX for section in sections
         ):
             return
 
@@ -633,7 +751,7 @@ def render_digest(
         unlinked_count=unlinked_count,
         dropped_count=max(0, dropped_count),
     )
-    attention = _build_attention(events, groups, overflow_types, long_window)
+    attention = _build_attention(events, groups, overflow_types, long_window, window_end)
     attention_first = False
     if attention is not None:
         has_error = any(str(group.get("level")) == "ERROR" for group in groups)
@@ -667,8 +785,8 @@ def render_digest(
     embeds: list[dict[str, Any]] = []
     for index, section in enumerate(sections):
         embed: dict[str, Any] = {
-            "title": section.title[:MAX_TITLE_CHARS],
-            "description": section.description()[:DESCRIPTION_HARD_MAX],
+            "title": _utf16_prefix(section.title, MAX_TITLE_CHARS),
+            "description": _safe_truncate(section.description(), DESCRIPTION_HARD_MAX),
             "color": section.color,
         }
         if index == len(sections) - 1:

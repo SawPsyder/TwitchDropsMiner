@@ -10,12 +10,19 @@ token could be extracted from the source/image and abused.
 
 from __future__ import annotations
 
+import contextlib
 import logging
-from typing import Any
+from datetime import UTC, datetime
+from email.utils import parsedate_to_datetime
+from typing import TYPE_CHECKING, Any
 
 import aiohttp
 
 from src.notifications.base import NotificationError, NotificationProvider
+
+
+if TYPE_CHECKING:
+    from src.config.settings import Settings
 
 
 logger = logging.getLogger("TwitchDrops.notifications")
@@ -37,12 +44,53 @@ EVENT_COLORS: dict[str, int] = {
 # generic request timeout - these calls happen on user action (settings save,
 # test button) or on mining events, never in a hot loop
 REQUEST_TIMEOUT = 15
+# when a 429 carries no usable delay, wait at least this long and double it
+RATE_LIMIT_BACKOFF_MIN = 5.0
+RATE_LIMIT_BACKOFF_MAX = 300.0
+
+
+def rate_limit_delay(body: object, headers: Any) -> float | None:
+    """
+    Seconds to wait after a 429, from the JSON body and the rate-limit headers.
+
+    Returns None when none of them parse, so the caller can apply its backoff.
+    A positive value is honoured as given (a header of 120s waits 120s).
+    """
+    candidates: list[float] = []
+    if isinstance(body, dict) and body.get("retry_after") is not None:
+        with contextlib.suppress(TypeError, ValueError):
+            candidates.append(float(body["retry_after"]))
+    for name in ("Retry-After", "X-RateLimit-Reset-After"):
+        raw = headers.get(name) if headers is not None else None
+        if raw is None or raw == "":
+            continue
+        try:
+            candidates.append(float(raw))
+        except (TypeError, ValueError):
+            pass
+        else:
+            continue
+        try:
+            when = parsedate_to_datetime(str(raw))
+        except (TypeError, ValueError, IndexError):
+            continue
+        if when.tzinfo is None:
+            when = when.replace(tzinfo=UTC)
+        candidates.append((when - datetime.now(UTC)).total_seconds())
+    positive = [value for value in candidates if value > 0]
+    if not positive:
+        return None
+    return max(positive)
 
 
 class DiscordProvider(NotificationProvider):
     """Sends notifications to a Discord channel via a user-owned bot token."""
 
     name = "discord"
+
+    def __init__(self, settings: Settings) -> None:
+        super().__init__(settings)
+        self._rate_limit_backoff = RATE_LIMIT_BACKOFF_MIN
 
     @property
     def bot_token(self) -> str:
@@ -91,11 +139,15 @@ class DiscordProvider(NotificationProvider):
                         body = await response.json()
                     except Exception:
                         body = {}
-                    retry_after = body.get("retry_after", 1) if isinstance(body, dict) else 1
-                    try:
-                        retry_seconds = float(retry_after)
-                    except (TypeError, ValueError):
-                        retry_seconds = 1.0
+                    hinted = rate_limit_delay(body, response.headers)
+                    if hinted is None:
+                        retry_seconds = self._rate_limit_backoff
+                        self._rate_limit_backoff = min(
+                            self._rate_limit_backoff * 2, RATE_LIMIT_BACKOFF_MAX
+                        )
+                    else:
+                        retry_seconds = hinted
+                        self._rate_limit_backoff = RATE_LIMIT_BACKOFF_MIN
                     raise NotificationError(
                         f"Discord: rate limited, retry after {retry_seconds}s (429)",
                         retry_after=retry_seconds,

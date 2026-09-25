@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Callable
 from copy import deepcopy
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from src.config.settings import (
     COOLDOWN_MINUTES_MAX,
@@ -354,6 +354,14 @@ class SettingsManager:
         new_mode = new.get("mode", "immediate")
         if previous_mode == "digest" and new_mode == "immediate" and service.has_digest_content():
             service.schedule_mode_switch_flush()
+        watched = (
+            "mode",
+            "digest_interval_minutes",
+            "digest_send_time",
+            "digest_send_weekday",
+        )
+        if any(previous.get(key) != new.get(key) for key in watched):
+            service.reschedule()
 
     def _sanitize_notifications(self, value: dict[str, Any]) -> dict[str, Any]:
         """Validate an incoming notifications settings object against the current one.
@@ -363,7 +371,7 @@ class SettingsManager:
         and invalid values are clamped or replaced.
         """
         current: dict[str, Any] = dict(self._settings.notifications)
-        template = deepcopy(default_settings["notifications"])
+        template = cast("dict[str, Any]", deepcopy(default_settings["notifications"]))
         _overlay_known(template, current)
         sanitized: dict[str, Any] = dict(value)
         merge_json(sanitized, template)

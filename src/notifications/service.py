@@ -13,7 +13,9 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import copy
 import logging
+import threading
 from collections.abc import Iterable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -40,13 +42,18 @@ logger = logging.getLogger(NOTIFICATIONS_LOGGER)
 
 URGENT_EVENTS = frozenset({"auth_attention", "mining_stalled"})
 RETRY_BACKOFF = timedelta(minutes=5)
-_IDLE_PROGRESS = {
-    "state": "idle",
-    "channel": None,
-    "game": None,
-    "stalled_since": None,
-    "campaigns": [],
-}
+# coalesce a burst of queue/log writes into one disk save
+STATE_SAVE_DELAY = 2.0
+
+
+def _idle_progress() -> dict[str, Any]:
+    return {
+        "state": "idle",
+        "channel": None,
+        "game": None,
+        "stalled_since": None,
+        "campaigns": [],
+    }
 
 
 def _empty_state() -> dict[str, Any]:
@@ -100,7 +107,39 @@ def _load_state(path: Path) -> dict[str, Any]:
         raw["digest_error_groups"] = {}
     if not isinstance(raw.get("last_sent"), dict):
         raw["last_sent"] = {}
+    dropped_bad = False
+    clean_queue: list[Any] = []
+    for item in raw["digest_queue"]:
+        if isinstance(item, dict) and isinstance(item.get("type"), str):
+            clean_queue.append(item)
+        else:
+            dropped_bad = True
+    raw["digest_queue"] = clean_queue
+    clean_groups: dict[str, Any] = {}
+    for key, group in raw["digest_error_groups"].items():
+        if isinstance(key, str) and isinstance(group, dict):
+            clean_groups[key] = group
+        else:
+            dropped_bad = True
+    raw["digest_error_groups"] = clean_groups
+    for key in (
+        "digest_dropped",
+        "digest_error_overflow_types",
+        "digest_error_overflow_count",
+    ):
+        raw[key] = _coerce_count(raw.get(key))
+    if dropped_bad:
+        logger.warning("Dropped invalid items from the notifications digest queue")
     return raw
+
+
+def _coerce_count(value: object) -> int:
+    if isinstance(value, bool) or not isinstance(value, int | float | str):
+        return 0
+    try:
+        return max(0, int(value))
+    except ValueError:
+        return 0
 
 
 def short_discord_error(exc: NotificationError) -> str:
@@ -130,6 +169,13 @@ class NotificationService:
         self._digest_task: asyncio.Task[None] | None = None
         self._mode_switch_task: asyncio.Task[bool] | None = None
         self._sending = False
+        # one lock for the scheduler, the mode-switch flush, and the preview
+        self._send_lock = asyncio.Lock()
+        self._wake = asyncio.Event()
+        self._state_lock = threading.RLock()
+        self._dirty = False
+        self._save_handle: asyncio.TimerHandle | None = None
+        self._loop: asyncio.AbstractEventLoop | None = None
         register_service(self)
 
     @property
@@ -185,13 +231,83 @@ class NotificationService:
         """Callable returning the mining snapshot folded into a digest at send time."""
         self._progress_provider = provider
 
-    def _save_state(self) -> None:
+    def _mark_dirty(self) -> None:
+        with self._state_lock:
+            self._dirty = True
+        self._schedule_save()
+
+    def _running_loop(self) -> asyncio.AbstractEventLoop | None:
+        try:
+            loop: asyncio.AbstractEventLoop | None = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = self._loop
+        else:
+            self._loop = loop
+        if loop is not None and loop.is_running():
+            return loop
+        return None
+
+    def _schedule_save(self) -> None:
+        """Coalesce state writes. A burst of warnings becomes one save about 2s later."""
+        loop = self._running_loop()
+        if loop is None:
+            self._write_state_now()
+            return
+
+        def arm() -> None:
+            if self._save_handle is not None:
+                self._save_handle.cancel()
+            self._save_handle = loop.call_later(STATE_SAVE_DELAY, self._on_save_due)
+
+        try:
+            current = asyncio.get_running_loop()
+        except RuntimeError:
+            current = None
+        if current is loop:
+            arm()
+        else:
+            loop.call_soon_threadsafe(arm)
+
+    def _on_save_due(self) -> None:
+        self._save_handle = None
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            self._write_state_now()
+            return
+        loop.create_task(self.flush_pending_state())
+
+    def _copy_state(self) -> dict[str, Any] | None:
+        with self._state_lock:
+            if not self._dirty:
+                return None
+            self._dirty = False
+            return copy.deepcopy(self._state)
+
+    def _write_payload(self, payload: dict[str, Any]) -> None:
         try:
             if not self._state_path.parent.exists():
                 return
-            json_save(self._state_path, self._state)
+            json_save(self._state_path, payload)
         except OSError:
+            with self._state_lock:
+                self._dirty = True
             logger.warning("Could not save notifications state to %s", self._state_path)
+
+    def _write_state_now(self) -> None:
+        payload = self._copy_state()
+        if payload is not None:
+            self._write_payload(payload)
+
+    async def flush_pending_state(self) -> None:
+        """Write a coalesced state update. Called before a send and on shutdown."""
+        if self._save_handle is not None:
+            self._save_handle.cancel()
+            self._save_handle = None
+        payload = self._copy_state()
+        if payload is None:
+            return
+        await asyncio.to_thread(self._write_payload, payload)
 
     @staticmethod
     def _cooldown_key(provider_name: str, event_type: str) -> str:
@@ -297,7 +413,7 @@ class NotificationService:
             sent_any = True
             state_changed = True
         if state_changed:
-            self._save_state()
+            self._mark_dirty()
         return sent_any
 
     def _enqueue(self, event: NotificationEvent) -> None:
@@ -312,7 +428,7 @@ class NotificationService:
         if not self._state.get("digest_window_start"):
             self._state["digest_window_start"] = datetime.now(UTC).isoformat()
         self._ensure_next_at()
-        self._save_state()
+        self._mark_dirty()
 
     def record_log_event(self, record: logging.LogRecord) -> None:
         """Group a WARNING+ log record into the open digest window."""
@@ -352,7 +468,7 @@ class NotificationService:
                 existing["level"] = "ERROR"
         if not self._state.get("digest_window_start"):
             self._state["digest_window_start"] = now
-        self._save_state()
+        self._mark_dirty()
 
     def _error_totals(self) -> tuple[int, int]:
         """(occurrences, overflow occurrences). Zero when the errors section is off."""
@@ -434,23 +550,27 @@ class NotificationService:
 
     def _progress_snapshot(self) -> dict[str, Any]:
         if self._progress_provider is None:
-            return dict(_IDLE_PROGRESS)
+            return _idle_progress()
         try:
             snapshot = self._progress_provider()
         except Exception:
             logger.exception("Failed to read the mining progress snapshot")
-            return dict(_IDLE_PROGRESS)
+            return _idle_progress()
         if not isinstance(snapshot, dict):
-            return dict(_IDLE_PROGRESS)
+            return _idle_progress()
         return snapshot
 
-    def _render(self, *, preview: bool) -> list[dict[str, Any]]:
-        now = datetime.now(UTC)
+    def _render(
+        self, *, preview: bool, final: bool = False, now: datetime | None = None
+    ) -> list[dict[str, Any]]:
+        now = now or datetime.now(UTC)
         window_start = self._parse_stamp(self._state.get("digest_window_start")) or now
         # A preview shows the send already on the clock. A digest going out now
-        # announces the one after it, which is what _clear_window will persist.
+        # announces the one after it. A final digest has no following send.
         stored_next = self._parse_stamp(self._state.get("digest_next_at"))
-        if preview and stored_next is not None and stored_next > now:
+        if final:
+            next_at = None
+        elif preview and stored_next is not None and stored_next > now:
             next_at = stored_next
         else:
             next_at = self._compute_next(now)
@@ -473,6 +593,79 @@ class NotificationService:
             version=__version__,
             preview=preview,
         )
+
+    def _window_snapshot(self) -> dict[str, Any]:
+        """The queue and counts a send is about to consume. Later arrivals are not in it."""
+        with self._state_lock:
+            queue = list(self._state.get("digest_queue") or [])
+            groups = copy.deepcopy(self._state.get("digest_error_groups") or {})
+            return {
+                "queue_ids": [id(item) for item in queue],
+                "groups": groups if isinstance(groups, dict) else {},
+                "dropped": _coerce_count(self._state.get("digest_dropped")),
+                "overflow_types": _coerce_count(self._state.get("digest_error_overflow_types")),
+                "overflow_count": _coerce_count(self._state.get("digest_error_overflow_count")),
+            }
+
+    def _release_snapshot(self, snapshot: dict[str, Any], render_time: datetime) -> None:
+        """Drop only what this send rendered. Events that arrived during the POST stay."""
+        with self._state_lock:
+            sent = set(snapshot["queue_ids"])
+            queue = self._state.get("digest_queue") or []
+            self._state["digest_queue"] = [
+                item for item in queue if id(item) not in sent
+            ]
+            groups = self._state.get("digest_error_groups")
+            if not isinstance(groups, dict):
+                groups = {}
+                self._state["digest_error_groups"] = groups
+            for key, snap in snapshot["groups"].items():
+                current = groups.get(key)
+                if not isinstance(current, dict) or not isinstance(snap, dict):
+                    continue
+                remaining = _coerce_count(current.get("count")) - _coerce_count(snap.get("count"))
+                if remaining <= 0:
+                    groups.pop(key, None)
+                else:
+                    current["count"] = remaining
+            self._state["digest_dropped"] = max(
+                0, _coerce_count(self._state.get("digest_dropped")) - snapshot["dropped"]
+            )
+            self._state["digest_error_overflow_types"] = max(
+                0,
+                _coerce_count(self._state.get("digest_error_overflow_types"))
+                - snapshot["overflow_types"],
+            )
+            self._state["digest_error_overflow_count"] = max(
+                0,
+                _coerce_count(self._state.get("digest_error_overflow_count"))
+                - snapshot["overflow_count"],
+            )
+            self._state["digest_window_start"] = render_time.isoformat()
+            self._state["digest_flush_pending"] = False
+            self._state["digest_next_at"] = self._compute_next(render_time).isoformat()
+
+    def reschedule(self) -> None:
+        """
+        Recompute the next send from the current window and wake the scheduler.
+
+        Called when the mode, interval, send time or weekday is saved, so a new
+        schedule applies without waiting out the previously computed slot.
+        """
+        now = datetime.now(UTC)
+        anchor = self._parse_stamp(self._state.get("digest_window_start"))
+        if anchor is None:
+            last = self._state.get("last_digest")
+            if isinstance(last, dict):
+                anchor = self._parse_stamp(last.get("sent_at")) or self._parse_stamp(last.get("at"))
+        if anchor is None or anchor > now:
+            anchor = now
+        nxt = self._compute_next(anchor)
+        if nxt < now:
+            nxt = now
+        self._state["digest_next_at"] = nxt.isoformat()
+        self._mark_dirty()
+        self._wake.set()
 
     def _record_digest(
         self,
@@ -511,11 +704,16 @@ class NotificationService:
 
     async def flush_digest(self, *, final: bool = False) -> bool:
         """
-        Send the queued digest. The queue is cleared only after Discord returns 2xx.
+        Send the queued digest. Only the snapshotted items are removed after a 2xx.
 
-        `final` is the one digest posted when the user switches back to immediate
-        mode. An empty window is skipped unless digest_send_empty is on.
+        `final` is the digest posted on shutdown or when leaving digest mode. It
+        does not announce a next digest. An empty window is skipped unless
+        digest_send_empty is on.
         """
+        async with self._send_lock:
+            return await self._flush_digest_locked(final=final)
+
+    async def _flush_digest_locked(self, *, final: bool) -> bool:
         pending = bool(self._state.get("digest_flush_pending"))
         if self.mode != "digest" and not final and not pending:
             return False
@@ -524,31 +722,45 @@ class NotificationService:
         retry_at = self._retry_at()
         if retry_at is not None and retry_at > datetime.now(UTC):
             return False
+        # another sender may have drained the queue while this call waited
         if not self.has_digest_content() and not self.send_empty:
+            # a flush that lost the race to one that just sent must not record a
+            # skip over that success; the window it left behind is already in the future
+            next_at = self._parse_stamp(self._state.get("digest_next_at"))
+            if next_at is not None and next_at > datetime.now(UTC) + timedelta(seconds=1):
+                return False
             self._record_digest(ok=True, skipped=True)
             self._clear_window()
-            self._save_state()
+            self._mark_dirty()
+            await self.flush_pending_state()
             return False
         provider = self.get_provider("discord")
         if not isinstance(provider, DiscordProvider):
             return False
-        embeds = self._render(preview=False)
+        await self.flush_pending_state()
+        render_time = datetime.now(UTC)
+        snapshot = self._window_snapshot()
+        embeds = self._render(preview=False, final=final, now=render_time)
         self._sending = True
         try:
             await provider.send_digest(embeds)
         except NotificationError as exc:
-            delay = exc.retry_after if exc.retry_after is not None else RETRY_BACKOFF.total_seconds()
+            delay = (
+                exc.retry_after if exc.retry_after is not None else RETRY_BACKOFF.total_seconds()
+            )
             retry = datetime.now(UTC) + timedelta(seconds=max(0.0, float(delay)))
             self._record_digest(ok=False, error=short_discord_error(exc), retry_at=retry)
             self._last_errors[provider.name] = short_discord_error(exc)
             logger.warning("Discord digest failed: %s", exc)
-            self._save_state()
+            self._mark_dirty()
+            await self.flush_pending_state()
             return False
         else:
             self._last_errors.pop(provider.name, None)
             self._record_digest(ok=True)
-            self._clear_window()
-            self._save_state()
+            self._release_snapshot(snapshot, render_time)
+            self._mark_dirty()
+            await self.flush_pending_state()
             return True
         finally:
             self._sending = False
@@ -560,18 +772,19 @@ class NotificationService:
         Raises:
             NotificationError: Discord is not configured or rejected the message.
         """
-        provider = self.get_provider("discord")
-        if not isinstance(provider, DiscordProvider) or not provider.is_configured:
-            raise NotificationError("Discord: bot token and channel must be configured")
-        embeds = self._render(preview=True)
-        await provider.send_digest(embeds)
+        async with self._send_lock:
+            provider = self.get_provider("discord")
+            if not isinstance(provider, DiscordProvider) or not provider.is_configured:
+                raise NotificationError("Discord: bot token and channel must be configured")
+            embeds = self._render(preview=True)
+            await provider.send_digest(embeds)
 
     def schedule_mode_switch_flush(self) -> None:
         """Queue the final digest after a save that left digest mode with events waiting."""
         if not self.has_digest_content():
             return
         self._state["digest_flush_pending"] = True
-        self._save_state()
+        self._mark_dirty()
         try:
             loop = asyncio.get_running_loop()
         except RuntimeError:
@@ -585,21 +798,37 @@ class NotificationService:
         self._digest_task = asyncio.create_task(self._digest_loop(), name="notification-digest")
 
     async def stop(self) -> None:
-        """Cancel the digest scheduler and wait for it to finish."""
+        """Cancel the scheduler and any mode-switch flush, then send and save what's left."""
         task = self._digest_task
         self._digest_task = None
-        if task is None:
-            return
-        task.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await task
+        if task is not None:
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+        mode_task = self._mode_switch_task
+        self._mode_switch_task = None
+        if mode_task is not None and not mode_task.done():
+            mode_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await mode_task
+        if self.has_digest_content():
+            await self.flush_digest(final=True)
+        await self.flush_pending_state()
 
     async def _digest_loop(self) -> None:
         while True:
             try:
+                self._wake.clear()
                 delay = self.seconds_until_next_digest()
                 if delay > 0:
-                    await asyncio.sleep(delay)
+                    with contextlib.suppress(TimeoutError):
+                        await asyncio.wait_for(self._wake.wait(), timeout=delay)
+                # a settings save wakes the loop early; only send when it is due
+                if (
+                    self.seconds_until_next_digest() > 0
+                    and not self._state.get("digest_flush_pending")
+                ):
+                    continue
                 await self.flush_digest(final=bool(self._state.get("digest_flush_pending")))
             except asyncio.CancelledError:
                 raise
@@ -720,7 +949,7 @@ class NotificationService:
                     new_entries.append((game_name, str(campaign_entry.get("name", ""))))
         self._state["seen_unlinked"] = sorted(current)
         self._state["unlinked_seeded"] = True
-        self._save_state()
+        self._mark_dirty()
         for game_name, campaign_name in new_entries:
             await self.notify_unlinked_tracked_game(game_name, campaign_name)
 
@@ -754,7 +983,7 @@ class NotificationService:
                 )
         self._state["seen_campaigns"] = sorted(current)
         self._state["campaigns_seeded"] = True
-        self._save_state()
+        self._mark_dirty()
         for game_name, campaign_name, starts_at, ends_at in new_entries:
             await self.notify_new_campaign(
                 game_name, campaign_name, starts_at=starts_at, ends_at=ends_at

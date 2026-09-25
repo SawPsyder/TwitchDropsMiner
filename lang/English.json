@@ -284,6 +284,32 @@
                     "preview_failed": "Preview failed: {reason}.",
                     "preview_save_first": "Save first to preview these settings.",
                     "preview_connect_first": "Connect Discord first.",
+                    "when_today": "today at {time}",
+                    "when_tomorrow": "tomorrow at {time}",
+                    "when_date": "{weekday} {day} {month}, {time}",
+                    "weekday_short": {
+                        "sun": "Sun",
+                        "mon": "Mon",
+                        "tue": "Tue",
+                        "wed": "Wed",
+                        "thu": "Thu",
+                        "fri": "Fri",
+                        "sat": "Sat"
+                    },
+                    "month_short": {
+                        "jan": "Jan",
+                        "feb": "Feb",
+                        "mar": "Mar",
+                        "apr": "Apr",
+                        "may": "May",
+                        "jun": "Jun",
+                        "jul": "Jul",
+                        "aug": "Aug",
+                        "sep": "Sep",
+                        "oct": "Oct",
+                        "nov": "Nov",
+                        "dec": "Dec"
+                    },
                     "weekdays": {
                         "monday": "Monday",
                         "tuesday": "Tuesday",

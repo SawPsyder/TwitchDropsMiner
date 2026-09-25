@@ -2923,27 +2923,78 @@ function updatePreviewButton() {
     }
 }
 
-const DIGEST_WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-const DIGEST_MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+const DIGEST_WEEKDAY_KEYS = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
+const DIGEST_MONTH_KEYS = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
 
-function formatClock(date) {
-    const hours = String(date.getHours()).padStart(2, '0');
-    const minutes = String(date.getMinutes()).padStart(2, '0');
-    return `${hours}:${minutes}`;
+function shiftCalendarKey(key, days) {
+    const [year, month, day] = String(key).split('-').map(Number);
+    const shifted = new Date(Date.UTC(year, month - 1, day + days));
+    const y = shifted.getUTCFullYear();
+    const m = String(shifted.getUTCMonth() + 1).padStart(2, '0');
+    const d = String(shifted.getUTCDate()).padStart(2, '0');
+    return `${y}-${m}-${d}`;
+}
+
+function digestServerZone() {
+    const name = notificationStatus?.timezone;
+    if (!name) return undefined;
+    try {
+        new Intl.DateTimeFormat('en-US', { timeZone: name }).format();
+        return name;
+    } catch {
+        return undefined;
+    }
+}
+
+function zonedFields(date, timeZone) {
+    const base = timeZone ? { timeZone } : {};
+    const read = options => {
+        const map = {};
+        for (const part of new Intl.DateTimeFormat('en-US', { ...base, ...options }).formatToParts(date)) {
+            if (part.type !== 'literal') map[part.type] = part.value;
+        }
+        return map;
+    };
+    const ymd = read({ year: 'numeric', month: '2-digit', day: '2-digit', weekday: 'short' });
+    const clock = read({ hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
+    let hour = clock.hour || '00';
+    if (hour === '24') hour = '00';
+    return {
+        key: `${ymd.year}-${ymd.month}-${ymd.day}`,
+        time: `${hour.padStart(2, '0')}:${(clock.minute || '00').padStart(2, '0')}`,
+        weekdayIndex: DIGEST_WEEKDAY_KEYS.indexOf(String(ymd.weekday || '').slice(0, 3).toLowerCase()),
+        day: String(Number(ymd.day)),
+        monthIndex: Number(ymd.month) - 1,
+    };
 }
 
 function formatDigestWhen(iso, { timeOnly = false } = {}) {
     if (!iso) return '';
     const date = new Date(iso);
     if (Number.isNaN(date.getTime())) return '';
-    const time = formatClock(date);
-    if (timeOnly) return time;
-    const start = value => new Date(value.getFullYear(), value.getMonth(), value.getDate()).getTime();
-    const dayDiff = Math.round((start(date) - start(new Date())) / 86400000);
-    if (dayDiff === 0) return `today at ${time}`;
-    if (dayDiff === 1) return `tomorrow at ${time}`;
-    const day = `${DIGEST_WEEKDAYS[date.getDay()]} ${date.getDate()} ${DIGEST_MONTHS[date.getMonth()]}`;
-    return `${day}, ${time}`;
+    const zone = digestServerZone();
+    const fields = zonedFields(date, zone);
+    if (timeOnly) return fields.time;
+    const copy = notificationCopy().digest || {};
+    const today = zonedFields(new Date(), zone);
+    // calendar days in the server zone, so a DST fallback doesn't skip "tomorrow"
+    const tomorrowKey = shiftCalendarKey(today.key, 1);
+    if (fields.key === today.key) {
+        return fillTemplate(copy.when_today || 'today at {time}', { time: fields.time });
+    }
+    if (fields.key === tomorrowKey) {
+        return fillTemplate(copy.when_tomorrow || 'tomorrow at {time}', { time: fields.time });
+    }
+    const weekdayKey = DIGEST_WEEKDAY_KEYS[fields.weekdayIndex] || 'sun';
+    const monthKey = DIGEST_MONTH_KEYS[fields.monthIndex] || 'jan';
+    const weekday = copy.weekday_short?.[weekdayKey] || weekdayKey;
+    const month = copy.month_short?.[monthKey] || monthKey;
+    return fillTemplate(copy.when_date || '{weekday} {day} {month}, {time}', {
+        weekday,
+        day: fields.day,
+        month,
+        time: fields.time,
+    });
 }
 
 function formatRemain(iso) {

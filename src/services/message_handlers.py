@@ -61,7 +61,7 @@ class MessageHandlerService:
         channel: Channel | None = self._twitch.channels.get(channel_id)
 
         if channel is None:
-            logger.error(f"Stream state change for a non-existing channel: {channel_id}")
+            logger.error("Stream state change for a non-existing channel: %s", channel_id)
             return
 
         if msg_type == "viewcount":
@@ -81,7 +81,7 @@ class MessageHandlerService:
             # skip these
             pass
         else:
-            logger.warning(f"Unknown stream state: {msg_type}")
+            logger.warning("Unknown stream state: %s", msg_type)
 
     @task_wrapper
     async def process_stream_update(self, channel_id: int, message: JsonType) -> None:
@@ -104,7 +104,7 @@ class MessageHandlerService:
         channel: Channel | None = self._twitch.channels.get(channel_id)
 
         if channel is None:
-            logger.error(f"Broadcast settings update for a non-existing channel: {channel_id}")
+            logger.error("Broadcast settings update for a non-existing channel: %s", channel_id)
             return
 
         if message["old_game"] != message["game"]:
@@ -201,8 +201,9 @@ class MessageHandlerService:
         if msg_type == "drop-claim":
             if drop is None:
                 logger.error(
-                    f"Received a drop claim ID for a non-existing drop: {drop_id}\n"
-                    f"Drop claim ID: {message['data']['drop_instance_id']}"
+                    "Received a drop claim ID for a non-existing drop: %s\nDrop claim ID: %s",
+                    drop_id,
+                    message["data"]["drop_instance_id"],
                 )
                 return
 

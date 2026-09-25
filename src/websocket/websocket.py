@@ -245,7 +245,7 @@ class Websocket:
             await self.send({"type": "PING"})
         elif now >= self._max_pong:
             # it's been more than 10s and there was no PONG
-            ws_logger.warning(f"Websocket[{self._idx}] didn't receive a PONG, reconnecting...")
+            ws_logger.warning("Websocket[%s] didn't receive a PONG, reconnecting...", self._idx)
             self.request_reconnect()
 
     async def _handle_topics(self):
@@ -321,7 +321,7 @@ class Websocket:
                 )
                 raise WebsocketClosed(raw_message=raw_message.data)
             else:
-                ws_logger.error(f"Websocket[{self._idx}] error: Unknown message: {raw_message}")
+                ws_logger.error("Websocket[%s] error: Unknown message: %s", self._idx, raw_message)
 
     def _handle_message(self, message):
         """
@@ -355,10 +355,10 @@ class Websocket:
                 pass
             elif msg_type == "RECONNECT":
                 # We've received a reconnect request
-                ws_logger.warning(f"Websocket[{self._idx}] requested reconnect.")
+                ws_logger.warning("Websocket[%s] requested reconnect.", self._idx)
                 self.request_reconnect()
             else:
-                ws_logger.warning(f"Websocket[{self._idx}] received unknown payload: {message}")
+                ws_logger.warning("Websocket[%s] received unknown payload: %s", self._idx, message)
 
     def add_topics(self, topics_set: set[WebsocketTopic]):
         """

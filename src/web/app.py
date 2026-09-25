@@ -162,7 +162,7 @@ async def select_channel(request: ChannelSelectRequest):
 
     # Warn if channel has no drops (shouldn't happen if GUI is filtering correctly)
     if not any(campaign.can_earn(channel) for campaign in twitch_client.inventory):
-        logger.warning(f"User selected channel {channel.name} but it has no available drops")
+        logger.warning("User selected channel %s but it has no available drops", channel.name)
 
     gui_manager.select_channel(request.channel_id)
 
@@ -325,7 +325,7 @@ async def get_version():
                 ):
                     update_available = True
     except Exception as e:
-        logger.warning(f"Failed to check for updates: {str(e)}")
+        logger.warning("Failed to check for updates: %s", e)
 
     return {
         "current_version": current_version,

@@ -5,6 +5,7 @@ from __future__ import annotations
 import contextlib
 import json
 import os
+import stat
 import tempfile
 from collections.abc import Callable, Mapping
 from datetime import UTC, datetime
@@ -168,6 +169,9 @@ def json_save(path: Path, contents: Mapping[Any, Any], *, sort: bool = False) ->
         sort: If True, sort keys alphabetically
     """
     path.parent.mkdir(parents=True, exist_ok=True)
+    # mkstemp creates the temp file mode 0600. An existing file keeps its mode
+    # so a host user who could already read ./data still can after the replace.
+    previous_mode = stat.S_IMODE(path.stat().st_mode) if path.exists() else None
     fd, tmp_name = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
     try:
         with os.fdopen(fd, "w", encoding="utf8") as file:
@@ -175,6 +179,8 @@ def json_save(path: Path, contents: Mapping[Any, Any], *, sort: bool = False) ->
             file.flush()
             os.fsync(file.fileno())
         os.replace(tmp_name, path)
+        if previous_mode is not None:
+            os.chmod(path, previous_mode)
     except Exception:
         with contextlib.suppress(OSError):
             os.unlink(tmp_name)

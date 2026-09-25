@@ -55,6 +55,35 @@ def parse_send_time(value: object) -> tuple[int, int]:
     return hour, minute
 
 
+def _wall_instants(zone: tzinfo, day: datetime, hour: int, minute: int) -> list[datetime]:
+    """
+    UTC instants whose local clock is `hour:minute` on `day`.
+
+    A repeated hour (the autumn fallback) returns both occurrences, earlier
+    first. A skipped hour (the spring-forward gap) returns the post-transition
+    instant that clock would map to, so the send still happens that morning.
+    """
+    found: list[datetime] = []
+    for fold in (0, 1):
+        candidate = datetime(day.year, day.month, day.day, hour, minute, fold=fold, tzinfo=zone)
+        normalized = datetime.fromtimestamp(candidate.timestamp(), zone)
+        if (
+            normalized.date() == day.date()
+            and normalized.hour == hour
+            and normalized.minute == minute
+            and normalized.fold == fold
+        ):
+            utc = candidate.astimezone(UTC)
+            if all(abs((utc - existing).total_seconds()) > 1 for existing in found):
+                found.append(utc)
+    if found:
+        found.sort()
+        return found
+    # the wall clock does not exist; use the instant the zone maps it onto
+    shifted = datetime(day.year, day.month, day.day, hour, minute, tzinfo=zone)
+    return [datetime.fromtimestamp(shifted.timestamp(), UTC)]
+
+
 def next_digest_at(
     after: datetime,
     interval_minutes: int,
@@ -77,13 +106,14 @@ def next_digest_at(
     zone = tz or local_timezone()
     local_after = after.astimezone(zone)
     hour, minute = parse_send_time(send_time)
-    day = local_after.date()
+    day = local_after
     if interval == ANCHORED_WEEKLY:
         # weekday() is Monday=0, the same numbering as digest_send_weekday
         day += timedelta(days=(int(weekday) % 7 - day.weekday()) % 7)
-    candidate = datetime(day.year, day.month, day.day, hour, minute, tzinfo=zone)
-    if candidate.astimezone(UTC) <= after:
-        step = 7 if interval == ANCHORED_WEEKLY else 1
+    step = 7 if interval == ANCHORED_WEEKLY else 1
+    for _ in range(8):
+        for instant in _wall_instants(zone, day, hour, minute):
+            if instant > after:
+                return instant
         day += timedelta(days=step)
-        candidate = datetime(day.year, day.month, day.day, hour, minute, tzinfo=zone)
-    return candidate.astimezone(UTC)
+    return after + timedelta(days=step)

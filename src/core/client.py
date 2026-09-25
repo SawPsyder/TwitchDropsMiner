@@ -113,9 +113,6 @@ class Twitch:
         self.library_sync: LibrarySyncService = LibrarySyncService(settings)
         self.notification_service: NotificationService = NotificationService(settings)
         self.notification_service.set_progress_provider(self.digest_progress_snapshot)
-        # set while _state_games_update claims drops straight from the inventory,
-        # so those notifications say "inventory" instead of the watched channel
-        self._claiming_from_inventory: bool = False
         # wall-clock moment mining last had nothing to watch; cleared when a channel starts
         self._mining_stalled_since: datetime | None = None
 
@@ -315,19 +312,15 @@ class Twitch:
         self.change_state(State.GAMES_UPDATE)
 
     async def _state_games_update(self) -> None:
-        # claim drops from expired and active campaigns. Flag the loop so a claim
-        # made here is reported as an inventory claim, not as the watched channel.
+        # claim drops from expired and active campaigns. Pass the source so a
+        # websocket claim that completes during this loop keeps its channel.
         logger.info("Checking for claimable drops")
         logger.debug("Campaigns in inventory: %s", self.inventory)
-        self._claiming_from_inventory = True
-        try:
-            for campaign in self.inventory:
-                if not campaign.upcoming:
-                    for drop in campaign.drops:
-                        if drop.can_claim:
-                            await drop.claim()
-        finally:
-            self._claiming_from_inventory = False
+        for campaign in self.inventory:
+            if not campaign.upcoming:
+                for drop in campaign.drops:
+                    if drop.can_claim:
+                        await drop.claim(source="inventory")
         # sync external game libraries and refresh the auto watch list
         await self.sync_game_libraries()
         # figure out which games we want based on the two-tier watch list
@@ -697,7 +690,7 @@ class Twitch:
             channel: The channel that was manually selected by the user
         """
         if channel.game is None:
-            logger.warning(f"Cannot enter manual mode: channel {channel.name} has no game")
+            logger.warning("Cannot enter manual mode: channel %s has no game", channel.name)
             return
 
         self._manual_target_channel = channel

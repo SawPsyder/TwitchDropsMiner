@@ -5,11 +5,18 @@ import tempfile
 import unittest
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 from zoneinfo import ZoneInfo
 
 from src.notifications import DiscordProvider, NotificationError, NotificationService
-from src.notifications.render import message_char_count, render_digest
+from src.notifications.discord import rate_limit_delay
+from src.notifications.render import (
+    _safe_truncate,
+    discord_units,
+    message_char_count,
+    render_digest,
+)
 from src.notifications.schedule import next_digest_at
 from src.utils import json_save
 from src.web.managers.settings import SettingsManager
@@ -105,6 +112,64 @@ class TestDiscordProvider(unittest.TestCase):
         self.assertTrue(provider.event_enabled("drop_received"))
         self.assertFalse(provider.event_enabled("mining_stalled"))
         self.assertFalse(provider.event_enabled("unknown_event"))
+
+    def test_rate_limit_delay_uses_the_largest_hint(self):
+        self.assertEqual(rate_limit_delay({"retry_after": 12}, {"Retry-After": "30"}), 30.0)
+        self.assertEqual(rate_limit_delay({}, {"X-RateLimit-Reset-After": "8"}), 8.0)
+        self.assertIsNone(rate_limit_delay({"message": "slow"}, {}))
+
+    def test_request_honours_retry_after_header_and_backs_off(self):
+        asyncio.run(self._assert_retry_after())
+
+    async def _assert_retry_after(self):
+        provider = DiscordProvider(FakeSettings())
+
+        class _Response:
+            def __init__(self, status, headers, body):
+                self.status = status
+                self.headers = headers
+                self._body = body
+
+            async def json(self):
+                if isinstance(self._body, Exception):
+                    raise self._body
+                return self._body
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *_args):
+                return False
+
+        class _Session:
+            def __init__(self, response):
+                self._response = response
+
+            def request(self, *_args, **_kwargs):
+                return self._response
+
+        html = _Session(_Response(429, {"Retry-After": "120"}, ValueError("html")))
+        with self.assertRaises(NotificationError) as caught:
+            await provider._request(html, "POST", "/channels/1/messages", json={})
+        self.assertEqual(caught.exception.retry_after, 120.0)
+
+        body_only = _Session(_Response(429, {}, {"retry_after": 15, "message": "slow"}))
+        with self.assertRaises(NotificationError) as caught:
+            await provider._request(body_only, "POST", "/channels/1/messages", json={})
+        self.assertEqual(caught.exception.retry_after, 15.0)
+
+        header_only = _Session(_Response(429, {"Retry-After": "30"}, {"message": "slow", "global": True}))
+        with self.assertRaises(NotificationError) as caught:
+            await provider._request(header_only, "POST", "/channels/1/messages", json={})
+        self.assertEqual(caught.exception.retry_after, 30.0)
+
+        missing = _Session(_Response(429, {}, ValueError("html")))
+        with self.assertRaises(NotificationError) as first:
+            await provider._request(missing, "POST", "/channels/1/messages", json={})
+        self.assertEqual(first.exception.retry_after, 5.0)
+        with self.assertRaises(NotificationError) as second:
+            await provider._request(missing, "POST", "/channels/1/messages", json={})
+        self.assertEqual(second.exception.retry_after, 10.0)
 
 
 class TestNotificationService(unittest.IsolatedAsyncioTestCase):
@@ -265,9 +330,157 @@ class TestDigestQueue(unittest.IsolatedAsyncioTestCase):
     async def test_queue_survives_restart(self):
         service, _provider = self.make_service()
         await service.notify_drop_received("Game A", ["Badge"], campaign="Camp", channel="chan")
+        self.assertFalse(self.state_path.exists())
+        await service.flush_pending_state()
         reloaded = NotificationService(service._settings, state_path=self.state_path)
         self.assertEqual(len(reloaded._state["digest_queue"]), 1)
         self.assertEqual(reloaded._state["digest_queue"][0]["data"]["game"], "Game A")
+
+    async def test_bad_queue_items_are_dropped_once_on_load(self):
+        self.state_path.write_text(
+            json.dumps(
+                {
+                    "digest_queue": [
+                        1,
+                        "x",
+                        {"type": "drop_received", "ts": "2026-01-01T00:00:00+00:00", "data": {}},
+                    ],
+                    "digest_dropped": "nope",
+                    "digest_error_overflow_count": None,
+                    "digest_error_groups": {"ok": {"count": 2}, "bad": 5},
+                }
+            ),
+            encoding="utf8",
+        )
+        with self.assertLogs("TwitchDrops.notifications", level="WARNING") as logs:
+            service, _provider = self.make_service()
+        self.assertEqual(len(service._state["digest_queue"]), 1)
+        self.assertEqual(service._state["digest_queue"][0]["type"], "drop_received")
+        self.assertEqual(service._state["digest_dropped"], 0)
+        self.assertEqual(service._state["digest_error_overflow_count"], 0)
+        self.assertNotIn("bad", service._state["digest_error_groups"])
+        self.assertEqual(sum("Dropped invalid items" in line for line in logs.output), 1)
+
+    async def test_events_arriving_during_send_survive(self):
+        service, provider = self.make_service()
+        await service.notify_drop_received("Game A", ["Badge"], campaign="Camp", channel="chan")
+        started = asyncio.Event()
+        release = asyncio.Event()
+
+        async def slow(_embeds):
+            started.set()
+            await release.wait()
+
+        provider.send_digest.side_effect = slow
+        flushing = asyncio.create_task(service.flush_digest())
+        await started.wait()
+        await service.notify_drop_received("Game B", ["Badge"], campaign="Camp", channel="chan")
+        logging.getLogger("TwitchDrops").error("disk full on %s", "ssd")
+        release.set()
+        self.assertTrue(await flushing)
+        games = [event["data"]["game"] for event in service._state["digest_queue"]]
+        self.assertEqual(games, ["Game B"])
+        self.assertIn("disk full on %s", service._state["digest_error_groups"])
+
+    async def test_concurrent_flushes_send_once(self):
+        service, provider = self.make_service()
+        await service.notify_drop_received("Game A", ["Badge"], campaign="Camp", channel="chan")
+        gate = asyncio.Event()
+
+        async def slow(_embeds):
+            await gate.wait()
+
+        provider.send_digest.side_effect = slow
+        first = asyncio.create_task(service.flush_digest())
+        second = asyncio.create_task(service.flush_digest())
+        await asyncio.sleep(0.05)
+        gate.set()
+        results = await asyncio.gather(first, second)
+        self.assertEqual(provider.send_digest.await_count, 1)
+        self.assertEqual(results.count(True), 1)
+        self.assertEqual(service._state["digest_queue"], [])
+
+    async def test_final_digest_omits_the_next_line(self):
+        service, provider = self.make_service()
+        await service.notify_drop_received("Game A", ["Badge"], campaign="Camp", channel="chan")
+        self.assertTrue(await service.flush_digest(final=True))
+        description = provider.send_digest.await_args.args[0][0]["description"]
+        self.assertNotIn("Next digest", description)
+
+    async def test_schedule_change_wakes_the_scheduler(self):
+        service, provider = self.make_service(digest_interval_minutes=10080, digest_send_weekday=6)
+        await service.notify_drop_received("Game A", ["Badge"], campaign="Camp", channel="chan")
+        service._state["digest_window_start"] = (datetime.now(UTC) - timedelta(hours=2)).isoformat()
+        service._state["digest_next_at"] = (datetime.now(UTC) + timedelta(hours=40)).isoformat()
+        self.assertGreater(service.seconds_until_next_digest(), 30 * 3600)
+        service.start()
+        await asyncio.sleep(0.05)
+        provider.send_digest.assert_not_awaited()
+        settings = FakeSettings(
+            digest_notification_settings(digest_interval_minutes=10080, digest_send_weekday=6)
+        )
+        settings.save = lambda: None
+        service._settings = settings
+        manager = SettingsManager(MagicMock(), settings, MagicMock())
+        manager.bind_notification_service(service)
+        manager.update_settings(
+            {
+                "notifications": digest_notification_settings(
+                    digest_interval_minutes=60, digest_send_weekday=6
+                )
+            }
+        )
+        self.assertLess(service.seconds_until_next_digest(), 2)
+        for _ in range(50):
+            if provider.send_digest.await_count:
+                break
+            await asyncio.sleep(0.02)
+        provider.send_digest.assert_awaited()
+        await service.stop()
+
+    async def test_stop_cancels_the_mode_switch_flush(self):
+        service, provider = self.make_service()
+        await service.notify_drop_received("Game A", ["Badge"], campaign="Camp", channel="chan")
+        started = asyncio.Event()
+        release = asyncio.Event()
+
+        async def slow(_embeds):
+            started.set()
+            await release.wait()
+
+        provider.send_digest.side_effect = slow
+        service._state["digest_flush_pending"] = True
+        service._mode_switch_task = asyncio.create_task(service.flush_digest(final=True))
+        await started.wait()
+        stopping = asyncio.create_task(service.stop())
+        await asyncio.sleep(0.05)
+        release.set()
+        await asyncio.wait_for(stopping, timeout=2)
+        self.assertIsNone(service._mode_switch_task)
+        self.assertIsNone(service._digest_task)
+
+    async def test_preview_endpoint_uses_saved_settings_and_keeps_the_queue(self):
+        from src.web import app as webapp
+
+        service, provider = self.make_service()
+        await service.notify_drop_received("Game A", ["Badge"], campaign="Camp", channel="chan")
+        webapp.twitch_client = SimpleNamespace(notification_service=service)
+        try:
+            result = await webapp.preview_notification_digest()
+            self.assertTrue(result["success"])
+            provider.send_digest.assert_awaited()
+            description = "\n".join(
+                embed["description"] for embed in provider.send_digest.await_args.args[0]
+            )
+            self.assertIn("Game A", description)
+            self.assertEqual(len(service._state["digest_queue"]), 1)
+            provider.send_digest.side_effect = NotificationError("429", retry_after=9)
+            failed = await webapp.preview_notification_digest()
+            self.assertFalse(failed["success"])
+            self.assertEqual(failed["message"], "Discord rate limit")
+            self.assertEqual(len(service._state["digest_queue"]), 1)
+        finally:
+            webapp.twitch_client = None
 
     async def test_corrupt_state_is_backed_up_and_reset(self):
         self.state_path.write_text("{", encoding="utf8")
@@ -455,8 +668,60 @@ class TestDigestPersistence(unittest.TestCase):
                 json_save(path, {"bad": object()})
             self.assertEqual(json.loads(path.read_text(encoding="utf8"))["a"], 2)
 
+    def test_json_save_keeps_the_existing_file_mode(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "settings.json"
+            path.write_text("{}", encoding="utf8")
+            path.chmod(0o644)
+            json_save(path, {"a": 1})
+            self.assertEqual(path.stat().st_mode & 0o777, 0o644)
+            fresh = Path(tmp) / "new.json"
+            json_save(fresh, {"a": 1})
+            self.assertEqual(fresh.stat().st_mode & 0o777, 0o600)
 
-class TestDigestSchedule(unittest.TestCase):
+    def test_old_settings_file_gains_digest_defaults(self):
+        from src.config import settings as settings_mod
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "settings.json"
+            path.write_text(
+                json.dumps(
+                    {
+                        "notifications": {
+                            "enabled": False,
+                            "cooldown_minutes": 15,
+                            "discord": {
+                                "enabled": False,
+                                "bot_token": "",
+                                "guild_id": "",
+                                "channel_id": "",
+                                "events": {
+                                    "drop_received": True,
+                                    "unlinked_tracked_game": True,
+                                    "auth_attention": True,
+                                    "mining_stalled": True,
+                                    "new_campaign": True,
+                                },
+                            },
+                        }
+                    }
+                ),
+                encoding="utf8",
+            )
+            original = settings_mod.SETTINGS_PATH
+            settings_mod.SETTINGS_PATH = path
+            try:
+                loaded = settings_mod.Settings()
+            finally:
+                settings_mod.SETTINGS_PATH = original
+        notes = loaded.notifications
+        self.assertEqual(notes["mode"], "immediate")
+        self.assertEqual(notes["digest_interval_minutes"], 1440)
+        self.assertEqual(notes["digest_send_time"], "09:00")
+        self.assertEqual(notes["digest_send_weekday"], 0)
+        self.assertEqual(notes["digest_sections"], {"progress": True, "errors": True})
+        self.assertTrue(notes["digest_urgent_immediate"])
+        self.assertFalse(notes["digest_send_empty"])
     def test_daily_send_stays_on_local_hour_across_dst(self):
         zone = ZoneInfo("America/New_York")
         # 2026-03-07 14:00 UTC is 09:00 EST, the day before US clocks spring forward.
@@ -487,6 +752,35 @@ class TestDigestSchedule(unittest.TestCase):
         after = datetime(2026, 9, 25, 12, 0, tzinfo=UTC)
         result = next_digest_at(after, 180, "09:00", 3)
         self.assertEqual(result, after + timedelta(hours=3))
+
+    def test_spring_forward_gap_uses_the_post_transition_instant(self):
+        zone = ZoneInfo("America/New_York")
+        # 2026-03-08 06:15 UTC is 01:15 EST, before clocks jump 02:00 -> 03:00.
+        after = datetime(2026, 3, 8, 6, 15, tzinfo=UTC)
+        result = next_digest_at(after, 1440, "02:30", 0, tz=zone)
+        # 02:30 does not exist; the zone maps it to 03:30 EDT.
+        self.assertEqual(result, datetime(2026, 3, 8, 7, 30, tzinfo=UTC))
+        local = result.astimezone(zone)
+        self.assertEqual((local.hour, local.minute), (3, 30))
+
+    def test_repeated_hour_uses_the_occurrence_still_ahead(self):
+        zone = ZoneInfo("America/New_York")
+        # 2026-11-01 01:30 happens twice: 05:30 UTC (EDT) and 06:30 UTC (EST).
+        before_both = datetime(2026, 11, 1, 5, 0, tzinfo=UTC)
+        between = datetime(2026, 11, 1, 5, 45, tzinfo=UTC)
+        after_both = datetime(2026, 11, 1, 6, 45, tzinfo=UTC)
+        self.assertEqual(
+            next_digest_at(before_both, 1440, "01:30", 0, tz=zone),
+            datetime(2026, 11, 1, 5, 30, tzinfo=UTC),
+        )
+        self.assertEqual(
+            next_digest_at(between, 1440, "01:30", 0, tz=zone),
+            datetime(2026, 11, 1, 6, 30, tzinfo=UTC),
+        )
+        following = next_digest_at(after_both, 1440, "01:30", 0, tz=zone)
+        self.assertEqual(following.astimezone(zone).hour, 1)
+        self.assertEqual(following.astimezone(zone).minute, 30)
+        self.assertGreater(following, after_both)
 
 
 class TestDigestLogHandler(unittest.IsolatedAsyncioTestCase):
@@ -670,8 +964,60 @@ class TestDigestRenderer(unittest.TestCase):
         self.assertEqual(embeds[0]["color"], 0x9146FF)
         self.assertEqual(embeds[1]["color"], 0xE74C3C)
         self.assertIn("alerted at the time", embeds[1]["description"])
+        self.assertIn("no progress for", embeds[1]["description"])
+        self.assertNotIn("no channels", embeds[1]["description"])
         drops = next(embed for embed in embeds if embed["title"].startswith("🎁"))
         self.assertEqual(drops["color"], 0x2ECC71)
+
+    def test_identical_urgent_events_collapse_to_one_line(self):
+        now = datetime(2026, 9, 25, 12, 0, tzinfo=UTC)
+        events = [
+            _event(
+                "mining_stalled",
+                now - timedelta(minutes=index),
+                reason="no channels",
+                alerted=True,
+            )
+            for index in range(7)
+        ]
+        embeds = _render(events=events, include_progress=False, include_errors=False)
+        attention = next(embed for embed in embeds if embed["title"].startswith("⚠️"))
+        self.assertIn("(7)", attention["title"])
+        self.assertIn("**Mining stalled** ×7, last <t:", attention["description"])
+        self.assertNotIn("no channels", attention["description"])
+        self.assertEqual(attention["description"].count("**Mining stalled**"), 1)
+
+    def test_urgent_overflow_keeps_the_newest_lines_and_stays_token_safe(self):
+        now = datetime(2026, 9, 25, 12, 0, tzinfo=UTC)
+        events = [
+            _event("auth_attention", now - timedelta(minutes=index), reason=f"need-login-{index}")
+            for index in range(80)
+        ]
+        embeds = _render(events=events, include_progress=False, include_errors=False)
+        attention = next(embed for embed in embeds if embed["title"].startswith("⚠️"))
+        text = attention["description"]
+        self.assertIn("…and ", text)
+        self.assertIn("more urgent", text)
+        self.assertIn("need-login-0", text)
+        self.assertNotIn("need-login-79", text)
+        self.assertLessEqual(message_char_count(embeds), 6000)
+        self.assertLessEqual(discord_units(attention["description"]), 4096)
+        for line in text.splitlines():
+            self.assertEqual(line.count("**") % 2, 0)
+            start = line.rfind("<t:")
+            if start >= 0:
+                self.assertIn(">", line[start:])
+
+    def test_truncate_never_splits_a_timestamp_or_bold_marker(self):
+        line = "**Mining stalled** · no progress for 20 min · <t:1790318000:t>"
+        text = "\n".join([line] * 20)
+        cut = _safe_truncate(text, 90)
+        self.assertLessEqual(discord_units(cut), 90)
+        self.assertEqual(cut.count("**") % 2, 0)
+        start = cut.rfind("<t:")
+        if start >= 0:
+            self.assertIn(">", cut[start:])
+        self.assertEqual(discord_units("👍"), 2)
 
     def test_footer_and_timestamp_only_on_the_last_embed(self):
         now = datetime(2026, 9, 25, 12, 0, tzinfo=UTC)

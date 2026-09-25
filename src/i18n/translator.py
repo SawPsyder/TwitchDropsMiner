@@ -318,6 +318,31 @@ class GUISettingsNotificationWeekdays(TypedDict):
     sunday: str
 
 
+class GUISettingsNotificationWeekdayShort(TypedDict):
+    sun: str
+    mon: str
+    tue: str
+    wed: str
+    thu: str
+    fri: str
+    sat: str
+
+
+class GUISettingsNotificationMonthShort(TypedDict):
+    jan: str
+    feb: str
+    mar: str
+    apr: str
+    may: str
+    jun: str
+    jul: str
+    aug: str
+    sep: str
+    oct: str
+    nov: str
+    dec: str
+
+
 class GUISettingsNotificationDigest(TypedDict):
     every: str
     preset_1h: str
@@ -358,6 +383,11 @@ class GUISettingsNotificationDigest(TypedDict):
     preview_failed: str
     preview_save_first: str
     preview_connect_first: str
+    when_today: str
+    when_tomorrow: str
+    when_date: str
+    weekday_short: GUISettingsNotificationWeekdayShort
+    month_short: GUISettingsNotificationMonthShort
     weekdays: GUISettingsNotificationWeekdays
 
 
@@ -494,7 +524,7 @@ class Translator:
                     self._langs[loaded_translation["language_name"]] = loaded_translation
                 except Exception as e:
                     # if we can't read the file, skip it
-                    self.logger.warning(f"Failed to load language file {filepath}: {e}")
+                    self.logger.warning("Failed to load language file %s: %s", filepath, e)
                     continue
         self._langs = dict(sorted(self._langs.items()))
         self.set_language(DEFAULT_LANG)
