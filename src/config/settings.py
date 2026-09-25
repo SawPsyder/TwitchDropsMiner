@@ -89,7 +89,7 @@ class NotificationSettings(TypedDict):
     discord: DiscordNotificationSettings
 
 
-# bounds enforced by SettingsManager._sanitize_notifications
+# bounds enforced on load (a stored value is clamped) and on submit (rejected)
 NOTIFICATION_MODES = ("immediate", "digest")
 COOLDOWN_MINUTES_MAX = 1440
 DIGEST_INTERVAL_MIN_MINUTES = 60
@@ -205,6 +205,25 @@ default_settings = {
 }
 
 
+def _clamp_stored_digest_interval(notifications: object) -> bool:
+    """Pull a stored digest interval into 60..10080 minutes.
+
+    Returns True when the value changed and should be written back. A value
+    the user submits is still rejected; this only repairs a file that already
+    holds an out-of-range interval, so a later save of the loaded object is valid.
+    """
+    if not isinstance(notifications, dict) or "digest_interval_minutes" not in notifications:
+        return False
+    raw = notifications["digest_interval_minutes"]
+    if isinstance(raw, bool) or not isinstance(raw, int):
+        return False
+    clamped = min(DIGEST_INTERVAL_MAX_MINUTES, max(DIGEST_INTERVAL_MIN_MINUTES, raw))
+    if clamped == raw:
+        return False
+    notifications["digest_interval_minutes"] = clamped
+    return True
+
+
 @dataclass
 class Settings:
     animations: str
@@ -230,6 +249,8 @@ class Settings:
         settings = json_load(SETTINGS_PATH, default_settings, merge=True)
         for key, value in settings.items():
             setattr(self, key, value)
+        if _clamp_stored_digest_interval(self.notifications):
+            self.save()
 
     def save(self) -> None:
         json_save(SETTINGS_PATH, vars(self), sort=True)

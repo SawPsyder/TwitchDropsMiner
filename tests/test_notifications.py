@@ -561,6 +561,58 @@ class TestDigestQueue(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([item["seq"] for item in service._state["digest_queue"]], [1, 2])
         self.assertEqual(service._state["digest_seq"], 2)
 
+    async def test_loaded_queue_dedupes_mixed_seqs(self):
+        self.state_path.write_text(
+            json.dumps(
+                {
+                    "digest_seq": 1,
+                    "digest_queue": [
+                        {"type": "drop_received", "ts": "2026-01-01T00:00:00+00:00", "data": {}},
+                        {
+                            "type": "drop_received",
+                            "ts": "2026-01-01T00:01:00+00:00",
+                            "data": {},
+                            "seq": 1,
+                        },
+                    ],
+                }
+            ),
+            encoding="utf8",
+        )
+        service, _provider = self.make_service()
+        seqs = [item["seq"] for item in service._state["digest_queue"]]
+        self.assertEqual(seqs, [2, 1])
+        self.assertEqual(len(set(seqs)), len(seqs))
+        self.assertGreaterEqual(service._state["digest_seq"], max(seqs))
+
+        self.state_path.write_text(
+            json.dumps(
+                {
+                    "digest_seq": 5,
+                    "digest_queue": [
+                        {
+                            "type": "drop_received",
+                            "ts": "2026-01-01T00:00:00+00:00",
+                            "data": {},
+                            "seq": 1,
+                        },
+                        {
+                            "type": "drop_received",
+                            "ts": "2026-01-01T00:01:00+00:00",
+                            "data": {},
+                            "seq": 1,
+                        },
+                    ],
+                }
+            ),
+            encoding="utf8",
+        )
+        again, _provider = self.make_service()
+        seqs = [item["seq"] for item in again._state["digest_queue"]]
+        self.assertEqual(seqs, [1, 6])
+        self.assertEqual(len(set(seqs)), len(seqs))
+        self.assertGreaterEqual(again._state["digest_seq"], max(seqs))
+
     async def test_stored_retry_at_is_clamped_to_one_hour(self):
         far = (datetime.now(UTC) + timedelta(days=365 * 73)).isoformat()
         self.state_path.write_text(
@@ -621,6 +673,49 @@ class TestDigestQueue(unittest.IsolatedAsyncioTestCase):
         saved = json.loads(self.state_path.read_text(encoding="utf8"))
         games = [item["data"]["game"] for item in saved["digest_queue"]]
         self.assertEqual(games, ["Game A", "Game B"])
+
+    async def test_cancelled_flush_cannot_overwrite_the_final_state(self):
+        import threading
+        from unittest.mock import patch
+
+        service, provider = self.make_service()
+        service._state["digest_next_at"] = (datetime.now(UTC) - timedelta(minutes=1)).isoformat()
+        in_save = threading.Event()
+        release = threading.Event()
+        real_save = json_save
+
+        def slow_save(path, contents, **kwargs):
+            count = len(contents.get("digest_queue") or [])
+            if count == 1 and not in_save.is_set():
+                in_save.set()
+                release.wait(timeout=5)
+            real_save(path, contents, **kwargs)
+
+        with patch("src.notifications.service.json_save", side_effect=slow_save):
+            await service.notify_drop_received(
+                "Game A", ["Badge"], campaign="Camp", channel="chan"
+            )
+            service.start()
+            digest = service._digest_task
+            self.assertIsNotNone(digest)
+            self.assertTrue(await asyncio.to_thread(in_save.wait, 2))
+            await service.notify_drop_received(
+                "Game B", ["Badge"], campaign="Camp", channel="chan"
+            )
+            stopping = asyncio.create_task(service.stop())
+            for _ in range(200):
+                if digest.cancelled():
+                    break
+                await asyncio.sleep(0.01)
+            self.assertTrue(digest.cancelled())
+            release.set()
+            await stopping
+        provider.send_digest.assert_not_awaited()
+        saved = json.loads(self.state_path.read_text(encoding="utf8"))
+        disk_games = [item["data"]["game"] for item in saved["digest_queue"]]
+        memory_games = [item["data"]["game"] for item in service._state["digest_queue"]]
+        self.assertEqual(memory_games, ["Game A", "Game B"])
+        self.assertEqual(disk_games, memory_games)
 
     def test_dead_loop_service_does_not_write_on_a_new_loop(self):
         first = asyncio.new_event_loop()

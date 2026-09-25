@@ -143,15 +143,28 @@ def _load_state(path: Path) -> dict[str, Any]:
 
 
 def _ensure_queue_seqs(raw: dict[str, Any]) -> None:
-    """Give every queued event a stable seq and keep the counter ahead of them."""
+    """Give every queued event a stable seq and keep the counter ahead of them.
+
+    The highest existing seq is taken first. A hand-edited file can put an item
+    with no seq before one that already has a low seq; assigning on the way
+    through would reuse that number. Duplicate seqs are reassigned above the max.
+    """
     counter = _coerce_count(raw.get("digest_seq"))
+    claimed: set[int] = set()
     for item in raw["digest_queue"]:
         seq = item.get("seq")
-        if isinstance(seq, bool) or not isinstance(seq, int) or seq <= 0:
+        if isinstance(seq, bool) or not isinstance(seq, int) or seq <= 0 or seq in claimed:
+            continue
+        claimed.add(seq)
+        if seq > counter:
+            counter = seq
+    for item in raw["digest_queue"]:
+        seq = item.get("seq")
+        if isinstance(seq, bool) or not isinstance(seq, int) or seq <= 0 or seq not in claimed:
             counter += 1
             item["seq"] = counter
-        elif seq > counter:
-            counter = seq
+        else:
+            claimed.remove(seq)
     raw["digest_seq"] = counter
 
 
@@ -392,7 +405,7 @@ class NotificationService:
                 self._dirty = True
 
     async def _write_latest(self) -> None:
-        """Write the newest state. An older in-flight payload cannot finish last."""
+        """Write the newest dirty state, repeating when a newer edit lands mid-write."""
         async with self._write_lock:
             while True:
                 with self._state_lock:
@@ -415,7 +428,9 @@ class NotificationService:
         task = self._writer_task
         if task is not None and not task.done() and task is not asyncio.current_task():
             self._write_now.set()
-            await task
+            # Cancelling the scheduler must not cancel this task. The to_thread
+            # save would keep running and could land after stop()'s final flush.
+            await asyncio.shield(task)
             return
         await self._write_latest()
 
@@ -937,6 +952,8 @@ class NotificationService:
 
         A missed slot is sent when the scheduler starts again. Every await is
         bounded so a hung Discord call cannot hold shutdown past Docker's stop grace.
+        A state write still inside to_thread when that bound expires can finish
+        after stop returns; stop does not start another write in that case.
         """
         self._closed = True
         pending: list[asyncio.Task[Any]] = []
@@ -958,7 +975,11 @@ class NotificationService:
             self._write_now.set()
             with contextlib.suppress(TimeoutError):
                 await asyncio.wait_for(asyncio.shield(writer), timeout=STOP_TIMEOUT)
-        else:
+        # The final flush runs only after that writer has finished, so an older
+        # payload still in to_thread cannot land after it. If the cap expired
+        # with the writer still running, a second write could finish first.
+        writer = self._writer_task
+        if writer is None or writer.done():
             with contextlib.suppress(TimeoutError):
                 await asyncio.wait_for(self._write_latest(), timeout=STOP_TIMEOUT)
 

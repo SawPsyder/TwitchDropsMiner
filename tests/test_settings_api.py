@@ -1,6 +1,10 @@
+import json
+import tempfile
 import unittest
+from pathlib import Path
 from unittest.mock import MagicMock
 
+import pytest
 from fastapi import HTTPException
 
 from src.config.settings import Settings
@@ -426,6 +430,49 @@ class TestSettingsAPI(unittest.IsolatedAsyncioTestCase):
         model = SettingsUpdate(date_format="iso", time_format="12h")
         self.assertEqual(model.date_format, "iso")
         self.assertEqual(model.time_format, "12h")
+
+
+@pytest.mark.parametrize(("stored", "expected"), [(30, 60), (0, 60), (20160, 10080)])
+def test_stored_out_of_range_digest_interval_is_clamped_on_load(stored, expected):
+    from src.config import settings as settings_mod
+
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "settings.json"
+        path.write_text(
+            json.dumps(
+                {
+                    "dark_mode": "auto",
+                    "notifications": {"digest_interval_minutes": stored},
+                }
+            ),
+            encoding="utf8",
+        )
+        original = settings_mod.SETTINGS_PATH
+        settings_mod.SETTINGS_PATH = path
+        try:
+            loaded = settings_mod.Settings()
+            assert loaded.notifications["digest_interval_minutes"] == expected
+            on_disk = json.loads(path.read_text(encoding="utf8"))
+            assert on_disk["notifications"]["digest_interval_minutes"] == expected
+            manager = SettingsManager(MagicMock(), loaded, MagicMock())
+            with pytest.raises(NotificationSettingsError):
+                manager.update_settings(
+                    {
+                        "dark_mode": "on",
+                        "notifications": {
+                            **loaded.notifications,
+                            "digest_interval_minutes": stored,
+                        },
+                    }
+                )
+            assert loaded.dark_mode == "auto"
+            manager.update_settings({"dark_mode": "on", "notifications": dict(loaded.notifications)})
+            assert loaded.dark_mode == "on"
+            saved = json.loads(path.read_text(encoding="utf8"))
+            assert saved["dark_mode"] == "on"
+            assert saved["notifications"]["digest_interval_minutes"] == expected
+        finally:
+            settings_mod.SETTINGS_PATH = original
 
 
 if __name__ == "__main__":
