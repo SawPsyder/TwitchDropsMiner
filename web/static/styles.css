@@ -3043,61 +3043,148 @@ select:focus {
     padding: 8px 14px;
 }
 
+/* Each toggle is a bordered tile so its label and switch read as one unit
+   instead of drifting apart across a wide grid cell. */
 .notification-events {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-    gap: 8px 16px;
+    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+    gap: 10px;
+}
+
+.notification-events .toggle-row,
+.notification-option {
+    padding: 10px 14px;
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    background: var(--bg-secondary);
+    font-size: 14px;
+}
+
+.notification-option-list {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    margin-bottom: 18px;
+}
+
+.toggle-text {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+}
+
+.toggle-text .help-text-inline {
+    margin-top: 0;
+}
+
+.notification-option-sub {
+    margin-top: 12px;
+    padding-top: 12px;
+    border-top: 1px solid var(--border-color);
+}
+
+.notifications-subblock {
+    margin-top: 16px;
+}
+
+#notifications-delivery > .help-text {
+    margin: 0 0 4px;
+}
+
+.notifications-subblock > .library-field {
+    margin-bottom: 18px;
 }
 
 .notifications-section .number-unit,
 .notifications-section .digest-clock,
-.notifications-section .digest-every {
+.digest-schedule-row {
     display: flex;
     align-items: center;
     gap: 8px;
     flex-wrap: wrap;
-    margin: 8px 0;
+}
+
+.digest-schedule-row {
+    gap: 12px;
+}
+
+.notifications-section .digest-clock label {
+    display: inline;
+    margin: 0 !important;
+    font-size: 14px;
+    font-weight: normal;
+    text-transform: none;
+    letter-spacing: normal;
+    color: var(--text-secondary);
 }
 
 .notifications-section input[type="number"],
 .notifications-section input[type="time"] {
     width: 6.5rem;
-    padding: 8px 10px;
+    padding: 9px 12px;
     border: 1px solid var(--border-color);
     border-radius: 6px;
     background: var(--bg-panel);
     color: var(--text-primary);
     font-size: 14px;
+    font-family: inherit;
 }
 
+.notifications-section input[type="time"] {
+    width: auto;
+}
+
+body.dark-mode .notifications-section input[type="time"] {
+    color-scheme: dark;
+}
+
+.notifications-section input[type="number"]:focus,
+.notifications-section input[type="time"]:focus {
+    outline: none;
+    border-color: var(--accent-color);
+}
+
+/* Interval presets share the segmented-control look used for Delivery */
 .digest-presets {
-    display: flex;
+    display: inline-flex;
     flex-wrap: wrap;
-    gap: 6px;
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    background: var(--bg-secondary);
+    padding: 3px;
+    gap: 3px;
 }
 
 .digest-preset {
-    border: 1px solid var(--border-color);
-    background: var(--bg-panel);
-    color: var(--text-primary);
-    border-radius: 999px;
-    padding: 6px 12px;
+    border: none;
+    background: transparent;
+    color: var(--text-secondary);
+    border-radius: 4px;
+    padding: 6px 14px;
     cursor: pointer;
-    font-size: 13px;
+    font-size: 0.9em;
+    font-family: inherit;
+    transition: background-color 0.15s ease, color 0.15s ease;
+}
+
+.digest-preset:hover:not(.selected):not(:disabled) {
+    color: var(--text-primary);
+}
+
+.digest-preset:focus-visible {
+    outline: 2px solid var(--accent-color);
+    outline-offset: 2px;
 }
 
 .digest-preset.selected {
     background: var(--accent-color);
-    border-color: var(--accent-color);
     color: #ffffff;
     font-weight: 600;
 }
 
-.notifications-section .digest-check {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    margin: 10px 0 4px;
+.digest-preset:disabled {
+    cursor: not-allowed;
 }
 
 .form-hint.error,
@@ -3105,8 +3192,58 @@ select:focus {
     color: var(--error-color, #e74c3c);
 }
 
+.form-hint.error {
+    font-size: 12px;
+}
+
+/* Queue status + preview, laid out like a provider card footer */
+.digest-status-panel {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px 20px;
+    flex-wrap: wrap;
+    padding: 12px 16px;
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    background: var(--bg-secondary);
+}
+
+.digest-status {
+    flex: 1 1 260px;
+    min-width: 0;
+}
+
 .digest-status-line {
-    margin: 4px 0;
+    margin: 0;
+    font-size: 14px;
+}
+
+.digest-status-secondary {
+    margin-top: 2px;
+    font-size: 12px;
+    color: var(--text-secondary);
+}
+
+.digest-status-secondary:empty {
+    display: none;
+}
+
+.digest-preview {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 4px;
+    max-width: 320px;
+    text-align: right;
+}
+
+@media (max-width: 600px) {
+    .digest-preview {
+        align-items: flex-start;
+        text-align: left;
+        max-width: none;
+    }
 }
 
 #notifications-flush-warning {

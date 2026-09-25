@@ -2694,6 +2694,18 @@ function showDigestSchedule(minutes, custom) {
             help.textContent = copy.digest.relative_help || '';
         }
     }
+    // an unknown TZ silently falls back to UTC, which moves the send by hours
+    const tzWarning = document.getElementById('notifications-tz-warning');
+    const badZone = notificationStatus?.timezone_invalid;
+    if (tzWarning) {
+        tzWarning.hidden = !(showAt && badZone && copy.digest?.tz_invalid);
+        if (!tzWarning.hidden) {
+            tzWarning.textContent = fillTemplate(copy.digest.tz_invalid, {
+                value: badZone,
+                timezone: notificationStatus?.timezone || 'UTC',
+            });
+        }
+    }
 }
 
 function applyDigestInterval(minutes) {
@@ -3864,10 +3876,8 @@ function applyTranslations(t) {
             setNotificationsText('notifications-digest-urgent-help', digest.urgent_help);
             setNotificationsText('notifications-digest-send-empty-help', digest.send_empty_help);
             setNotificationsText('notifications-digest-preview-help', digest.preview_help);
-            const urgentLabel = document.querySelector('#notifications-digest-urgent-label span');
-            if (urgentLabel && digest.urgent) urgentLabel.textContent = digest.urgent;
-            const emptyLabel = document.querySelector('#notifications-digest-send-empty-label span');
-            if (emptyLabel && digest.send_empty) emptyLabel.textContent = digest.send_empty;
+            setNotificationsText('notifications-digest-urgent-text', digest.urgent);
+            setNotificationsText('notifications-digest-send-empty-text', digest.send_empty);
             const previewBtn = document.getElementById('notifications-digest-preview-btn');
             if (previewBtn && digest.preview && previewBtn.dataset.busy !== '1') {
                 previewBtn.textContent = digest.preview;
