@@ -512,6 +512,13 @@ class TestDigestQueue(unittest.IsolatedAsyncioTestCase):
         restarted_provider.send_digest.assert_awaited()
         self.assertEqual(restarted._state["digest_queue"], [])
         await restarted.stop()
+        # stop() bounds its own wait; an in-flight state write must finish
+        # before TemporaryDirectory cleanup, or the temp file races rmtree
+        for leftover in (service, restarted):
+            writer = leftover._writer_task
+            if writer is not None and not writer.done():
+                leftover._write_now.set()
+                await writer
 
     async def test_full_queue_keeps_events_that_arrive_during_send(self):
         service, provider = self.make_service()

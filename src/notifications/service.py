@@ -227,6 +227,7 @@ class NotificationService:
         self._write_lock = asyncio.Lock()
         self._write_now = asyncio.Event()
         self._writer_task: asyncio.Task[None] | None = None
+        self._closed = False
         self._loop: asyncio.AbstractEventLoop | None = None
         register_service(self)
 
@@ -312,6 +313,8 @@ class NotificationService:
 
     def _schedule_save(self) -> None:
         """Coalesce a burst of edits onto the one tracked writer."""
+        if self._closed:
+            return
         loop = self._running_loop()
         if loop is None:
             if self._loop is not None and (
@@ -924,6 +927,7 @@ class NotificationService:
 
     def start(self) -> None:
         """Start the digest scheduler. A next_at already in the past sends on the first pass."""
+        self._closed = False
         if self._digest_task is not None and not self._digest_task.done():
             return
         self._digest_task = asyncio.create_task(self._digest_loop(), name="notification-digest")
@@ -934,6 +938,7 @@ class NotificationService:
         A missed slot is sent when the scheduler starts again. Every await is
         bounded so a hung Discord call cannot hold shutdown past Docker's stop grace.
         """
+        self._closed = True
         pending: list[asyncio.Task[Any]] = []
         task = self._digest_task
         self._digest_task = None
