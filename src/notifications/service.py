@@ -1190,6 +1190,7 @@ class NotificationService:
         ends_at: datetime | None = None,
         game_id: int | str | None = None,
         game_box_art: object = None,
+        campaign_id: str | None = None,
     ) -> None:
         await self.notify(
             "new_campaign",
@@ -1198,6 +1199,7 @@ class NotificationService:
             data={
                 "game": game_name,
                 "campaign": campaign_name,
+                "campaign_id": campaign_id or None,
                 "starts_at": starts_at.isoformat() if starts_at is not None else None,
                 "ends_at": ends_at.isoformat() if ends_at is not None else None,
                 "game_id": _stored_game_id(game_id),
@@ -1247,7 +1249,7 @@ class NotificationService:
         is_first_run = not self._state.get("campaigns_seeded", False)
         current: set[str] = set()
         new_entries: list[
-            tuple[str, str, datetime | None, datetime | None, int | str | None, str | None]
+            tuple[str, str, str, datetime | None, datetime | None, int | str | None, str | None]
         ] = []
         for campaign in campaigns:
             if campaign.game.name.casefold() not in watch_set:
@@ -1259,6 +1261,7 @@ class NotificationService:
                     (
                         game.name,
                         campaign.name,
+                        str(campaign.id),
                         getattr(campaign, "starts_at", None),
                         getattr(campaign, "ends_at", None),
                         _stored_game_id(getattr(game, "id", None)),
@@ -1268,7 +1271,15 @@ class NotificationService:
         self._state["seen_campaigns"] = sorted(current)
         self._state["campaigns_seeded"] = True
         self._mark_dirty()
-        for game_name, campaign_name, starts_at, ends_at, game_id, game_box_art in new_entries:
+        for (
+            game_name,
+            campaign_name,
+            campaign_id,
+            starts_at,
+            ends_at,
+            game_id,
+            game_box_art,
+        ) in new_entries:
             await self.notify_new_campaign(
                 game_name,
                 campaign_name,
@@ -1276,6 +1287,7 @@ class NotificationService:
                 ends_at=ends_at,
                 game_id=game_id,
                 game_box_art=game_box_art,
+                campaign_id=campaign_id,
             )
 
     def get_status(self) -> dict[str, Any]:

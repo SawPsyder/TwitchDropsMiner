@@ -175,7 +175,10 @@ class DiscordProvider(NotificationProvider):
                         retry_after=retry_seconds,
                     )
                 if response.status >= 400:
-                    raise NotificationError(f"Discord: request failed ({response.status})")
+                    raise NotificationError(
+                        f"Discord: request failed ({response.status})",
+                        status=response.status,
+                    )
                 if response.status == 204:
                     return None
                 return await response.json()
@@ -247,9 +250,7 @@ class DiscordProvider(NotificationProvider):
         payload = {"embeds": [embed]}
         timeout = aiohttp.ClientTimeout(total=REQUEST_TIMEOUT)
         async with aiohttp.ClientSession(timeout=timeout) as session:
-            await self._request(
-                session, "POST", f"/channels/{self.channel_id}/messages", json=payload
-            )
+            await self._post_message(session, payload)
         logger.info("Discord notification sent: %s", event_type)
 
     async def send_digest(self, message: dict[str, Any]) -> None:
@@ -269,7 +270,39 @@ class DiscordProvider(NotificationProvider):
             return
         timeout = aiohttp.ClientTimeout(total=REQUEST_TIMEOUT)
         async with aiohttp.ClientSession(timeout=timeout) as session:
-            await self._request(
-                session, "POST", f"/channels/{self.channel_id}/messages", json=payload
-            )
+            await self._post_message(session, payload)
         logger.info("Discord digest sent (%d embeds)", len(embeds))
+
+    async def _post_message(self, session: aiohttp.ClientSession, payload: dict[str, Any]) -> None:
+        """POST a message. One HTTP 400 is retried with every thumbnail removed.
+
+        Discord rejects the whole message when an embed image URL is bad, and
+        the digest queue only clears after a 2xx. The second 400 is a real failure.
+        """
+        path = f"/channels/{self.channel_id}/messages"
+        try:
+            await self._request(session, "POST", path, json=payload)
+        except NotificationError as exc:
+            if exc.status != 400 or not _payload_has_thumbnail(payload):
+                raise
+            logger.warning("Discord rejected a thumbnail URL; retrying without images")
+            await self._request(session, "POST", path, json=_without_thumbnails(payload))
+
+
+def _payload_has_thumbnail(payload: dict[str, Any]) -> bool:
+    embeds = payload.get("embeds")
+    if not isinstance(embeds, list):
+        return False
+    return any(isinstance(embed, dict) and embed.get("thumbnail") for embed in embeds)
+
+
+def _without_thumbnails(payload: dict[str, Any]) -> dict[str, Any]:
+    embeds = payload.get("embeds")
+    if not isinstance(embeds, list):
+        return payload
+    cleaned: list[Any] = []
+    for embed in embeds:
+        if isinstance(embed, dict) and "thumbnail" in embed:
+            embed = {key: value for key, value in embed.items() if key != "thumbnail"}
+        cleaned.append(embed)
+    return {**payload, "embeds": cleaned}

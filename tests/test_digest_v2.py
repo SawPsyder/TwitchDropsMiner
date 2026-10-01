@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+import random
 import tempfile
 import unittest
 import unittest.mock
@@ -11,9 +12,17 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from src.notifications import NotificationService
-from src.notifications.digest_style import TOTAL_CHAR_TARGET
+from src.notifications.digest_style import DESCRIPTION_HARD_MAX, TOTAL_CHAR_TARGET
 from src.notifications.events import NotificationEvent
-from src.notifications.render import discord_tag, message_char_count, render_digest
+from src.notifications.render import (
+    _campaign_sort_key,
+    _valid_https_url,
+    discord_tag,
+    discord_units,
+    drop_thumbnail,
+    message_char_count,
+    render_digest,
+)
 from tests.test_notifications import (
     FakeCampaign,
     FakeSettings,
@@ -1104,6 +1113,197 @@ class DigestV2Tests(unittest.TestCase):
         more = next(embed for embed in payload["embeds"] if embed["title"] == "More games")
         self.assertTrue(more["description"].endswith("…and 1 more game"))
 
+    def test_legacy_claim_joins_the_id_card(self):
+        now = END
+        events = [
+            {
+                "type": "drop_received",
+                "ts": (now - timedelta(hours=1)).isoformat(),
+                "data": {"game": "  Warframe ", "benefits": ["Legacy Reward"]},
+            },
+            _drop(now, "Warframe", 8, ["Built Forma"]),
+        ]
+        payload = _render_events(events)
+        warframes = [embed for embed in payload["embeds"] if embed["title"] == "Warframe"]
+        self.assertEqual(len(warframes), 1)
+        self.assertIn("Legacy Reward", warframes[0]["description"])
+        self.assertIn("Built Forma", warframes[0]["description"])
+
+    def test_claims_without_ids_share_one_card(self):
+        now = END
+        events = [
+            {
+                "type": "drop_received",
+                "ts": now.isoformat(),
+                "data": {"game": "Warframe", "benefits": ["Built Forma"]},
+            },
+            {
+                "type": "drop_received",
+                "ts": (now - timedelta(hours=1)).isoformat(),
+                "data": {"game": "warframe", "benefits": ["Legacy Reward"]},
+            },
+        ]
+        payload = _render_events(events)
+        warframes = [embed for embed in payload["embeds"] if embed["title"] == "Warframe"]
+        self.assertEqual(len(warframes), 1)
+        self.assertIn("Built Forma", warframes[0]["description"])
+        self.assertIn("Legacy Reward", warframes[0]["description"])
+
+    def test_thumbnail_url_must_be_https_with_a_host(self):
+        host = "https://img.example/"
+        valid = host + ("a" * (2048 - len(host)))
+        self.assertEqual(len(valid), 2048)
+        self.assertEqual(_valid_https_url(valid), valid)
+        self.assertIsNone(_valid_https_url(valid + "b"))
+        self.assertIsNone(_valid_https_url("http://img.example/a.png"))
+        self.assertIsNone(_valid_https_url("https://"))
+        self.assertIsNone(_valid_https_url("https:///missing-host"))
+        self.assertIsNone(_valid_https_url("https://img.example/a b.png"))
+        self.assertIsNone(_valid_https_url("https://img.example/a\nb.png"))
+        self.assertIsNone(_valid_https_url("https://img.example/a\x00b.png"))
+        self.assertEqual(_valid_https_url("https://img.example/a.png"), "https://img.example/a.png")
+        self.assertEqual(
+            drop_thumbnail(
+                {
+                    "benefit_images": ["https://", "https://img.example/ok.png"],
+                    "game_box_art": "https://img.example/box-{width}x{height}.jpg",
+                }
+            ),
+            "https://img.example/ok.png",
+        )
+        self.assertEqual(
+            drop_thumbnail({"benefit_images": ["http://img.example/nope.png"]}),
+            None,
+        )
+        self.assertEqual(
+            drop_thumbnail(
+                {"game_box_art": "https://img.example/box-{width}x{height}.jpg"}
+            ),
+            "https://img.example/box-144x192.jpg",
+        )
+
+    def test_urgent_cap_keeps_logs_and_the_queue_note(self):
+        now = END
+        events = [
+            {
+                "type": "auth_attention",
+                "ts": (now - timedelta(minutes=index)).isoformat(),
+                "data": {"reason": f"need-login-{index}"},
+            }
+            for index in range(300)
+        ]
+        events.append(
+            {
+                "type": "mining_stalled",
+                "ts": now.isoformat(),
+                "data": {"reason": "no channels"},
+            }
+        )
+        events.append(
+            {
+                "type": "mining_stalled",
+                "ts": (now - timedelta(minutes=5)).isoformat(),
+                "data": {"reason": "directory empty"},
+            }
+        )
+        payload = _render_events(
+            events,
+            error_groups=[
+                {"level": "WARNING", "count": 2, "latest": "slow disk", "last_ts": now.isoformat()}
+            ],
+            dropped_count=3,
+        )
+        attention = next(embed for embed in payload["embeds"] if embed["title"].startswith("⚠️"))
+        text = attention["description"]
+        self.assertIn("…and ", text)
+        self.assertIn("more urgent", text)
+        self.assertIn("need-login-0", text)
+        self.assertNotIn("need-login-299", text)
+        self.assertEqual(text.count("**Mining stalled**"), 1)
+        self.assertIn("**Mining stalled** ×2, last <t:", text)
+        self.assertIn("slow disk", text)
+        self.assertIn("Queue was full: 3 older events weren't kept.", text)
+        self.assertLess(text.index("more urgent"), text.index("Queue was full"))
+        self.assertLess(text.index("Queue was full"), text.index("slow disk"))
+        self.assertLessEqual(discord_units(text), DESCRIPTION_HARD_MAX)
+        self.assertLessEqual(message_char_count(payload["embeds"], payload["content"]), 6000)
+        self.assertLessEqual(len(payload["embeds"]), 8)
+
+    def test_shuffled_campaigns_render_the_same(self):
+        end = END + timedelta(days=2)
+        later = END + timedelta(days=9)
+        specs = [
+            ("Charlie", "c", end),
+            ("Alpha", "b", end),
+            ("Alpha", "a", end),
+            ("Zulu", "z", later),
+        ]
+
+        def payload_for(order: list[tuple[str, str, datetime]]) -> dict:
+            events = [_drop(END, "Game", 1, ["Badge"])]
+            events.extend(
+                {
+                    "type": "new_campaign",
+                    "ts": (END - timedelta(minutes=index)).isoformat(),
+                    "data": {
+                        "game": "Game",
+                        "game_id": 1,
+                        "campaign": name,
+                        "campaign_id": campaign_id,
+                        "ends_at": ends.isoformat(),
+                    },
+                }
+                for index, (name, campaign_id, ends) in enumerate(order)
+            )
+            return _render_events(events)
+
+        first = payload_for(specs)
+        card = first["embeds"][0]["description"]
+        self.assertEqual(card.count("New: Alpha"), 2)
+        self.assertNotIn("Charlie", card)
+        self.assertNotIn("Zulu", card)
+        self.assertIn("+2 more new campaigns", card)
+        for seed in range(8):
+            order = list(specs)
+            random.Random(seed).shuffle(order)
+            self.assertEqual(payload_for(order), first)
+        self.assertLess(
+            _campaign_sort_key(
+                {"ends_at": end.isoformat(), "campaign": "Alpha", "campaign_id": "a"}
+            ),
+            _campaign_sort_key(
+                {"ends_at": end.isoformat(), "campaign": "Alpha", "campaign_id": "b"}
+            ),
+        )
+        self.assertLess(
+            _campaign_sort_key(
+                {"ends_at": end.isoformat(), "campaign": "Alpha", "campaign_id": "b"}
+            ),
+            _campaign_sort_key(
+                {"ends_at": end.isoformat(), "campaign": "Charlie", "campaign_id": "a"}
+            ),
+        )
+        self.assertLess(
+            _campaign_sort_key(
+                {"ends_at": later.isoformat(), "campaign": "Alpha", "campaign_id": "a"}
+            ),
+            _campaign_sort_key({"campaign": "Alpha", "campaign_id": "a"}),
+        )
+
+
+def _render_events(events: list[dict], **overrides) -> dict:
+    kwargs = {
+        "events": events,
+        "window_start": END - timedelta(hours=24),
+        "window_end": END,
+        "next_at": NEXT,
+        "interval_minutes": 1440,
+        "progress": {"state": "idle", "campaigns": []},
+        "version": VERSION,
+    }
+    kwargs.update(overrides)
+    return render_digest(**kwargs)
+
 
 def _blob(payload: dict) -> str:
     return payload["content"] + "\n" + "\n".join(
@@ -1150,6 +1350,7 @@ class DigestV2ServiceTests(unittest.IsolatedAsyncioTestCase):
         provider.send.assert_not_awaited()
         data = service._state["digest_queue"][-1]["data"]
         self.assertEqual(data["game_id"], 42)
+        self.assertEqual(data["campaign_id"], "camp-2")
         self.assertEqual(data["game_box_art"], "https://img.example/a-{width}x{height}.jpg")
 
     async def test_toggle_off_after_queue_hides_block_and_count(self):

@@ -20,10 +20,18 @@ if TYPE_CHECKING:
 class NotificationError(Exception):
     """Raised when delivering a notification through a provider fails."""
 
-    def __init__(self, message: str = "", *, retry_after: float | None = None) -> None:
+    def __init__(
+        self,
+        message: str = "",
+        *,
+        retry_after: float | None = None,
+        status: int | None = None,
+    ) -> None:
         super().__init__(message)
         # seconds Discord asked us to wait (HTTP 429); None for every other failure
         self.retry_after = retry_after
+        # HTTP status for a failed Discord response, when the request got one
+        self.status = status
 
 
 # keys of NotificationEventSettings (src/config/settings.py) - also used as the

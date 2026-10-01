@@ -17,6 +17,7 @@ import re
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any
+from urllib.parse import urlsplit
 
 from src.notifications.digest_style import (
     ATTENTION_URGENT_COLOR,
@@ -214,29 +215,53 @@ def _aware(stamp: datetime) -> datetime:
     return stamp if stamp.tzinfo is not None else stamp.replace(tzinfo=UTC)
 
 
+# Discord rejects a bad embed image with HTTP 400 for the whole message.
+_MAX_THUMBNAIL_URL = 2048
+
+
+def _valid_https_url(value: object) -> str | None:
+    """An https URL Discord can use as an embed image, or None.
+
+    Requires a non-empty host, no whitespace or control characters, and at
+    most 2048 characters. Anything else is skipped so the next image in the
+    chain can be tried.
+    """
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    if not text or len(text) > _MAX_THUMBNAIL_URL:
+        return None
+    if any(char.isspace() or ord(char) < 32 or ord(char) == 127 for char in text):
+        return None
+    try:
+        parts = urlsplit(text)
+        host = parts.hostname
+    except ValueError:
+        return None
+    if parts.scheme.lower() != "https" or not host:
+        return None
+    return text
+
+
 def _first_https(images: object) -> str | None:
-    """The first https URL in a benefit-image list. Anything else is skipped."""
+    """The first usable https URL in a benefit-image list. Anything else is skipped."""
     if isinstance(images, str):
         images = [images]
     if not isinstance(images, list):
         return None
     for item in images:
-        if item is None:
-            continue
-        text = str(item).strip()
-        if text.lower().startswith("https://"):
-            return text
+        url = _valid_https_url(item)
+        if url:
+            return url
     return None
 
 
 def _box_art_url(value: object) -> str | None:
     """An https box-art URL, with Twitch's `{width}x{height}` template filled in."""
-    if value is None:
+    if not isinstance(value, str):
         return None
-    text = str(value).strip()
-    if not text.lower().startswith("https://"):
-        return None
-    return text.replace("{width}x{height}", BOX_ART_SIZE)
+    text = value.strip().replace("{width}x{height}", BOX_ART_SIZE)
+    return _valid_https_url(text)
 
 
 def drop_thumbnail(data: dict[str, Any]) -> str | None:
@@ -390,11 +415,14 @@ def _campaign_not_started(data: dict[str, Any], window_end: datetime) -> bool:
     return starts is not None and starts > window_end
 
 
-def _campaign_sort_key(data: dict[str, Any]) -> tuple[int, float]:
+def _campaign_sort_key(data: dict[str, Any]) -> tuple[int, float, str, str]:
+    """Soonest end first. Equal ends break by name, then campaign id."""
     ends = _parse_stamp(data.get("ends_at"))
+    name = " ".join(str(data.get("campaign") or "").split()).casefold()
+    campaign_id = str(data.get("campaign_id") or data.get("id") or "")
     if ends is None:
-        return (1, 0.0)
-    return (0, ends.timestamp())
+        return (1, 0.0, name, campaign_id)
+    return (0, ends.timestamp(), name, campaign_id)
 
 
 def _new_lines(
@@ -446,10 +474,42 @@ class _Game:
             self.name = text
 
 
+def _normal_game_name(name: object) -> str:
+    return " ".join(str(name).split()).casefold()
+
+
 def _bucket_key(game_id: str | None, name: str) -> str:
     if game_id:
         return f"id:{game_id}"
-    return f"name:{name.casefold()}"
+    return f"name:{_normal_game_name(name)}"
+
+
+def _fold_legacy_buckets(games: dict[str, _Game]) -> dict[str, _Game]:
+    """Join a name-only bucket onto the one id bucket with the same game name.
+
+    Claims queued before game ids were stored have no id. Two id buckets that
+    share a name are left alone: there is no single card to join.
+    """
+    by_name: dict[str, list[_Game]] = {}
+    for game in games.values():
+        if game.game_id:
+            by_name.setdefault(_normal_game_name(game.name), []).append(game)
+    folded: dict[str, _Game] = {}
+    for game in games.values():
+        if game.game_id:
+            folded[game.key] = game
+            continue
+        matches = by_name.get(_normal_game_name(game.name), [])
+        if len(matches) != 1:
+            folded[game.key] = game
+            continue
+        target = matches[0]
+        target.claims.extend(game.claims)
+        target.campaigns.extend(game.campaigns)
+        target.progress.extend(game.progress)
+        target.mining_now = target.mining_now or game.mining_now
+        target.remember_name(game.name)
+    return folded
 
 
 def _games_from(
@@ -505,7 +565,7 @@ def _games_from(
             name_match = bool(focus_name) and game.name.casefold() == focus_name
             if id_match or name_match:
                 game.mining_now = True
-    return games
+    return _fold_legacy_buckets(games)
 
 
 def _matches_focus(game: _Game, progress: dict[str, Any]) -> bool:
@@ -650,19 +710,26 @@ def _more_description(lines: list[str], cap: int) -> str:
 
 
 def _collapse_urgent(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Group urgent events that share a type and reason. Oldest group first."""
+    """Group events that would display as the same line. Oldest group first.
+
+    A stall line never shows its reason, so every stall shares one group and
+    the latest time. Sign-in lines group on the reason text that would be shown.
+    """
     groups: list[dict[str, Any]] = []
     index: dict[tuple[str, str], dict[str, Any]] = {}
     ordered = sorted(enumerate(events), key=lambda pair: (_event_stamp(pair[1]), pair[0]))
     for _order, event in ordered:
         data = _as_dict(event.get("data"))
-        reason = str(data.get("reason") or "").strip()
         kind = str(event.get("type") or "")
+        if kind == "mining_stalled":
+            identity = ""
+        else:
+            identity = escape_discord(data.get("reason") or "", LOG_CHAR_CAP)
         stamp = _event_stamp(event)
-        key = (kind, reason)
+        key = (kind, identity)
         group = index.get(key)
         if group is None:
-            group = {"type": kind, "reason": reason, "count": 0, "latest": stamp}
+            group = {"type": kind, "reason": identity, "count": 0, "latest": stamp}
             index[key] = group
             groups.append(group)
         group["count"] = int(group["count"]) + 1
@@ -672,26 +739,38 @@ def _collapse_urgent(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return groups
 
 
-def _urgent_lines(events: list[dict[str, Any]], kind: str) -> list[str]:
-    selected = [event for event in events if event.get("type") == kind]
-    lines: list[str] = []
-    for group in _collapse_urgent(selected):
-        count = int(group["count"])
-        latest: datetime = group["latest"]
-        if kind == "mining_stalled":
-            label = "**Mining stalled**"
-            if count == 1:
-                lines.append(f"{label} · no progress since {discord_tag(latest, 'R')}")
-            else:
-                lines.append(f"{label} ×{count}, last {discord_tag(latest, 't')}")
-        else:
-            label = "**Sign-in needed**"
-            if count == 1:
-                reason = escape_discord(group.get("reason") or "", LOG_CHAR_CAP)
-                lines.append(f"{label} · {reason}" if reason else label)
-            else:
-                lines.append(f"{label} ×{count}, last {discord_tag(latest, 't')}")
-    return lines
+def _format_urgent(group: dict[str, Any]) -> str:
+    count = int(group["count"])
+    latest: datetime = group["latest"]
+    if group.get("type") == "mining_stalled":
+        label = "**Mining stalled**"
+        if count == 1:
+            return f"{label} · no progress since {discord_tag(latest, 'R')}"
+        return f"{label} ×{count}, last {discord_tag(latest, 't')}"
+    label = "**Sign-in needed**"
+    if count == 1:
+        reason = str(group.get("reason") or "")
+        return f"{label} · {reason}" if reason else label
+    return f"{label} ×{count}, last {discord_tag(latest, 't')}"
+
+
+def _fit_urgent(groups: list[dict[str, Any]], tail: list[str]) -> list[str]:
+    """Newest groups that still leave room for `tail` inside the description cap.
+
+    Oldest groups are dropped first. The marker counts the events those groups
+    held, matching the v1 "…and N more urgent" line.
+    """
+    kept = list(groups)
+    omitted = 0
+    while True:
+        lines = [_format_urgent(group) for group in kept]
+        if omitted:
+            lines.append(f"…and {omitted} more urgent")
+        if discord_units(_join(lines + tail)) <= DESCRIPTION_HARD_MAX:
+            return lines
+        if not kept:
+            return lines
+        omitted += int(kept.pop(0)["count"])
 
 
 def _log_lines(
@@ -760,18 +839,23 @@ def _attention(
     include_errors: bool,
     log_cap: int,
 ) -> tuple[str, int] | None:
-    lines: list[str] = []
-    if include_stalled:
-        lines.extend(_urgent_lines(events, "mining_stalled"))
-    if include_auth:
-        lines.extend(_urgent_lines(events, "auth_attention"))
+    tail: list[str] = []
     if include_unlinked:
         unlinked = _unlinked_line(events)
         if unlinked:
-            lines.append(unlinked)
-    lines.append(_queue_line(dropped_count))
+            tail.append(unlinked)
+    queue = _queue_line(dropped_count)
+    if queue:
+        tail.append(queue)
     if include_errors:
-        lines.extend(_log_lines(error_groups, overflow_types, log_cap))
+        tail.extend(_log_lines(error_groups, overflow_types, log_cap))
+    selected: list[dict[str, Any]] = []
+    if include_stalled:
+        selected.extend(event for event in events if event.get("type") == "mining_stalled")
+    if include_auth:
+        selected.extend(event for event in events if event.get("type") == "auth_attention")
+    lines = _fit_urgent(_collapse_urgent(selected), tail)
+    lines.extend(tail)
     description = _join(lines)
     if not description:
         return None
@@ -971,7 +1055,7 @@ def _assemble(
         key=lambda game: (
             _campaign_sort_key(min(game.campaigns, key=_campaign_sort_key))
             if game.campaigns
-            else (1, 0.0),
+            else (1, 0.0, "", ""),
             game.name.casefold(),
         ),
     )

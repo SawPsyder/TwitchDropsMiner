@@ -133,6 +133,87 @@ class TestDiscordProvider(unittest.TestCase):
     def test_request_honours_retry_after_header_and_backs_off(self):
         asyncio.run(self._assert_retry_after())
 
+    def test_message_400_retries_once_without_thumbnails(self):
+        asyncio.run(self._assert_message_400_retries())
+
+    async def _assert_message_400_retries(self):
+        provider = DiscordProvider(FakeSettings())
+        calls: list[dict] = []
+
+        async def fake_request(_session, _method, _path, *, json=None):
+            calls.append(json)
+            if len(calls) == 1:
+                raise NotificationError("Discord: request failed (400)", status=400)
+
+        provider._request = fake_request
+        message = {
+            "content": "hi",
+            "embeds": [
+                {
+                    "title": "G",
+                    "description": "x",
+                    "thumbnail": {"url": "https://img.example/a.png"},
+                }
+            ],
+        }
+        await provider.send_digest(message)
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(calls[0]["embeds"][0]["thumbnail"]["url"], "https://img.example/a.png")
+        self.assertNotIn("thumbnail", calls[1]["embeds"][0])
+        self.assertEqual(calls[1]["content"], "hi")
+        self.assertIn("thumbnail", message["embeds"][0])
+
+        calls.clear()
+        await provider.send(
+            "drop_received",
+            "Drop received",
+            "Claimed a drop",
+            thumbnail_url="https://img.example/a.png",
+        )
+        self.assertEqual(len(calls), 2)
+        self.assertIn("thumbnail", calls[0]["embeds"][0])
+        self.assertNotIn("thumbnail", calls[1]["embeds"][0])
+
+    def test_message_400_twice_is_a_failure(self):
+        asyncio.run(self._assert_message_400_twice())
+
+    async def _assert_message_400_twice(self):
+        provider = DiscordProvider(FakeSettings())
+        calls: list[dict] = []
+
+        async def fake_request(_session, _method, _path, *, json=None):
+            calls.append(json)
+            raise NotificationError("Discord: request failed (400)", status=400)
+
+        provider._request = fake_request
+        with self.assertRaises(NotificationError) as caught:
+            await provider.send_digest(
+                {
+                    "content": "hi",
+                    "embeds": [
+                        {
+                            "title": "G",
+                            "description": "x",
+                            "thumbnail": {"url": "https://img.example/a.png"},
+                        }
+                    ],
+                }
+            )
+        self.assertEqual(caught.exception.status, 400)
+        self.assertEqual(len(calls), 2)
+        self.assertNotIn("thumbnail", calls[1]["embeds"][0])
+
+        calls.clear()
+        with self.assertRaises(NotificationError):
+            await provider.send(
+                "drop_received",
+                "Drop received",
+                "Claimed a drop",
+                thumbnail_url="https://img.example/a.png",
+            )
+        self.assertEqual(len(calls), 2)
+        self.assertNotIn("thumbnail", calls[1]["embeds"][0])
+
     async def _assert_retry_after(self):
         provider = DiscordProvider(FakeSettings())
 
