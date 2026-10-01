@@ -14,6 +14,7 @@ italics instead, which embeds do render.
 from __future__ import annotations
 
 import re
+import unicodedata
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -475,7 +476,8 @@ class _Game:
 
 
 def _normal_game_name(name: object) -> str:
-    return " ".join(str(name).split()).casefold()
+    text = unicodedata.normalize("NFC", str(name))
+    return " ".join(text.split()).casefold()
 
 
 def _bucket_key(game_id: str | None, name: str) -> str:
@@ -709,11 +711,24 @@ def _more_description(lines: list[str], cap: int) -> str:
     return _join(shown)
 
 
+# Spec section 5: the stall block, then sign-in. Within a block, newest first.
+_URGENT_KIND_ORDER = {"mining_stalled": 0, "auth_attention": 1}
+
+
+def _urgent_display_key(group: dict[str, Any]) -> tuple[int, float]:
+    kind = str(group.get("type") or "")
+    latest = group.get("latest")
+    stamp = latest.timestamp() if isinstance(latest, datetime) else 0.0
+    return (_URGENT_KIND_ORDER.get(kind, 9), -stamp)
+
+
 def _collapse_urgent(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Group events that would display as the same line. Oldest group first.
+    """Group events that would display as the same line.
 
     A stall line never shows its reason, so every stall shares one group and
-    the latest time. Sign-in lines group on the reason text that would be shown.
+    the latest time. Sign-in lines group on the reason text. The ×N line
+    includes that reason, so two reasons do not look like the same line.
+    Stall groups come first, and each kind is newest first.
     """
     groups: list[dict[str, Any]] = []
     index: dict[tuple[str, str], dict[str, Any]] = {}
@@ -735,7 +750,7 @@ def _collapse_urgent(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
         group["count"] = int(group["count"]) + 1
         if stamp >= group["latest"]:
             group["latest"] = stamp
-    groups.sort(key=lambda group: group["latest"])
+    groups.sort(key=_urgent_display_key)
     return groups
 
 
@@ -748,29 +763,42 @@ def _format_urgent(group: dict[str, Any]) -> str:
             return f"{label} · no progress since {discord_tag(latest, 'R')}"
         return f"{label} ×{count}, last {discord_tag(latest, 't')}"
     label = "**Sign-in needed**"
+    reason = str(group.get("reason") or "")
     if count == 1:
-        reason = str(group.get("reason") or "")
         return f"{label} · {reason}" if reason else label
+    if reason:
+        return f"{label} ×{count} · {reason}, last {discord_tag(latest, 't')}"
     return f"{label} ×{count}, last {discord_tag(latest, 't')}"
 
 
-def _fit_urgent(groups: list[dict[str, Any]], tail: list[str]) -> list[str]:
-    """Newest groups that still leave room for `tail` inside the description cap.
+def _fit_urgent(
+    groups: list[dict[str, Any]], tail: list[str], budget: int
+) -> list[str]:
+    """Newest groups that still leave the tail inside `budget`.
 
-    Oldest groups are dropped first. The marker counts the events those groups
-    held, matching the v1 "…and N more urgent" line.
+    `budget` is the whole attention description, so it can be tighter than
+    4096 when the rest of the message is already close to 5800. The oldest
+    group is dropped first, across both kinds. What remains is stall lines,
+    then sign-in lines, newest first within each. The tail (queue note, log
+    lines) is never dropped. The marker counts the events that were dropped.
     """
     kept = list(groups)
     omitted = 0
     while True:
-        lines = [_format_urgent(group) for group in kept]
+        lines = [_format_urgent(group) for group in sorted(kept, key=_urgent_display_key)]
         if omitted:
             lines.append(f"…and {omitted} more urgent")
-        if discord_units(_join(lines + tail)) <= DESCRIPTION_HARD_MAX:
+        if discord_units(_join(lines + tail)) <= budget or not kept:
             return lines
-        if not kept:
-            return lines
-        omitted += int(kept.pop(0)["count"])
+        oldest = min(
+            kept,
+            key=lambda group: (
+                group["latest"],
+                -_URGENT_KIND_ORDER.get(str(group.get("type") or ""), 9),
+            ),
+        )
+        kept.remove(oldest)
+        omitted += int(oldest["count"])
 
 
 def _log_lines(
@@ -838,6 +866,7 @@ def _attention(
     include_unlinked: bool,
     include_errors: bool,
     log_cap: int,
+    description_budget: int,
 ) -> tuple[str, int] | None:
     tail: list[str] = []
     if include_unlinked:
@@ -854,7 +883,7 @@ def _attention(
         selected.extend(event for event in events if event.get("type") == "mining_stalled")
     if include_auth:
         selected.extend(event for event in events if event.get("type") == "auth_attention")
-    lines = _fit_urgent(_collapse_urgent(selected), tail)
+    lines = _fit_urgent(_collapse_urgent(selected), tail, description_budget)
     lines.extend(tail)
     description = _join(lines)
     if not description:
@@ -950,6 +979,43 @@ def _footer(
     return " · ".join(parts)
 
 
+def _has_attention(payload: dict[str, Any]) -> bool:
+    embeds = payload.get("embeds") or []
+    return any(
+        isinstance(embed, dict) and str(embed.get("title") or "").startswith("⚠️")
+        for embed in embeds
+    )
+
+
+def _attention_description_budget(payload: dict[str, Any]) -> int:
+    """Room left for the Needs attention description inside the 5800 target.
+
+    The footer sits on that embed, so it counts here. The description already
+    on it does not: this is the budget a refit is allowed to use.
+    """
+    content = str(payload.get("content") or "")
+    embeds = payload.get("embeds") or []
+    footer = ""
+    used = discord_units(content) + discord_units("⚠️ Needs attention")
+    if isinstance(embeds, list):
+        for embed in embeds:
+            if not isinstance(embed, dict):
+                continue
+            foot = embed.get("footer") or {}
+            if isinstance(foot, dict) and foot.get("text"):
+                footer = str(foot.get("text") or "")
+            if str(embed.get("title") or "").startswith("⚠️"):
+                continue
+            used += discord_units(embed.get("title") or "")
+            used += discord_units(embed.get("description") or "")
+    used += discord_units(footer)
+    embed_used = used - discord_units(content)
+    return max(
+        0,
+        min(DESCRIPTION_HARD_MAX, TOTAL_CHAR_TARGET - used, MAX_TOTAL_CHARS - embed_used),
+    )
+
+
 def _within_budget(payload: dict[str, Any]) -> bool:
     embeds = payload["embeds"]
     content = str(payload.get("content") or "")
@@ -991,7 +1057,15 @@ def _hard_truncate(payload: dict[str, Any], footer: str, window_end: datetime) -
         if not embeds:
             content = _safe_truncate(content, TOTAL_CHAR_TARGET)
             return {"content": content, "embeds": []}
-        victim = max(range(len(embeds)), key=lambda index: discord_units(embeds[index].get("description") or ""))
+        # Game cards and More games give way first. Cutting Needs attention
+        # drops the queue note and the log lines off the end of that embed.
+        candidates = [
+            index
+            for index, embed in enumerate(embeds)
+            if not str(embed.get("title") or "").startswith("⚠️")
+        ]
+        pool = candidates or list(range(len(embeds)))
+        victim = max(pool, key=lambda index: discord_units(embeds[index].get("description") or ""))
         description = str(embeds[victim].get("description") or "")
         others = message_char_count(embeds, content) - discord_units(description)
         embed_others = _embed_units(embeds) - discord_units(description)
@@ -1034,6 +1108,7 @@ def _assemble(
     more_cap: int,
     log_cap: int,
     card_limit: int,
+    attention_budget: int,
 ) -> dict[str, Any]:
     def eligible(game: _Game) -> bool:
         if include_drops and game.claims:
@@ -1116,6 +1191,7 @@ def _assemble(
         include_unlinked=include_unlinked,
         include_errors=include_errors,
         log_cap=log_cap,
+        description_budget=attention_budget,
     )
     if attention is not None:
         description, color = attention
@@ -1228,7 +1304,9 @@ def render_digest(
     log_cap = LOG_GROUP_CAP
     card_limit = min(CARD_CAP, eligible_count)
 
-    def build(claim: int, more: int, logs: int, cards: int) -> dict[str, Any]:
+    def build(
+        claim: int, more: int, logs: int, cards: int, attention_budget: int = DESCRIPTION_HARD_MAX
+    ) -> dict[str, Any]:
         return _assemble(
             games,
             events,
@@ -1250,6 +1328,7 @@ def render_digest(
             more_cap=more,
             log_cap=logs,
             card_limit=cards,
+            attention_budget=attention_budget,
         )
 
     payload = build(claim_cap, more_cap, log_cap, card_limit)
@@ -1265,6 +1344,16 @@ def render_digest(
     while not _within_budget(payload) and card_limit > CARD_FLOOR:
         card_limit -= 1
         payload = build(claim_cap, more_cap, log_cap, card_limit)
+    # Cards and More games have already been trimmed. Only then shrink urgent
+    # lines so the queue note and the log lines still fit in the 5800 budget.
+    if not _within_budget(payload) and _has_attention(payload):
+        payload = build(
+            claim_cap,
+            more_cap,
+            log_cap,
+            card_limit,
+            attention_budget=_attention_description_budget(payload),
+        )
     if not _within_budget(payload):
         payload = _hard_truncate(payload, footer, window_end)
     # an empty window has no embeds, so it has no footer either

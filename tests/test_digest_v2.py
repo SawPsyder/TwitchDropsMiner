@@ -6,13 +6,18 @@ import logging
 import os
 import random
 import tempfile
+import unicodedata
 import unittest
 import unittest.mock
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from src.notifications import NotificationService
-from src.notifications.digest_style import DESCRIPTION_HARD_MAX, TOTAL_CHAR_TARGET
+from src.notifications.digest_style import (
+    DESCRIPTION_HARD_MAX,
+    MAX_TITLE_CHARS,
+    TOTAL_CHAR_TARGET,
+)
 from src.notifications.events import NotificationEvent
 from src.notifications.render import (
     _campaign_sort_key,
@@ -1289,6 +1294,234 @@ class DigestV2Tests(unittest.TestCase):
             ),
             _campaign_sort_key({"campaign": "Alpha", "campaign_id": "a"}),
         )
+
+    def test_stall_block_comes_before_sign_in(self):
+        now = END
+        events = [
+            {
+                "type": "auth_attention",
+                "ts": (now - timedelta(minutes=60)).isoformat(),
+                "data": {"reason": "captcha"},
+            },
+            {
+                "type": "mining_stalled",
+                "ts": (now - timedelta(minutes=10)).isoformat(),
+                "data": {"reason": "no channels"},
+            },
+            {
+                "type": "auth_attention",
+                "ts": (now - timedelta(minutes=1)).isoformat(),
+                "data": {"reason": "token expired"},
+            },
+        ]
+        text = _attention_text(_render_events(events))
+        self.assertLess(text.index("**Mining stalled**"), text.index("token expired"))
+        self.assertLess(text.index("**Mining stalled**"), text.index("captcha"))
+        self.assertLess(text.index("token expired"), text.index("captcha"))
+
+    def test_repeated_sign_in_reasons_stay_distinct(self):
+        now = END
+        events = []
+        for reason in ("captcha", "token expired", "logged out"):
+            for index in range(3):
+                events.append(
+                    {
+                        "type": "auth_attention",
+                        "ts": (now - timedelta(minutes=index, seconds=len(reason))).isoformat(),
+                        "data": {"reason": reason},
+                    }
+                )
+        text = _attention_text(_render_events(events))
+        for reason in ("captcha", "token expired", "logged out"):
+            self.assertIn(f"**Sign-in needed** ×3 · {reason}, last <t:", text)
+        self.assertEqual(text.count("**Sign-in needed**"), 3)
+
+    def test_nfc_and_nfd_names_share_one_card(self):
+        now = END
+        nfc = unicodedata.normalize("NFC", "Pokémon")
+        nfd = unicodedata.normalize("NFD", nfc)
+        self.assertNotEqual(nfc, nfd)
+        events = [
+            {
+                "type": "drop_received",
+                "ts": now.isoformat(),
+                "data": {"game": nfc, "game_id": 7, "benefits": ["Badge"]},
+            },
+            {
+                "type": "drop_received",
+                "ts": (now - timedelta(hours=1)).isoformat(),
+                "data": {"game": nfd, "benefits": ["Legacy"]},
+            },
+        ]
+        payload = _render_events(events)
+        cards = [embed for embed in payload["embeds"] if embed["title"] != "⚠️ Needs attention"]
+        self.assertEqual(len(cards), 1)
+        self.assertIn("Badge", cards[0]["description"])
+        self.assertIn("Legacy", cards[0]["description"])
+
+    def test_full_message_keeps_the_urgent_marker_and_queue_note(self):
+        now = END
+        events = [
+            {
+                "type": "auth_attention",
+                "ts": (now - timedelta(minutes=index)).isoformat(),
+                "data": {"reason": f"need-login-{index:02d} " + ("R" * 30)},
+            }
+            for index in range(60)
+        ]
+        progress = {
+            "state": "watching",
+            "channel": "quickybaby",
+            "game": "Game 0",
+            "game_id": 1,
+            "campaigns": [
+                {
+                    "game": f"Game {index}",
+                    "game_id": index + 1,
+                    "campaign": f"Campaign {index}",
+                    "drop": f"Reward {index} " + ("X" * 40),
+                    "percent": 40,
+                    "remaining_minutes": 90,
+                    "mining_now": index == 0,
+                    "benefit_images": [f"https://img.example/{index}.png"],
+                    "game_box_art": f"https://img.example/{index}-{{width}}x{{height}}.jpg",
+                }
+                for index in range(25)
+            ],
+        }
+        groups = [
+            {
+                "level": "WARNING",
+                "count": index + 1,
+                "latest": f"log line {index} " + ("Y" * 40),
+                "last_ts": now.isoformat(),
+            }
+            for index in range(5)
+        ]
+        payload = _render_events(events, progress=progress, error_groups=groups, dropped_count=3)
+        text = _attention_text(payload)
+        self.assertIn("more urgent", text)
+        self.assertIn("need-login-00", text)
+        self.assertNotIn("need-login-59", text)
+        self.assertIn("Queue was full: 3 older events weren't kept.", text)
+        self.assertTrue(any(line.startswith("×") for line in text.splitlines()))
+        self.assertLess(text.index("more urgent"), text.index("Queue was full"))
+        self.assertLessEqual(message_char_count(payload["embeds"], payload["content"]), TOTAL_CHAR_TARGET)
+        self.assertLessEqual(discord_units(text), DESCRIPTION_HARD_MAX)
+        self.assertLessEqual(len(payload["embeds"]), 8)
+        self.assertFalse(text.rstrip().endswith("…") and not text.rstrip().endswith("more urgent"))
+
+    def test_limits_fuzz_has_no_truncation_markers(self):
+        for seed in range(400):
+            payload = _fuzz_payload(seed)
+            content = payload["content"]
+            embeds = payload["embeds"]
+            self.assertLessEqual(message_char_count(embeds, content), TOTAL_CHAR_TARGET, seed)
+            self.assertLessEqual(len(embeds), 8, seed)
+            self.assertLessEqual(discord_units(content), 2000, seed)
+            for embed in embeds:
+                self.assertNotIn("fields", embed, seed)
+                self.assertLessEqual(discord_units(embed.get("title") or ""), MAX_TITLE_CHARS, seed)
+                description = embed.get("description") or ""
+                self.assertLessEqual(discord_units(description), DESCRIPTION_HARD_MAX, seed)
+                self.assertFalse(_was_hard_truncated(description), seed)
+            if embeds:
+                footer = (embeds[-1].get("footer") or {}).get("text") or ""
+                self.assertLessEqual(discord_units(footer), 2048, seed)
+
+
+def _was_hard_truncated(description: str) -> bool:
+    """True when a description was cut mid-body and closed with an ellipsis.
+
+    The real overflow lines start with `…and` or are the italic log-overflow
+    line. A hard truncate appends `…` to whatever survived.
+    """
+    stripped = description.rstrip()
+    if not stripped.endswith("…"):
+        return False
+    last = stripped.splitlines()[-1].strip().strip("*")
+    return not last.startswith("…and ")
+
+
+def _fuzz_payload(seed: int) -> dict:
+    rng = random.Random(seed)
+    now = END
+    events: list[dict] = []
+    game_count = rng.randint(0, 60)
+    for index in range(game_count):
+        name = rng.choice(["Pokémon", "Game *bold*", "Apex", f"Game {index}"])
+        if rng.random() < 0.5:
+            events.append(
+                {
+                    "type": "drop_received",
+                    "ts": (now - timedelta(minutes=index)).isoformat(),
+                    "data": {
+                        "game": name,
+                        "game_id": index + 1,
+                        "benefits": [f"Benefit {index} " + ("B" * rng.randint(0, 60))],
+                        "benefit_images": [rng.choice(["https://img.example/a.png", "http://nope", "https://"])],
+                    },
+                }
+            )
+    auth_count = rng.randint(0, 80)
+    for index in range(auth_count):
+        events.append(
+            {
+                "type": "auth_attention",
+                "ts": (now - timedelta(minutes=index)).isoformat(),
+                "data": {"reason": f"reason-{seed}-{index}"},
+            }
+        )
+    if rng.random() < 0.5:
+        events.append(
+            {
+                "type": "mining_stalled",
+                "ts": (now - timedelta(minutes=3)).isoformat(),
+                "data": {"reason": f"stall-{seed}"},
+            }
+        )
+    progress = {
+        "state": "watching" if game_count else "idle",
+        "channel": "someone",
+        "game": "Game 0" if game_count else None,
+        "game_id": 1 if game_count else None,
+        "campaigns": [
+            {
+                "game": f"Progress {index}",
+                "game_id": 1000 + index,
+                "campaign": f"Camp {index}",
+                "drop": "D" * rng.randint(4, 70),
+                "percent": rng.randint(0, 100),
+                "remaining_minutes": rng.randint(1, 400),
+                "mining_now": index == 0,
+            }
+            for index in range(rng.randint(0, 25))
+        ],
+    }
+    groups = [
+        {
+            "level": "ERROR" if index == 0 and rng.random() < 0.3 else "WARNING",
+            "count": rng.randint(1, 30),
+            "latest": f"log {index} " + ("L" * rng.randint(0, 80)),
+            "last_ts": now.isoformat(),
+        }
+        for index in range(rng.randint(0, 8))
+    ]
+    return _render_events(
+        events,
+        progress=progress,
+        error_groups=groups,
+        dropped_count=rng.choice([0, 0, 1, 3, 12]),
+        include_errors=rng.choice([True, True, False]),
+        include_progress=rng.choice([True, True, False]),
+        include_auth=rng.choice([True, True, False]),
+        include_drops=rng.choice([True, True, False]),
+    )
+
+
+def _attention_text(payload: dict) -> str:
+    attention = next(embed for embed in payload["embeds"] if str(embed.get("title") or "").startswith("⚠️"))
+    return str(attention.get("description") or "")
 
 
 def _render_events(events: list[dict], **overrides) -> dict:
