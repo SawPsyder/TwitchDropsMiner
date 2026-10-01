@@ -296,7 +296,7 @@ def _event(event_type, stamp, **data):
     return {"type": event_type, "ts": stamp.isoformat(), "data": data}
 
 
-def _render(**overrides):
+def _payload(**overrides):
     now = datetime(2026, 9, 25, 12, 0, tzinfo=UTC)
     kwargs = {
         "events": [],
@@ -309,6 +309,10 @@ def _render(**overrides):
     }
     kwargs.update(overrides)
     return render_digest(**kwargs)
+
+
+def _render(**overrides):
+    return _payload(**overrides)["embeds"]
 
 
 class TestDigestQueue(unittest.IsolatedAsyncioTestCase):
@@ -416,8 +420,12 @@ class TestDigestQueue(unittest.IsolatedAsyncioTestCase):
         service, provider = self.make_service()
         await service.notify_drop_received("Game A", ["Badge"], campaign="Camp", channel="chan")
         self.assertTrue(await service.flush_digest(final=True))
-        description = provider.send_digest.await_args.args[0][0]["description"]
-        self.assertNotIn("Next digest", description)
+        message = provider.send_digest.await_args.args[0]
+        rendered = message["content"] + "\n" + "\n".join(
+            embed.get("description", "") + (embed.get("footer") or {}).get("text", "")
+            for embed in message["embeds"]
+        )
+        self.assertNotIn("next digest", rendered.lower())
 
     async def test_schedule_change_wakes_the_scheduler(self):
         service, provider = self.make_service(digest_interval_minutes=10080, digest_send_weekday=6)
@@ -780,10 +788,12 @@ class TestDigestQueue(unittest.IsolatedAsyncioTestCase):
             result = await webapp.preview_notification_digest()
             self.assertTrue(result["success"])
             provider.send_digest.assert_awaited()
-            description = "\n".join(
-                embed["description"] for embed in provider.send_digest.await_args.args[0]
+            message = provider.send_digest.await_args.args[0]
+            rendered = message["content"] + "\n" + "\n".join(
+                f"{embed.get('title', '')}\n{embed.get('description', '')}"
+                for embed in message["embeds"]
             )
-            self.assertIn("Game A", description)
+            self.assertIn("Game A", rendered)
             self.assertEqual(len(service._state["digest_queue"]), 1)
             provider.send_digest.side_effect = NotificationError("429", retry_after=9)
             failed = await webapp.preview_notification_digest()
@@ -899,9 +909,12 @@ class TestDigestQueue(unittest.IsolatedAsyncioTestCase):
         next_before = service._state.get("digest_next_at")
         await service.send_preview()
         provider.send_digest.assert_awaited()
-        embeds = provider.send_digest.await_args.args[0]
-        self.assertIn("preview", embeds[0]["title"])
-        self.assertNotIn("last 6 hours", embeds[0]["title"])
+        message = provider.send_digest.await_args.args[0]
+        self.assertTrue(message["content"].startswith("Preview so far"))
+        self.assertNotIn("last 6 hours", message["content"])
+        footer = message["embeds"][-1]["footer"]["text"]
+        self.assertIn("Preview so far", footer)
+        self.assertNotIn("last 6 hours", footer.lower())
         self.assertEqual(service._state["digest_queue"], before)
         self.assertEqual(service._state.get("last_digest"), last_before)
         self.assertEqual(service._state.get("digest_next_at"), next_before)
@@ -917,10 +930,9 @@ class TestDigestQueue(unittest.IsolatedAsyncioTestCase):
         service._settings.notifications["digest_send_empty"] = True
         sent = await service.flush_digest()
         self.assertTrue(sent)
-        embeds = provider.send_digest.await_args.args[0]
-        self.assertIn("Nothing new in this period.", embeds[0]["description"])
-        progress = next(embed for embed in embeds if embed["title"].startswith("📈"))
-        self.assertIn("Idle — nothing to mine right now", progress["description"])
+        message = provider.send_digest.await_args.args[0]
+        self.assertEqual(message["content"], "Nothing new in the last 24 hours.")
+        self.assertEqual(message["embeds"], [])
 
     async def test_status_reports_digest_fields(self):
         service, _provider = self.make_service()
@@ -1142,21 +1154,21 @@ class TestDigestRenderer(unittest.TestCase):
         events = [
             _event(
                 "drop_received",
-                now - timedelta(minutes=50 - index),
+                now - timedelta(minutes=index + 1),
                 game="Game",
                 campaign="Camp",
                 drop=f"Drop {index}",
-                benefits=["Badge"],
+                benefits=[f"Badge {index}"],
                 channel="chan",
             )
             for index in range(41)
         ]
         embeds = _render(events=events, include_progress=False)
         text = "\n".join(embed["description"] for embed in embeds)
-        self.assertIn("…and 1 more drop", text)
+        self.assertIn("✓ +37 more", text)
         self.assertLessEqual(message_char_count(embeds), 6000)
-        self.assertLessEqual(len(embeds), 10)
-        self.assertTrue(all(len(embed["description"]) <= 4096 for embed in embeds))
+        self.assertLessEqual(len(embeds), 8)
+        self.assertTrue(all(discord_units(embed["description"]) <= 4096 for embed in embeds))
 
     def test_huge_queue_stays_one_message_inside_discord_limits(self):
         now = datetime(2026, 9, 25, 12, 0, tzinfo=UTC)
@@ -1218,7 +1230,7 @@ class TestDigestRenderer(unittest.TestCase):
                 for index in range(20)
             ],
         }
-        embeds = render_digest(
+        payload = render_digest(
             events=events,
             error_groups=groups,
             window_start=now - timedelta(days=2),
@@ -1229,13 +1241,16 @@ class TestDigestRenderer(unittest.TestCase):
             progress=progress,
             version="1.9.1",
         )
-        self.assertIsInstance(embeds, list)
-        self.assertLessEqual(len(embeds), 10)
+        self.assertIsInstance(payload, dict)
+        embeds = payload["embeds"]
+        self.assertLessEqual(len(embeds), 8)
+        self.assertLessEqual(message_char_count(embeds, payload["content"]), 6000)
         self.assertLessEqual(message_char_count(embeds), 6000)
-        self.assertTrue(all(len(embed.get("description") or "") <= 4096 for embed in embeds))
-        self.assertLessEqual(len(embeds), 6)
+        self.assertTrue(
+            all(discord_units(embed.get("description") or "") <= 4096 for embed in embeds)
+        )
         titles = [embed["title"] for embed in embeds]
-        self.assertEqual(sum(1 for title in titles if title.startswith("🎁")), 1)
+        self.assertFalse(any(title.startswith("🎁") or title.startswith("📬") for title in titles))
 
     def test_longest_section_is_trimmed_before_a_shorter_one(self):
         now = datetime(2026, 9, 25, 12, 0, tzinfo=UTC)
@@ -1245,31 +1260,30 @@ class TestDigestRenderer(unittest.TestCase):
                 now - timedelta(minutes=index + 1),
                 game="Huge",
                 campaign="Wall",
-                drop="Reward " + ("Q" * 70),
-                benefits=["Benefit " + ("B" * 70)],
+                drop=f"Reward {index:02d} " + ("Q" * 60),
+                benefits=[f"{index:02d} Benefit " + ("B" * 60)],
                 channel="channel-" + ("c" * 60),
             )
             for index in range(30)
         ]
         campaign_names = [f"ShortCamp {index}" for index in range(4)]
-        for name in campaign_names:
+        for index, name in enumerate(campaign_names):
             events.append(
                 _event(
                     "new_campaign",
                     now,
-                    game="Tiny",
+                    game=name,
                     campaign=name,
-                    ends_at=(now + timedelta(days=3)).isoformat(),
+                    ends_at=(now + timedelta(days=index + 1)).isoformat(),
                 )
             )
         embeds = _render(events=events, include_progress=False)
         descriptions = {embed["title"]: embed["description"] for embed in embeds}
-        drops = next(text for title, text in descriptions.items() if title.startswith("🎁"))
-        campaigns = next(text for title, text in descriptions.items() if title.startswith("🆕"))
-        self.assertIn("…and ", drops)
+        self.assertIn("✓ +", descriptions["Huge"])
+        more = descriptions["More games"]
         for name in campaign_names:
-            self.assertIn(name, campaigns)
-        self.assertNotIn("…and ", campaigns)
+            self.assertIn(name, more)
+        self.assertNotIn("…and ", more)
 
     def test_warning_only_attention_is_last_and_amber(self):
         now = datetime(2026, 9, 25, 12, 0, tzinfo=UTC)
@@ -1282,7 +1296,8 @@ class TestDigestRenderer(unittest.TestCase):
         )
         self.assertEqual(embeds[-1]["color"], 0xF1C40F)
         self.assertTrue(embeds[-1]["title"].startswith("⚠️"))
-        self.assertNotEqual(embeds[1]["color"], 0xF1C40F)
+        self.assertEqual(embeds[0]["color"], 0x9146FF)
+        self.assertNotEqual(embeds[0]["color"], 0xF1C40F)
 
     def test_urgent_attention_is_second_and_red(self):
         now = datetime(2026, 9, 25, 12, 0, tzinfo=UTC)
@@ -1293,14 +1308,14 @@ class TestDigestRenderer(unittest.TestCase):
             ],
             include_progress=False,
         )
+        self.assertEqual(embeds[0]["title"], "G")
         self.assertEqual(embeds[0]["color"], 0x9146FF)
-        self.assertEqual(embeds[1]["color"], 0xE74C3C)
-        self.assertIn("alerted at the time", embeds[1]["description"])
-        self.assertIn("no progress since <t:", embeds[1]["description"])
-        self.assertNotIn("no progress for", embeds[1]["description"])
-        self.assertNotIn("no channels", embeds[1]["description"])
-        drops = next(embed for embed in embeds if embed["title"].startswith("🎁"))
-        self.assertEqual(drops["color"], 0x2ECC71)
+        self.assertEqual(embeds[-1]["color"], 0xE74C3C)
+        self.assertTrue(embeds[-1]["title"].startswith("⚠️"))
+        self.assertNotIn("alerted at the time", embeds[-1]["description"])
+        self.assertIn("no progress since <t:", embeds[-1]["description"])
+        self.assertNotIn("no progress for", embeds[-1]["description"])
+        self.assertNotIn("no channels", embeds[-1]["description"])
 
     def test_identical_urgent_events_collapse_to_one_line(self):
         now = datetime(2026, 9, 25, 12, 0, tzinfo=UTC)
@@ -1315,7 +1330,8 @@ class TestDigestRenderer(unittest.TestCase):
         ]
         embeds = _render(events=events, include_progress=False, include_errors=False)
         attention = next(embed for embed in embeds if embed["title"].startswith("⚠️"))
-        self.assertIn("(7)", attention["title"])
+        self.assertEqual(attention["title"], "⚠️ Needs attention")
+        self.assertNotIn("(7)", attention["title"])
         self.assertIn("**Mining stalled** ×7, last <t:", attention["description"])
         self.assertNotIn("no channels", attention["description"])
         self.assertEqual(attention["description"].count("**Mining stalled**"), 1)
@@ -1329,10 +1345,9 @@ class TestDigestRenderer(unittest.TestCase):
         embeds = _render(events=events, include_progress=False, include_errors=False)
         attention = next(embed for embed in embeds if embed["title"].startswith("⚠️"))
         text = attention["description"]
-        self.assertIn("…and ", text)
-        self.assertIn("more urgent", text)
         self.assertIn("need-login-0", text)
-        self.assertNotIn("need-login-79", text)
+        self.assertNotIn("more urgent", text)
+        self.assertLessEqual(len(embeds), 8)
         self.assertLessEqual(message_char_count(embeds), 6000)
         self.assertLessEqual(discord_units(attention["description"]), 4096)
         for line in text.splitlines():
@@ -1357,14 +1372,23 @@ class TestDigestRenderer(unittest.TestCase):
         embeds = _render(
             events=[
                 _event("drop_received", now, game="G", campaign="C", benefits=["Badge"], channel="ch"),
-                _event("new_campaign", now, game="G", campaign="New", ends_at=(now + timedelta(days=1)).isoformat()),
+                _event(
+                    "new_campaign",
+                    now,
+                    game="Other",
+                    campaign="New",
+                    ends_at=(now + timedelta(days=1)).isoformat(),
+                ),
             ],
         )
         self.assertGreater(len(embeds), 1)
         for embed in embeds[:-1]:
             self.assertNotIn("footer", embed)
             self.assertNotIn("timestamp", embed)
-        self.assertIn("TwitchDropsMiner v1.9.1", embeds[-1]["footer"]["text"])
+        footer = embeds[-1]["footer"]["text"]
+        self.assertIn("v1.9.1", footer)
+        self.assertNotIn("TwitchDropsMiner v", footer)
+        self.assertIn("Last 6 hours", footer)
         self.assertIn("timestamp", embeds[-1])
 
     def test_progress_bar_is_fixed_width_inline_code(self):
@@ -1391,11 +1415,14 @@ class TestDigestRenderer(unittest.TestCase):
             ],
         }
         embeds = _render(progress=progress)
-        text = next(embed for embed in embeds if embed["title"].startswith("📈"))["description"]
-        self.assertIn("**Tanks** · Season A · 1 h 00 min left", text)
-        self.assertIn("**Tanks** · Season B", text)
-        self.assertIn("**Dice** · d20 Badge", text)
-        self.assertNotIn("Dice Camp", text)
+        tanks = next(embed for embed in embeds if embed["title"] == "Tanks")
+        self.assertIn("Season A", tanks["description"])
+        self.assertIn("Season B", tanks["description"])
+        self.assertLess(tanks["description"].index("Season A"), tanks["description"].index("Season B"))
+        self.assertIn("1 h 00 min left", tanks["description"])
+        dice = next(embed for embed in embeds if embed["title"] == "Dice")
+        self.assertIn("d20 Badge", dice["description"])
+        self.assertNotIn("Dice Camp", dice["description"])
 
     def test_started_drops_list_before_untouched_ones(self):
         progress = {
@@ -1406,23 +1433,21 @@ class TestDigestRenderer(unittest.TestCase):
             ],
         }
         embeds = _render(progress=progress)
-        text = next(embed for embed in embeds if embed["title"].startswith("📈"))["description"]
-        self.assertLess(text.index("Started"), text.index("Untouched"))
+        titles = [embed["title"] for embed in embeds]
+        self.assertLess(titles.index("Started"), titles.index("Untouched"))
 
     def test_header_shows_window_start_and_relative_next_send(self):
-        embeds = _render()
-        header = embeds[0]
-        self.assertEqual(header["title"], "📬 Digest · last 6 hours")
-        self.assertIn("Since <t:", header["description"])
-        self.assertRegex(header["description"], r"Next digest <t:\d+:f> \(<t:\d+:R>\)")
+        payload = _payload()
+        self.assertEqual(payload["embeds"], [])
+        self.assertEqual(payload["content"], "Nothing new in the last 6 hours.")
+        self.assertNotIn("📬", payload["content"])
 
     def test_preview_of_an_unopened_window_has_no_zero_length_range(self):
         now = datetime(2026, 9, 25, 12, 0, tzinfo=UTC)
-        embeds = _render(window_start=now, window_end=now, preview=True)
-        header = embeds[0]
-        self.assertEqual(header["title"], "📬 Digest preview · so far")
-        self.assertNotIn("Since", header["description"])
-        self.assertIn("Nothing new so far.", header["description"])
+        payload = _payload(window_start=now, window_end=now, preview=True)
+        self.assertEqual(payload["embeds"], [])
+        self.assertEqual(payload["content"], "Preview so far · Nothing new in the last 6 hours.")
+        self.assertNotIn("Since", payload["content"])
 
     def test_drops_group_by_game_and_use_discord_timestamps(self):
         now = datetime(2026, 9, 25, 12, 0, tzinfo=UTC)
@@ -1450,11 +1475,17 @@ class TestDigestRenderer(unittest.TestCase):
             include_progress=False,
             progress=None,
         )
-        drops = next(embed for embed in embeds if embed["color"] == 0x2ECC71)
-        self.assertIn("**Alpha** — Spring", drops["description"])
-        self.assertIn("• Badge — Other · streamer · <t:", drops["description"])
-        self.assertIn("• Badge · inventory · <t:", drops["description"])
-        self.assertEqual(drops["description"].count("**Alpha**"), 1)
+        self.assertEqual(len(embeds), 1)
+        drops = embeds[0]
+        self.assertEqual(drops["color"], 0x9146FF)
+        self.assertEqual(drops["title"], "Alpha")
+        self.assertIn("✓ Badge ×2", drops["description"])
+        self.assertNotIn("Other", drops["description"])
+        self.assertNotIn("streamer", drops["description"])
+        self.assertNotIn("inventory", drops["description"])
+        self.assertNotIn("Spring", drops["description"])
+        self.assertNotIn("<t:", drops["description"])
+        self.assertNotIn("Alpha", drops["description"])
 
 
 if __name__ == "__main__":

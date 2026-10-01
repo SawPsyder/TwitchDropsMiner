@@ -1,59 +1,50 @@
 """
 Discord digest copy, colours and limits.
 
-Every string and colour the digest message uses lives here so a copy or palette
-change stays in one file. These match the UX spec (2026-09-25): description
-lines rather than embed fields, spec hex colours, and a single message.
+v2 (2026-10-01): one purple card per game, an optional More games embed, and
+Needs attention last. Two colours. Totals sit on the message content line.
+The window and the next send sit in the last embed's footer.
 """
 
 from __future__ import annotations
 
-from datetime import timedelta
 
-
-# spec section colours. Drops, campaigns and unlinked use the hex from the spec
-# (green / blue / orange) rather than the immediate-mode EVENT_COLORS map, whose
-# current values are purple / green / amber and would paint drops the same colour
-# as the header.
-HEADER_COLOR = 0x9146FF
+# Game cards and More games. Needs attention is red when it holds a stall or
+# a sign-in, otherwise amber.
+GAME_COLOR = 0x9146FF
 ATTENTION_URGENT_COLOR = 0xE74C3C
 ATTENTION_WARNING_COLOR = 0xF1C40F
-DROPS_COLOR = 0x2ECC71
-CAMPAIGNS_COLOR = 0x3498DB
-PROGRESS_COLOR = 0x95A5A6
-UNLINKED_COLOR = 0xE67E22
 
-# Discord's documented limits, and the tighter targets the trimmer aims for.
-MAX_EMBEDS = 10
-MAX_EMBED_SLOTS = 6
+# Discord's hard limits. The trimmer aims at 5800 including the content line,
+# which is outside Discord's 6000 embed budget, so a normal message keeps a margin.
+# At most 8 embeds: 6 cards, More games, and Needs attention.
+MAX_EMBEDS = 8
+DISCORD_MAX_EMBEDS = 10
 MAX_TOTAL_CHARS = 6000
 TOTAL_CHAR_TARGET = 5800
-MAX_DESCRIPTION_CHARS = 4000
 DESCRIPTION_HARD_MAX = 4096
 MAX_TITLE_CHARS = 256
+CONTENT_HARD_MAX = 2000
 
-DROP_LINE_CAP = 40
-CAMPAIGN_LINE_CAP = 15
-PROGRESS_LINE_CAP = 5
-UNLINKED_LINE_CAP = 20
-WARNING_GROUP_CAP = 10
+CARD_CAP = 6
+CARD_FLOOR = 3
+MORE_GAMES_CAP = 15
+MORE_GAMES_FLOOR = 5
+CLAIM_LINE_CAP = 4
+CLAIM_LINE_FLOOR = 2
+PROGRESS_LINE_CAP = 2
+CAMPAIGN_LINE_CAP = 2
+LOG_GROUP_CAP = 5
+LOG_GROUP_FLOOR = 2
+UNLINKED_NAME_CAP = 10
+MORE_BENEFIT_CAP = 3
+MORE_LINE_UNITS = 120
+
 PROGRESS_BAR_CELLS = 10
 NAME_CHAR_CAP = 80
-
-# a window shorter than this has no meaningful start to show in the header
-MIN_WINDOW_FOR_RANGE = timedelta(minutes=1)
-LOG_CHAR_CAP = 150
+LOG_CHAR_CAP = 100
 
 QUEUE_CAP = 500
 ERROR_GROUP_CAP = 100
-
-# generalized from the immediate-mode unlinked notification, which names one
-# game and one campaign. The digest lists every game underneath this sentence.
-UNLINKED_EXPLANATION = (
-    "A tracked game has an active campaign but its Twitch account isn't linked yet"
-    " - link it to start earning."
-)
-
-INVENTORY_SOURCE = "inventory"
-FOOTER_PREFIX = "TwitchDropsMiner v"
 LOG_PATH_HINT = "logs/TDM.log"
+BOX_ART_SIZE = "144x192"

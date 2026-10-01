@@ -228,18 +228,23 @@ class DiscordProvider(NotificationProvider):
             if channel.get("type") == 0
         ]
 
-    async def send(self, event_type: str, title: str, description: str) -> None:
+    async def send(
+        self,
+        event_type: str,
+        title: str,
+        description: str,
+        thumbnail_url: str | None = None,
+    ) -> None:
         if not self.is_configured:
             raise NotificationError("Discord: bot token and channel must be configured")
-        payload = {
-            "embeds": [
-                {
-                    "title": title,
-                    "description": description,
-                    "color": EVENT_COLORS.get(event_type, 0x808080),
-                }
-            ]
+        embed: dict[str, Any] = {
+            "title": title,
+            "description": description,
+            "color": EVENT_COLORS.get(event_type, 0x808080),
         }
+        if thumbnail_url:
+            embed["thumbnail"] = {"url": thumbnail_url}
+        payload = {"embeds": [embed]}
         timeout = aiohttp.ClientTimeout(total=REQUEST_TIMEOUT)
         async with aiohttp.ClientSession(timeout=timeout) as session:
             await self._request(
@@ -247,13 +252,21 @@ class DiscordProvider(NotificationProvider):
             )
         logger.info("Discord notification sent: %s", event_type)
 
-    async def send_digest(self, embeds: list[dict[str, Any]]) -> None:
+    async def send_digest(self, message: dict[str, Any]) -> None:
         """Post one digest message. The queue is only cleared by the caller after this returns."""
         if not self.is_configured:
             raise NotificationError("Discord: bot token and channel must be configured")
-        if not embeds:
+        content = str(message.get("content") or "")
+        embeds = message.get("embeds") or []
+        if not isinstance(embeds, list):
+            embeds = []
+        payload: dict[str, Any] = {}
+        if content:
+            payload["content"] = content
+        if embeds:
+            payload["embeds"] = embeds[:10]
+        if not payload:
             return
-        payload = {"embeds": embeds[:10]}
         timeout = aiohttp.ClientTimeout(total=REQUEST_TIMEOUT)
         async with aiohttp.ClientSession(timeout=timeout) as session:
             await self._request(

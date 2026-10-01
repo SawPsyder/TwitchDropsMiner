@@ -85,9 +85,9 @@ class NotificationProvider(ABC):
                 text = text.replace(secret, "***")
         return text
 
-    async def send_digest(self, embeds: list[dict[str, Any]]) -> None:
+    async def send_digest(self, message: dict[str, Any]) -> None:
         """
-        Deliver one digest message (a list of embeds).
+        Deliver one digest message (`content` plus `embeds`).
 
         Raises:
             NotificationError: If the message could not be delivered.
@@ -95,7 +95,13 @@ class NotificationProvider(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    async def send(self, event_type: str, title: str, description: str) -> None:
+    async def send(
+        self,
+        event_type: str,
+        title: str,
+        description: str,
+        thumbnail_url: str | None = None,
+    ) -> None:
         """
         Deliver a single notification.
 
