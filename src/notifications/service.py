@@ -50,6 +50,17 @@ if TYPE_CHECKING:
 logger = logging.getLogger(NOTIFICATIONS_LOGGER)
 
 URGENT_EVENTS = frozenset({"auth_attention", "mining_stalled"})
+# Events a digest can draw. Anything else in the persisted queue is ignored
+# at render, so it must not keep an empty window from being skipped.
+QUEUED_DIGEST_EVENTS = frozenset(
+    {
+        "drop_received",
+        "new_campaign",
+        "unlinked_tracked_game",
+        "mining_stalled",
+        "auth_attention",
+    }
+)
 RETRY_BACKOFF = timedelta(minutes=5)
 # coalesce a burst of queue/log writes into one disk save
 STATE_SAVE_DELAY = 2.0
@@ -668,17 +679,42 @@ class NotificationService:
         overflow = int(self._state.get("digest_error_overflow_count") or 0)
         return occurrences, overflow
 
-    def queued_count(self) -> int:
+    def _visible_queue_count(self) -> int:
+        """Queued events whose checkbox is on right now.
+
+        _providers_for only decides whether a new event is stored. The same
+        boxes are read again here, matching _render, so a toggle turned off
+        after enqueue no longer counts toward the window.
+        """
         queue = self._state.get("digest_queue") or []
+        if not isinstance(queue, list):
+            return 0
+        count = 0
+        for item in queue:
+            if not isinstance(item, dict):
+                continue
+            event_type = str(item.get("type") or "")
+            if event_type in QUEUED_DIGEST_EVENTS and self._event_enabled(event_type):
+                count += 1
+        return count
+
+    def queued_count(self) -> int:
         occurrences, overflow = self._error_totals()
-        return len(queue) + occurrences + overflow
+        return self._visible_queue_count() + occurrences + overflow
 
     def has_digest_content(self) -> bool:
-        """True when the window has anything other than a progress snapshot."""
-        if self._state.get("digest_queue"):
+        """True when a send would include something other than a progress snapshot.
+
+        Same gates as render: per-event checkboxes, the errors section, and
+        the queue-overflow note (that note is always shown). A live progress
+        snapshot by itself is not content.
+        """
+        if self._visible_queue_count():
             return True
         occurrences, overflow = self._error_totals()
-        return occurrences + overflow > 0
+        if occurrences + overflow > 0:
+            return True
+        return _coerce_count(self._state.get("digest_dropped")) > 0
 
     def _parse_stamp(self, value: object) -> datetime | None:
         if not isinstance(value, str) or not value:

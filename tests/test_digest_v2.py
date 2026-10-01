@@ -1206,3 +1206,105 @@ class DigestV2ServiceTests(unittest.IsolatedAsyncioTestCase):
             benefit_images=["https://img.example/badge.png"],
         )
         provider.send.assert_not_awaited()
+
+    async def test_warning_recorded_then_errors_off_skips_the_window(self):
+        service, provider = self._service()
+        logging.getLogger("TwitchDrops").warning("slow disk on %s", "ssd")
+        self.assertIn("slow disk", _blob(service._render(preview=False)))
+        self.assertTrue(service.has_digest_content())
+        self.assertEqual(service.queued_count(), 1)
+
+        service._settings.notifications["digest_sections"]["errors"] = False
+        hidden = service._render(preview=True)
+        self.assertNotIn("slow disk", _blob(hidden))
+        self.assertNotIn("warning", hidden["content"])
+        self.assertFalse(service.has_digest_content())
+        self.assertEqual(service.queued_count(), 0)
+        self.assertTrue(service._state["digest_error_groups"])
+
+        service._state["digest_next_at"] = "2000-01-01T00:00:00+00:00"
+        sent = await service.flush_digest()
+        self.assertFalse(sent)
+        provider.send_digest.assert_not_awaited()
+        self.assertEqual(service._state["digest_error_groups"], {})
+        self.assertTrue(service._state["last_digest"]["skipped"])
+
+    async def test_event_toggles_off_after_queue_skip_the_window(self):
+        service, provider = self._service()
+        await service.notify_drop_received("Game", ["Badge"])
+        await service.notify_mining_stalled("no channels")
+        await service.notify("auth_attention", "Sign in", "token expired")
+        await service.notify("new_campaign", "New campaign", "Camp", data={"game": "Camp"})
+        await service.notify(
+            "unlinked_tracked_game", "Link", "Game X", data={"game": "Game X"}
+        )
+        provider.send.assert_awaited()
+        self.assertEqual(service.queued_count(), 5)
+
+        events = service._settings.notifications["discord"]["events"]
+        for key in (
+            "drop_received",
+            "mining_stalled",
+            "auth_attention",
+            "new_campaign",
+            "unlinked_tracked_game",
+        ):
+            events[key] = False
+        hidden = service._render(preview=False)
+        blob = _blob(hidden)
+        self.assertEqual(hidden["content"], "Nothing new in the last 24 hours.")
+        for needle in ("Badge", "Mining stalled", "Sign-in", "Camp", "Game X"):
+            self.assertNotIn(needle, blob)
+        self.assertFalse(service.has_digest_content())
+        self.assertEqual(service.queued_count(), 0)
+        self.assertEqual(len(service._state["digest_queue"]), 5)
+
+        service._settings.notifications["mode"] = "immediate"
+        service.schedule_mode_switch_flush()
+        self.assertFalse(service._state.get("digest_flush_pending"))
+        self.assertIsNone(service._mode_switch_task)
+        service._settings.notifications["mode"] = "digest"
+
+        service._state["digest_next_at"] = "2000-01-01T00:00:00+00:00"
+        sent = await service.flush_digest()
+        self.assertFalse(sent)
+        provider.send_digest.assert_not_awaited()
+        self.assertEqual(service._state["digest_queue"], [])
+        self.assertTrue(service._state["last_digest"]["skipped"])
+
+    async def test_one_toggle_off_leaves_the_other_event(self):
+        service, _provider = self._service()
+        await service.notify_drop_received("Game", ["Badge"])
+        await service.notify_mining_stalled("no channels")
+        service._settings.notifications["discord"]["events"]["mining_stalled"] = False
+        shown = service._render(preview=False)
+        self.assertIn("1 drop claimed", shown["content"])
+        self.assertNotIn("stall", shown["content"])
+        self.assertIn("Badge", _blob(shown))
+        self.assertNotIn("Mining stalled", _blob(shown))
+        self.assertTrue(service.has_digest_content())
+        self.assertEqual(service.queued_count(), 1)
+
+    async def test_queue_overflow_stays_content_when_events_are_gated(self):
+        service, _provider = self._service()
+        await service.notify_drop_received("Game", ["Badge"])
+        service._settings.notifications["discord"]["events"]["drop_received"] = False
+        service._state["digest_dropped"] = 2
+        self.assertEqual(service.queued_count(), 0)
+        self.assertTrue(service.has_digest_content())
+        shown = _blob(service._render(preview=False))
+        self.assertIn("Queue was full: 2 older events weren't kept.", shown)
+
+    async def test_unknown_queue_type_is_not_content(self):
+        service, _provider = self._service()
+        service._state["digest_queue"] = [{"type": "mystery", "data": {}, "seq": 1}, "nope"]
+        self.assertFalse(service.has_digest_content())
+        self.assertEqual(service.queued_count(), 0)
+
+    async def test_urgent_immediate_off_still_queues(self):
+        service, provider = self._service(digest_urgent_immediate=False)
+        await service.notify_mining_stalled("no channels")
+        provider.send.assert_not_awaited()
+        self.assertEqual(len(service._state["digest_queue"]), 1)
+        self.assertFalse(service._state["digest_queue"][0]["data"]["alerted"])
+        self.assertIn("stall alert", service._render(preview=False)["content"])
