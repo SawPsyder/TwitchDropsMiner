@@ -1,3 +1,33 @@
+# Release Notes - v1.11.0
+
+Digest v2: the Discord digest is rebuilt around games. Each game gets its own card with a
+reward picture, totals move into the message text, and "Needs attention" now respects
+every toggle.
+
+### ✨ New Features
+- **One Card per Game**: Games are ranked (mining now, then most claims, then latest
+  claim) and the top six get their own card with a thumbnail. The latest claimed reward
+  image is used, then the in-progress reward, then the game's box art.
+- **More Games Overflow**: Everything past the top six is listed in a compact
+  "More games" card.
+- **No Header Embed**: Totals sit in the message text. The window and the next send time
+  are in the last card's footer.
+- **Drop Thumbnail in Immediate Mode**: A claimed drop's immediate message now shows the
+  reward picture. Immediate mode is otherwise unchanged.
+
+### 🐛 Bug Fixes
+- **Toggles Apply at Send Time**: "Needs attention" and every other block are filtered by
+  the current toggles when the digest is built, not only when an event is queued. Events
+  queued before a toggle was switched off no longer show up or count, and a digest with
+  nothing left to show is skipped.
+
+### 🎨 Improvements
+- **Urgent Alert Cap**: Stall and sign-in alerts are grouped as ×N, newest first, and
+  long lists end with "…and N more urgent" so log lines and the queue note always fit.
+- **Safe Thumbnails**: Image links are validated (https only, sane length). If Discord
+  rejects a message, it is retried once without pictures so a bad image can't block the
+  queue.
+
 # Release Notes - v1.10.1
 
 A polish release for digest mode: the Discord digest reads more cleanly, the notification
