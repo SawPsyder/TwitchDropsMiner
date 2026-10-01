@@ -175,7 +175,10 @@ class DiscordProvider(NotificationProvider):
                         retry_after=retry_seconds,
                     )
                 if response.status >= 400:
-                    raise NotificationError(f"Discord: request failed ({response.status})")
+                    raise NotificationError(
+                        f"Discord: request failed ({response.status})",
+                        status=response.status,
+                    )
                 if response.status == 204:
                     return None
                 return await response.json()
@@ -228,35 +231,78 @@ class DiscordProvider(NotificationProvider):
             if channel.get("type") == 0
         ]
 
-    async def send(self, event_type: str, title: str, description: str) -> None:
+    async def send(
+        self,
+        event_type: str,
+        title: str,
+        description: str,
+        thumbnail_url: str | None = None,
+    ) -> None:
         if not self.is_configured:
             raise NotificationError("Discord: bot token and channel must be configured")
-        payload = {
-            "embeds": [
-                {
-                    "title": title,
-                    "description": description,
-                    "color": EVENT_COLORS.get(event_type, 0x808080),
-                }
-            ]
+        embed: dict[str, Any] = {
+            "title": title,
+            "description": description,
+            "color": EVENT_COLORS.get(event_type, 0x808080),
         }
+        if thumbnail_url:
+            embed["thumbnail"] = {"url": thumbnail_url}
+        payload = {"embeds": [embed]}
         timeout = aiohttp.ClientTimeout(total=REQUEST_TIMEOUT)
         async with aiohttp.ClientSession(timeout=timeout) as session:
-            await self._request(
-                session, "POST", f"/channels/{self.channel_id}/messages", json=payload
-            )
+            await self._post_message(session, payload)
         logger.info("Discord notification sent: %s", event_type)
 
-    async def send_digest(self, embeds: list[dict[str, Any]]) -> None:
+    async def send_digest(self, message: dict[str, Any]) -> None:
         """Post one digest message. The queue is only cleared by the caller after this returns."""
         if not self.is_configured:
             raise NotificationError("Discord: bot token and channel must be configured")
-        if not embeds:
+        content = str(message.get("content") or "")
+        embeds = message.get("embeds") or []
+        if not isinstance(embeds, list):
+            embeds = []
+        payload: dict[str, Any] = {}
+        if content:
+            payload["content"] = content
+        if embeds:
+            payload["embeds"] = embeds[:10]
+        if not payload:
             return
-        payload = {"embeds": embeds[:10]}
         timeout = aiohttp.ClientTimeout(total=REQUEST_TIMEOUT)
         async with aiohttp.ClientSession(timeout=timeout) as session:
-            await self._request(
-                session, "POST", f"/channels/{self.channel_id}/messages", json=payload
-            )
+            await self._post_message(session, payload)
         logger.info("Discord digest sent (%d embeds)", len(embeds))
+
+    async def _post_message(self, session: aiohttp.ClientSession, payload: dict[str, Any]) -> None:
+        """POST a message. One HTTP 400 is retried with every thumbnail removed.
+
+        Discord rejects the whole message when an embed image URL is bad, and
+        the digest queue only clears after a 2xx. The second 400 is a real failure.
+        """
+        path = f"/channels/{self.channel_id}/messages"
+        try:
+            await self._request(session, "POST", path, json=payload)
+        except NotificationError as exc:
+            if exc.status != 400 or not _payload_has_thumbnail(payload):
+                raise
+            logger.warning("Discord rejected a thumbnail URL; retrying without images")
+            await self._request(session, "POST", path, json=_without_thumbnails(payload))
+
+
+def _payload_has_thumbnail(payload: dict[str, Any]) -> bool:
+    embeds = payload.get("embeds")
+    if not isinstance(embeds, list):
+        return False
+    return any(isinstance(embed, dict) and embed.get("thumbnail") for embed in embeds)
+
+
+def _without_thumbnails(payload: dict[str, Any]) -> dict[str, Any]:
+    embeds = payload.get("embeds")
+    if not isinstance(embeds, list):
+        return payload
+    cleaned: list[Any] = []
+    for embed in embeds:
+        if isinstance(embed, dict) and "thumbnail" in embed:
+            embed = {key: value for key, value in embed.items() if key != "thumbnail"}
+        cleaned.append(embed)
+    return {**payload, "embeds": cleaned}

@@ -225,6 +225,9 @@ class BaseDrop:
                 campaign=self.campaign.name,
                 drop_name=self.name,
                 channel=channel_name,
+                benefit_images=[benefit.image_url for benefit in self.benefits],
+                game_id=self.campaign.game.id,
+                game_box_art=self.campaign.game.box_art_url,
             )
         else:
             logger.error("Drop claim has potentially failed! Drop ID: %s", self.id)

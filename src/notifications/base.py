@@ -20,10 +20,18 @@ if TYPE_CHECKING:
 class NotificationError(Exception):
     """Raised when delivering a notification through a provider fails."""
 
-    def __init__(self, message: str = "", *, retry_after: float | None = None) -> None:
+    def __init__(
+        self,
+        message: str = "",
+        *,
+        retry_after: float | None = None,
+        status: int | None = None,
+    ) -> None:
         super().__init__(message)
         # seconds Discord asked us to wait (HTTP 429); None for every other failure
         self.retry_after = retry_after
+        # HTTP status for a failed Discord response, when the request got one
+        self.status = status
 
 
 # keys of NotificationEventSettings (src/config/settings.py) - also used as the
@@ -85,9 +93,9 @@ class NotificationProvider(ABC):
                 text = text.replace(secret, "***")
         return text
 
-    async def send_digest(self, embeds: list[dict[str, Any]]) -> None:
+    async def send_digest(self, message: dict[str, Any]) -> None:
         """
-        Deliver one digest message (a list of embeds).
+        Deliver one digest message (`content` plus `embeds`).
 
         Raises:
             NotificationError: If the message could not be delivered.
@@ -95,7 +103,13 @@ class NotificationProvider(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    async def send(self, event_type: str, title: str, description: str) -> None:
+    async def send(
+        self,
+        event_type: str,
+        title: str,
+        description: str,
+        thumbnail_url: str | None = None,
+    ) -> None:
         """
         Deliver a single notification.
 

@@ -31,7 +31,7 @@ from src.notifications.discord import (
 )
 from src.notifications.events import NotificationEvent
 from src.notifications.logging_handler import NOTIFICATIONS_LOGGER, register_service
-from src.notifications.render import render_digest
+from src.notifications.render import drop_thumbnail, render_digest
 from src.notifications.schedule import (
     invalid_timezone_env,
     local_timezone,
@@ -50,6 +50,17 @@ if TYPE_CHECKING:
 logger = logging.getLogger(NOTIFICATIONS_LOGGER)
 
 URGENT_EVENTS = frozenset({"auth_attention", "mining_stalled"})
+# Events a digest can draw. Anything else in the persisted queue is ignored
+# at render, so it must not keep an empty window from being skipped.
+QUEUED_DIGEST_EVENTS = frozenset(
+    {
+        "drop_received",
+        "new_campaign",
+        "unlinked_tracked_game",
+        "mining_stalled",
+        "auth_attention",
+    }
+)
 RETRY_BACKOFF = timedelta(minutes=5)
 # coalesce a burst of queue/log writes into one disk save
 STATE_SAVE_DELAY = 2.0
@@ -199,6 +210,29 @@ def _coerce_count(value: object) -> int:
         return max(0, int(value))
     except ValueError:
         return 0
+
+
+def _stored_url(value: object) -> str | None:
+    """A benefit or box-art URL as stored on an event. Empty becomes absent."""
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def _stored_game_id(value: object) -> int | str | None:
+    if isinstance(value, bool) or value is None:
+        return None
+    if isinstance(value, int):
+        return value
+    text = str(value).strip()
+    return text or None
+
+
+def _image_list(images: Iterable[object] | None) -> list[str | None]:
+    if images is None:
+        return []
+    return [_stored_url(image) for image in images]
 
 
 def short_discord_error(exc: NotificationError) -> str:
@@ -516,6 +550,7 @@ class NotificationService:
         providers = self._providers_for(event.type)
         if not providers:
             return
+        thumbnail = drop_thumbnail(event.data) if event.type == "drop_received" else None
         if self.mode == "digest":
             alerted = False
             if event.type in URGENT_EVENTS and self.urgent_immediate:
@@ -523,7 +558,9 @@ class NotificationService:
             event.data["alerted"] = alerted
             self._enqueue(event)
             return
-        await self._send_immediate(providers, event.type, title, description)
+        await self._send_immediate(
+            providers, event.type, title, description, thumbnail_url=thumbnail
+        )
 
     async def _send_immediate(
         self,
@@ -531,15 +568,24 @@ class NotificationService:
         event_type: str,
         title: str,
         description: str,
+        thumbnail_url: str | None = None,
     ) -> bool:
         """Send now, honouring cooldown. Returns True when at least one provider accepted it."""
         sent_any = False
         state_changed = False
         for provider in providers:
+            # the checkbox can flip while an earlier provider is awaiting Discord
+            if not provider.event_enabled(event_type):
+                continue
             if self._in_cooldown(provider.name, event_type):
                 continue
             try:
-                await provider.send(event_type, title, description)
+                if thumbnail_url:
+                    await provider.send(
+                        event_type, title, description, thumbnail_url=thumbnail_url
+                    )
+                else:
+                    await provider.send(event_type, title, description)
             except NotificationError as exc:
                 logger.warning(
                     "Notification failed for %s/%s: %s", provider.name, event_type, exc
@@ -633,17 +679,42 @@ class NotificationService:
         overflow = int(self._state.get("digest_error_overflow_count") or 0)
         return occurrences, overflow
 
-    def queued_count(self) -> int:
+    def _visible_queue_count(self) -> int:
+        """Queued events whose checkbox is on right now.
+
+        _providers_for only decides whether a new event is stored. The same
+        boxes are read again here, matching _render, so a toggle turned off
+        after enqueue no longer counts toward the window.
+        """
         queue = self._state.get("digest_queue") or []
+        if not isinstance(queue, list):
+            return 0
+        count = 0
+        for item in queue:
+            if not isinstance(item, dict):
+                continue
+            event_type = str(item.get("type") or "")
+            if event_type in QUEUED_DIGEST_EVENTS and self._event_enabled(event_type):
+                count += 1
+        return count
+
+    def queued_count(self) -> int:
         occurrences, overflow = self._error_totals()
-        return len(queue) + occurrences + overflow
+        return self._visible_queue_count() + occurrences + overflow
 
     def has_digest_content(self) -> bool:
-        """True when the window has anything other than a progress snapshot."""
-        if self._state.get("digest_queue"):
+        """True when a send would include something other than a progress snapshot.
+
+        Same gates as render: per-event checkboxes, the errors section, and
+        the queue-overflow note (that note is always shown). A live progress
+        snapshot by itself is not content.
+        """
+        if self._visible_queue_count():
             return True
         occurrences, overflow = self._error_totals()
-        return occurrences + overflow > 0
+        if occurrences + overflow > 0:
+            return True
+        return _coerce_count(self._state.get("digest_dropped")) > 0
 
     def _parse_stamp(self, value: object) -> datetime | None:
         if not isinstance(value, str) or not value:
@@ -710,7 +781,7 @@ class NotificationService:
 
     def _render(
         self, *, preview: bool, final: bool = False, now: datetime | None = None
-    ) -> list[dict[str, Any]]:
+    ) -> dict[str, Any]:
         now = now or datetime.now(UTC)
         window_start = self._parse_stamp(self._state.get("digest_window_start")) or now
         # A preview shows the send already on the clock. A digest going out now
@@ -725,6 +796,11 @@ class NotificationService:
         groups = self._state.get("digest_error_groups") or {}
         group_list = [dict(group) for group in groups.values()] if isinstance(groups, dict) else []
         sections = self._sections()
+        # Checkboxes are read here, not at enqueue. _providers_for only decides
+        # whether a new event is stored. A box turned off afterwards still has
+        # to hide that block and its content-line count. Log groups are the
+        # same: record_log_event skips new ones while the section is off, and
+        # include_errors hides groups that were stored before the switch.
         return render_digest(
             events=list(self._state.get("digest_queue") or []),
             error_groups=group_list,
@@ -738,9 +814,21 @@ class NotificationService:
             progress=self._progress_snapshot(),
             include_progress=sections.get("progress", True),
             include_errors=sections.get("errors", True),
+            include_drops=self._event_enabled("drop_received"),
+            include_campaigns=self._event_enabled("new_campaign"),
+            include_unlinked=self._event_enabled("unlinked_tracked_game"),
+            include_stalled=self._event_enabled("mining_stalled"),
+            include_auth=self._event_enabled("auth_attention"),
             version=__version__,
             preview=preview,
         )
+
+    def _event_enabled(self, event_type: str) -> bool:
+        """The Discord checkbox for this event, read at render time."""
+        provider = self.get_provider("discord")
+        if provider is None:
+            return False
+        return provider.event_enabled(event_type)
 
     def _window_snapshot(self) -> dict[str, Any]:
         """The queue and counts a send is about to consume. Later arrivals are not in it."""
@@ -899,10 +987,10 @@ class NotificationService:
         await self.flush_pending_state()
         render_time = datetime.now(UTC)
         snapshot = self._window_snapshot()
-        embeds = self._render(preview=False, final=final, now=render_time)
+        message = self._render(preview=False, final=final, now=render_time)
         self._sending = True
         try:
-            await provider.send_digest(embeds)
+            await provider.send_digest(message)
         except NotificationError as exc:
             raw_delay = (
                 exc.retry_after if exc.retry_after is not None else RETRY_BACKOFF.total_seconds()
@@ -938,8 +1026,8 @@ class NotificationService:
             provider = self.get_provider("discord")
             if not isinstance(provider, DiscordProvider) or not provider.is_configured:
                 raise NotificationError("Discord: bot token and channel must be configured")
-            embeds = self._render(preview=True)
-            await provider.send_digest(embeds)
+            message = self._render(preview=True)
+            await provider.send_digest(message)
 
     def schedule_mode_switch_flush(self) -> None:
         """Queue the final digest after a save that left digest mode with events waiting."""
@@ -1046,6 +1134,9 @@ class NotificationService:
         campaign: str = "",
         drop_name: str = "",
         channel: str = "",
+        benefit_images: Iterable[object] | None = None,
+        game_id: int | str | None = None,
+        game_box_art: object = None,
     ) -> None:
         benefit_list = [str(benefit) for benefit in benefits]
         benefit_text = ", ".join(benefit_list) or "a drop"
@@ -1059,6 +1150,9 @@ class NotificationService:
                 "drop": drop_name,
                 "benefits": benefit_list,
                 "channel": channel or "inventory",
+                "benefit_images": _image_list(benefit_images),
+                "game_id": _stored_game_id(game_id),
+                "game_box_art": _stored_url(game_box_art),
             },
         )
 
@@ -1094,6 +1188,9 @@ class NotificationService:
         *,
         starts_at: datetime | None = None,
         ends_at: datetime | None = None,
+        game_id: int | str | None = None,
+        game_box_art: object = None,
+        campaign_id: str | None = None,
     ) -> None:
         await self.notify(
             "new_campaign",
@@ -1102,8 +1199,11 @@ class NotificationService:
             data={
                 "game": game_name,
                 "campaign": campaign_name,
+                "campaign_id": campaign_id or None,
                 "starts_at": starts_at.isoformat() if starts_at is not None else None,
                 "ends_at": ends_at.isoformat() if ends_at is not None else None,
+                "game_id": _stored_game_id(game_id),
+                "game_box_art": _stored_url(game_box_art),
             },
         )
 
@@ -1148,26 +1248,46 @@ class NotificationService:
         seen = set(cast("list[str]", self._state.get("seen_campaigns", [])))
         is_first_run = not self._state.get("campaigns_seeded", False)
         current: set[str] = set()
-        new_entries: list[tuple[str, str, datetime | None, datetime | None]] = []
+        new_entries: list[
+            tuple[str, str, str, datetime | None, datetime | None, int | str | None, str | None]
+        ] = []
         for campaign in campaigns:
             if campaign.game.name.casefold() not in watch_set:
                 continue
             current.add(campaign.id)
             if campaign.id not in seen and not is_first_run:
+                game = campaign.game
                 new_entries.append(
                     (
-                        campaign.game.name,
+                        game.name,
                         campaign.name,
+                        str(campaign.id),
                         getattr(campaign, "starts_at", None),
                         getattr(campaign, "ends_at", None),
+                        _stored_game_id(getattr(game, "id", None)),
+                        _stored_url(getattr(game, "box_art_url", None)),
                     )
                 )
         self._state["seen_campaigns"] = sorted(current)
         self._state["campaigns_seeded"] = True
         self._mark_dirty()
-        for game_name, campaign_name, starts_at, ends_at in new_entries:
+        for (
+            game_name,
+            campaign_name,
+            campaign_id,
+            starts_at,
+            ends_at,
+            game_id,
+            game_box_art,
+        ) in new_entries:
             await self.notify_new_campaign(
-                game_name, campaign_name, starts_at=starts_at, ends_at=ends_at
+                game_name,
+                campaign_name,
+                starts_at=starts_at,
+                ends_at=ends_at,
+                game_id=game_id,
+                game_box_art=game_box_art,
+                campaign_id=campaign_id,
             )
 
     def get_status(self) -> dict[str, Any]:

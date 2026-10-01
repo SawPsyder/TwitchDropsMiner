@@ -641,6 +641,12 @@ class Twitch:
             drop = campaign.first_drop
             if drop is None:
                 continue
+            images: list[str | None] = []
+            for benefit in getattr(drop, "benefits", []) or []:
+                raw_image = getattr(benefit, "image_url", None)
+                text = str(raw_image).strip() if raw_image else ""
+                images.append(text or None)
+            box_art = getattr(campaign.game, "box_art_url", None)
             campaigns.append(
                 {
                     "game": campaign.game.name,
@@ -649,6 +655,9 @@ class Twitch:
                     "percent": int(drop.progress * 100),
                     "remaining_minutes": max(0, int(drop.remaining_minutes)),
                     "mining_now": bool(game_name) and campaign.game.name == game_name,
+                    "game_id": getattr(campaign.game, "id", None),
+                    "game_box_art": str(box_art).strip() if box_art else None,
+                    "benefit_images": images,
                 }
             )
         if channel_name and game_name:
@@ -662,6 +671,7 @@ class Twitch:
             "state": state,
             "channel": channel_name,
             "game": game_name,
+            "game_id": getattr(game, "id", None) if game is not None else None,
             "stalled_since": stalled.isoformat() if stalled is not None else None,
             "campaigns": campaigns,
         }
