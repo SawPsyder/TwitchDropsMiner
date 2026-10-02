@@ -1,3 +1,16 @@
+# Release Notes - v1.11.1
+
+A security release. Three dependencies are updated to fix six published advisories,
+including one critical and one high. There are no functional changes.
+
+### 🔒 Security
+- **aiohttp 3.14.3**: Fixes an out-of-bounds read in the C HTTP response parser (high),
+  HTTP request smuggling via WebSocket upgrade, and the WebSocket client accepting
+  compressed frames without negotiated permessage-deflate.
+- **anyio 4.14.2**: Fixes TLS certificate host-name spoofing through IDNA 2003 encoding
+  (critical) and process-pool workers hanging on undrained stderr.
+- **idna 3.15**: Fixes crafted inputs to `idna.encode()` bypassing the CVE-2024-3651 fix.
+
 # Release Notes - v1.11.0
 
 Digest v2: the Discord digest is rebuilt around games. Each game gets its own card with a
