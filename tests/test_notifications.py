@@ -17,7 +17,7 @@ from src.notifications.render import (
     discord_units,
     message_char_count,
     progress_bar,
-    render_digest,
+    render_digest as _render_digest,
 )
 from src.notifications.schedule import invalid_timezone_env, next_digest_at, timezone_name
 from src.utils import json_save
@@ -273,6 +273,7 @@ class TestNotificationService(unittest.IsolatedAsyncioTestCase):
 
     def make_service(self, settings=None):
         service = NotificationService(settings or FakeSettings(), state_path=self.state_path)
+        service._part_delay = 0
         provider = service.get_provider("discord")
         provider.send = AsyncMock()
         provider.send_digest = AsyncMock()
@@ -389,7 +390,10 @@ def _payload(**overrides):
         "progress": {"state": "idle", "campaigns": []},
     }
     kwargs.update(overrides)
-    return render_digest(**kwargs)
+    messages = _render_digest(**kwargs)
+    embeds = [embed for message in messages for embed in message.get("embeds") or []]
+    content = str(messages[0].get("content") or "") if messages else ""
+    return {"content": content, "embeds": embeds, "messages": messages}
 
 
 def _render(**overrides):
@@ -405,6 +409,7 @@ class TestDigestQueue(unittest.IsolatedAsyncioTestCase):
     def make_service(self, **overrides):
         settings = FakeSettings(digest_notification_settings(**overrides))
         service = NotificationService(settings, state_path=self.state_path)
+        service._part_delay = 0
         provider = service.get_provider("discord")
         provider.send = AsyncMock()
         provider.send_digest = AsyncMock()
@@ -1311,7 +1316,7 @@ class TestDigestRenderer(unittest.TestCase):
                 for index in range(20)
             ],
         }
-        payload = render_digest(
+        payload = _payload(
             events=events,
             error_groups=groups,
             window_start=now - timedelta(days=2),
@@ -1322,15 +1327,18 @@ class TestDigestRenderer(unittest.TestCase):
             progress=progress,
             version="1.9.1",
         )
-        self.assertIsInstance(payload, dict)
-        embeds = payload["embeds"]
-        self.assertLessEqual(len(embeds), 8)
-        self.assertLessEqual(message_char_count(embeds, payload["content"]), 6000)
-        self.assertLessEqual(message_char_count(embeds), 6000)
-        self.assertTrue(
-            all(discord_units(embed.get("description") or "") <= 4096 for embed in embeds)
-        )
-        titles = [embed["title"] for embed in embeds]
+        messages = payload["messages"]
+        self.assertLessEqual(len(messages), 5)
+        self.assertNotIn("More games", [embed.get("title") for embed in payload["embeds"]])
+        for message in messages:
+            embeds = message.get("embeds") or []
+            self.assertLessEqual(len(embeds), 10)
+            self.assertLessEqual(message_char_count(embeds, message.get("content") or ""), 6000)
+            self.assertLessEqual(message_char_count(embeds), 6000)
+            self.assertTrue(
+                all(discord_units(embed.get("description") or "") <= 4096 for embed in embeds)
+            )
+        titles = [embed["title"] for embed in payload["embeds"] if embed.get("title")]
         self.assertFalse(any(title.startswith("🎁") or title.startswith("📬") for title in titles))
 
     def test_longest_section_is_trimmed_before_a_shorter_one(self):
@@ -1359,12 +1367,11 @@ class TestDigestRenderer(unittest.TestCase):
                 )
             )
         embeds = _render(events=events, include_progress=False)
-        descriptions = {embed["title"]: embed["description"] for embed in embeds}
+        descriptions = {embed["title"]: embed["description"] for embed in embeds if embed.get("title")}
         self.assertIn("✓ +", descriptions["Huge"])
-        more = descriptions["More games"]
+        self.assertNotIn("More games", descriptions)
         for name in campaign_names:
-            self.assertIn(name, more)
-        self.assertNotIn("…and ", more)
+            self.assertIn(f"New: {name}", descriptions[name])
 
     def test_warning_only_attention_is_last_and_amber(self):
         now = datetime(2026, 9, 25, 12, 0, tzinfo=UTC)

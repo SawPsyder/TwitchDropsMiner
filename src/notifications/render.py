@@ -1,9 +1,13 @@
 """
-Pure renderer: queued events plus a progress snapshot become one Discord message.
+Pure renderer: queued events plus a progress snapshot become Discord messages.
 
-v2 is one card per game (at most six), then More games, then Needs attention.
-There is no header embed. Totals are the message content line. The window and
-the next send are the footer of the last embed.
+One card per game, in the same rank order as before, packed greedily into
+messages of at most 10 embeds and 5800 UTF-16 units. A game that only has a
+new campaign is a card too: its New: lines, and its box art when one exists.
+Needs attention is the last embed of the last message. The totals line is the
+first message's content. The window and the next send are the footer of the
+last embed. Follow-up messages have no content. Past five messages, the last
+one ends the game list with "…and N more games".
 
 `-#` subtext is not clearly supported inside embed descriptions (Discord's
 formatting reference describes it for chat messages; embed guides that list
@@ -15,6 +19,7 @@ from __future__ import annotations
 
 import re
 import unicodedata
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -25,24 +30,18 @@ from src.notifications.digest_style import (
     ATTENTION_WARNING_COLOR,
     BOX_ART_SIZE,
     CAMPAIGN_LINE_CAP,
-    CARD_CAP,
-    CARD_FLOOR,
     CLAIM_LINE_CAP,
-    CLAIM_LINE_FLOOR,
     CONTENT_HARD_MAX,
     DESCRIPTION_HARD_MAX,
+    DISCORD_MAX_EMBEDS,
+    FOOTER_HARD_MAX,
     GAME_COLOR,
     LOG_CHAR_CAP,
     LOG_GROUP_CAP,
-    LOG_GROUP_FLOOR,
     LOG_PATH_HINT,
-    MAX_EMBEDS,
+    MAX_DIGEST_MESSAGES,
     MAX_TITLE_CHARS,
     MAX_TOTAL_CHARS,
-    MORE_BENEFIT_CAP,
-    MORE_GAMES_CAP,
-    MORE_GAMES_FLOOR,
-    MORE_LINE_UNITS,
     NAME_CHAR_CAP,
     PROGRESS_BAR_CELLS,
     PROGRESS_LINE_CAP,
@@ -50,6 +49,11 @@ from src.notifications.digest_style import (
     UNLINKED_NAME_CAP,
 )
 from src.notifications.schedule import local_timezone
+
+
+# Bump when the shape of a saved digest part changes. An in-flight digest
+# rendered with a different schema is discarded and built again from the queue.
+RENDER_SCHEMA = 1
 
 
 _MARKDOWN = re.compile(r"([\\*_~|>#`])")
@@ -296,12 +300,6 @@ def progress_bar(percent: int) -> str:
     return f"`{bar} {clamped:>3}%`"
 
 
-def _percent_code(percent: int) -> str:
-    """The percentage half of `progress_bar`, without the bar. Used in More games."""
-    clamped = max(0, min(100, int(percent)))
-    return f"`{clamped:>3}%`"
-
-
 def _progress_label(item: dict[str, Any]) -> str:
     """
     What the row is about besides the game.
@@ -506,6 +504,7 @@ class _Game:
     claims: list[dict[str, Any]] = field(default_factory=list)
     campaigns: list[dict[str, Any]] = field(default_factory=list)
     progress: list[dict[str, Any]] = field(default_factory=list)
+    event_seqs: list[int] = field(default_factory=list)
     mining_now: bool = False
 
     def remember_name(self, name: object) -> None:
@@ -514,10 +513,10 @@ class _Game:
             self.name = text
 
 
-def _claim_line_total(games: dict[str, _Game]) -> int:
+def _claim_line_total(games: Iterable[_Game]) -> int:
     """Claims these cards account for. A ×N line counts as N, including +N more."""
     return sum(
-        sum(count for _name, count in _collapsed_rewards(game.claims)) for game in games.values()
+        sum(count for _name, count in _collapsed_rewards(game.claims)) for game in games
     )
 
 
@@ -555,9 +554,18 @@ def _fold_legacy_buckets(games: dict[str, _Game]) -> dict[str, _Game]:
         target.claims.extend(game.claims)
         target.campaigns.extend(game.campaigns)
         target.progress.extend(game.progress)
+        target.event_seqs.extend(game.event_seqs)
         target.mining_now = target.mining_now or game.mining_now
         target.remember_name(game.name)
     return folded
+
+
+def _event_seq(event: dict[str, Any]) -> int | None:
+    """Queue seq stamped on an event, or None when this render has no queue."""
+    seq = event.get("seq")
+    if isinstance(seq, bool) or not isinstance(seq, int) or seq <= 0:
+        return None
+    return seq
 
 
 def _games_from(
@@ -587,6 +595,9 @@ def _games_from(
         if not name and not game_id:
             continue
         game = bucket(game_id, name)
+        seq = _event_seq(event)
+        if seq is not None:
+            game.event_seqs.append(seq)
         if kind == "drop_received":
             game.claims.append(event)
         else:
@@ -700,61 +711,6 @@ def _card_description(
         visible_progress = game.progress if include_progress else []
         lines.extend(_new_lines(game.campaigns, visible_progress, window_end))
     return _join(lines)
-
-
-def _more_line(
-    game: _Game,
-    *,
-    include_drops: bool,
-    include_progress: bool,
-    include_campaigns: bool,
-    window_end: datetime,
-) -> str:
-    name = escape_discord(game.name or "a game")
-    head = f"**{name}**"
-    if include_drops and game.claims:
-        collapsed = _collapsed_rewards(game.claims)
-        shown = collapsed[:MORE_BENEFIT_CAP]
-        rest = sum(count for _reward, count in collapsed[MORE_BENEFIT_CAP:])
-        body = ", ".join(_reward_text(reward, count) for reward, count in shown)
-        if rest:
-            body = f"{body}, +{rest}" if body else f"+{rest}"
-        line = f"{head} · {body}" if body else head
-    elif include_progress and game.progress:
-        row = _ordered_progress(game.progress)[0]
-        label = _progress_label(row)
-        about = f" {escape_discord(label)}" if label else ""
-        line = f"{head} · {_percent_code(int(row.get('percent') or 0))}{about}"
-    elif include_campaigns and game.campaigns:
-        ordered = sorted(game.campaigns, key=_campaign_sort_key)
-        count = len(ordered)
-        first = ordered[0]
-        ends = _parse_stamp(first.get("ends_at"))
-        starts = _parse_stamp(first.get("starts_at"))
-        if _campaign_not_started(first, window_end) and starts is not None:
-            when = f"starts {discord_tag(starts, 'R')}"
-        elif ends is not None:
-            when = f"ends {discord_tag(ends, 'R')}"
-        else:
-            when = ""
-        if count == 1:
-            line = f"{head} · new campaign, {when}" if when else f"{head} · new campaign"
-        elif when:
-            line = f"{head} · {count} new campaigns, first {when}"
-        else:
-            line = f"{head} · {count} new campaigns"
-    else:
-        return ""
-    return _safe_truncate(line, MORE_LINE_UNITS)
-
-
-def _more_description(lines: list[str], cap: int) -> str:
-    shown = lines[:cap]
-    hidden = len(lines) - len(shown)
-    if hidden:
-        noun = "game" if hidden == 1 else "games"
-        shown.append(f"…and {hidden} more {noun}")
-    return _join(shown)
 
 
 # Spec section 5: the stall block, then sign-in. Within a block, newest first.
@@ -1025,43 +981,6 @@ def _footer(
     return " · ".join(parts)
 
 
-def _has_attention(payload: dict[str, Any]) -> bool:
-    embeds = payload.get("embeds") or []
-    return any(
-        isinstance(embed, dict) and str(embed.get("title") or "").startswith("⚠️")
-        for embed in embeds
-    )
-
-
-def _attention_description_budget(payload: dict[str, Any]) -> int:
-    """Room left for the Needs attention description inside the 5800 target.
-
-    The footer sits on that embed, so it counts here. The description already
-    on it does not: this is the budget a refit is allowed to use.
-    """
-    content = str(payload.get("content") or "")
-    embeds = payload.get("embeds") or []
-    footer = ""
-    used = discord_units(content) + discord_units("⚠️ Needs attention")
-    if isinstance(embeds, list):
-        for embed in embeds:
-            if not isinstance(embed, dict):
-                continue
-            foot = embed.get("footer") or {}
-            if isinstance(foot, dict) and foot.get("text"):
-                footer = str(foot.get("text") or "")
-            if str(embed.get("title") or "").startswith("⚠️"):
-                continue
-            used += discord_units(embed.get("title") or "")
-            used += discord_units(embed.get("description") or "")
-    used += discord_units(footer)
-    embed_used = used - discord_units(content)
-    return max(
-        0,
-        min(DESCRIPTION_HARD_MAX, TOTAL_CHAR_TARGET - used, MAX_TOTAL_CHARS - embed_used),
-    )
-
-
 def _within_budget(payload: dict[str, Any]) -> bool:
     embeds = payload["embeds"]
     content = str(payload.get("content") or "")
@@ -1071,11 +990,16 @@ def _within_budget(payload: dict[str, Any]) -> bool:
         return False
     if discord_units(content) > CONTENT_HARD_MAX:
         return False
-    return all(
-        discord_units(embed.get("description") or "") <= DESCRIPTION_HARD_MAX
-        and discord_units(embed.get("title") or "") <= MAX_TITLE_CHARS
-        for embed in embeds
-    )
+    for embed in embeds:
+        if discord_units(embed.get("description") or "") > DESCRIPTION_HARD_MAX:
+            return False
+        if discord_units(embed.get("title") or "") > MAX_TITLE_CHARS:
+            return False
+        footer = embed.get("footer") or {}
+        footer_text = footer.get("text") if isinstance(footer, dict) else ""
+        if discord_units(footer_text or "") > FOOTER_HARD_MAX:
+            return False
+    return True
 
 
 def _place_footer(embeds: list[dict[str, Any]], footer: str, window_end: datetime) -> None:
@@ -1088,74 +1012,186 @@ def _place_footer(embeds: list[dict[str, Any]], footer: str, window_end: datetim
     embeds[-1]["timestamp"] = _aware(window_end).astimezone(UTC).isoformat()
 
 
-def _hard_truncate(payload: dict[str, Any], footer: str, window_end: datetime) -> dict[str, Any]:
-    """Last resort. The staged trims are what actually fire."""
-    embeds: list[dict[str, Any]] = payload["embeds"]
-    content = str(payload.get("content") or "")
-    for _ in range(20000):
-        _place_footer(embeds, footer, window_end)
-        current = {"content": content, "embeds": embeds}
-        if _within_budget(current) and len(embeds) <= MAX_EMBEDS:
-            return current
-        if discord_units(content) > CONTENT_HARD_MAX:
-            content = _safe_truncate(content, CONTENT_HARD_MAX)
-            continue
-        if not embeds:
-            content = _safe_truncate(content, TOTAL_CHAR_TARGET)
-            return {"content": content, "embeds": []}
-        # Game cards and More games give way first. Cutting Needs attention
-        # drops the queue note and the log lines off the end of that embed.
-        candidates = [
-            index
-            for index, embed in enumerate(embeds)
-            if not str(embed.get("title") or "").startswith("⚠️")
-        ]
-        pool = candidates or list(range(len(embeds)))
-        victim = max(pool, key=lambda index: discord_units(embeds[index].get("description") or ""))
-        description = str(embeds[victim].get("description") or "")
-        others = message_char_count(embeds, content) - discord_units(description)
-        embed_others = _embed_units(embeds) - discord_units(description)
-        budget = min(
-            DESCRIPTION_HARD_MAX,
-            TOTAL_CHAR_TARGET - others,
-            MAX_TOTAL_CHARS - embed_others,
-        )
-        if budget < 1 or len(embeds) > MAX_EMBEDS:
-            embeds.pop(victim)
-            continue
-        shortened = _safe_truncate(description, budget)
-        if not shortened or shortened == description:
-            embeds.pop(victim)
-            continue
-        embeds[victim]["description"] = shortened
-    _place_footer(embeds, footer, window_end)
-    return {"content": content, "embeds": embeds}
+def _clone_embeds(embeds: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [dict(embed) for embed in embeds]
 
 
-def _assemble(
-    games: dict[str, _Game],
-    events: list[dict[str, Any]],
-    *,
-    progress: dict[str, Any] | None,
-    error_groups: list[dict[str, Any]],
-    overflow_types: int,
-    dropped_count: int,
-    window_end: datetime,
-    footer: str,
+def _fits(
+    embeds: Sequence[dict[str, Any]],
     content: str,
-    include_drops: bool,
-    include_campaigns: bool,
-    include_progress: bool,
-    include_unlinked: bool,
-    include_stalled: bool,
-    include_auth: bool,
-    include_errors: bool,
-    claim_cap: int,
-    more_cap: int,
-    log_cap: int,
-    card_limit: int,
-    attention_budget: int,
+    footer: str | None,
+    window_end: datetime,
+) -> bool:
+    """True when these embeds fit in one Discord message, footer included when set."""
+    if len(embeds) > DISCORD_MAX_EMBEDS:
+        return False
+    trial = _clone_embeds(embeds)
+    if footer is not None:
+        if not trial:
+            return False
+        _place_footer(trial, footer, window_end)
+    return _within_budget({"content": content, "embeds": trial})
+
+
+def _finish_message(
+    embeds: Sequence[dict[str, Any]],
+    content: str,
+    footer: str | None,
+    window_end: datetime,
 ) -> dict[str, Any]:
+    body = _clone_embeds(embeds)
+    if footer and body:
+        _place_footer(body, footer, window_end)
+    message: dict[str, Any] = {"embeds": body}
+    if content:
+        message["content"] = content
+    return message
+
+
+def _overflow_embed(hidden: int) -> dict[str, Any]:
+    noun = "game" if hidden == 1 else "games"
+    return {"description": f"…and {hidden} more {noun}", "color": GAME_COLOR}
+
+
+def _description_budget(title: str, content: str, footer: str, extra: int = 0) -> int:
+    """UTF-16 units left for one description beside the content line and footer."""
+    used = discord_units(content) + discord_units(title) + discord_units(footer) + extra
+    embed_used = discord_units(title) + discord_units(footer) + extra
+    return max(
+        0,
+        min(DESCRIPTION_HARD_MAX, TOTAL_CHAR_TARGET - used, MAX_TOTAL_CHARS - embed_used),
+    )
+
+
+def _shrink_description(embed: dict[str, Any], budget: int) -> dict[str, Any]:
+    clone = dict(embed)
+    clone["description"] = _safe_truncate(str(clone.get("description") or ""), budget)
+    return clone
+
+
+def _max_prefix(cards: Sequence[dict[str, Any]], content: str, window_end: datetime) -> int:
+    """How many leading cards fit in one message that is not the last one."""
+    best = 0
+    lo = 1
+    hi = min(len(cards), DISCORD_MAX_EMBEDS)
+    while lo <= hi:
+        mid = (lo + hi) // 2
+        if _fits(cards[:mid], content, None, window_end):
+            best = mid
+            lo = mid + 1
+        else:
+            hi = mid - 1
+    return best
+
+
+def _try_pack(
+    cards: Sequence[dict[str, Any]],
+    tail: Sequence[dict[str, Any]],
+    content: str,
+    footer: str,
+    window_end: datetime,
+    max_messages: int,
+) -> tuple[list[dict[str, Any]], list[int]] | None:
+    """Pack greedily. `tail` (the overflow line, then Needs attention) stays on the last message.
+
+    The second list is how many game cards each message holds. Tail embeds are not cards.
+    """
+    remaining = list(cards)
+    messages: list[dict[str, Any]] = []
+    counts: list[int] = []
+    while True:
+        if len(messages) >= max_messages:
+            return None
+        msg_content = content if not messages else ""
+        closing = remaining + list(tail)
+        if _fits(closing, msg_content, footer if closing else None, window_end):
+            if closing:
+                messages.append(_finish_message(closing, msg_content, footer, window_end))
+            elif msg_content:
+                messages.append({"content": msg_content, "embeds": []})
+            else:
+                messages.append({"embeds": []})
+            counts.append(len(remaining))
+            return messages, counts
+        if len(messages) == max_messages - 1:
+            return None
+        take = _max_prefix(remaining, msg_content, window_end)
+        if take <= 0:
+            return None
+        messages.append(_finish_message(remaining[:take], msg_content, None, window_end))
+        counts.append(take)
+        remaining = remaining[take:]
+
+
+def _pack_messages(
+    cards: Sequence[dict[str, Any]],
+    attention: dict[str, Any] | None,
+    content: str,
+    footer: str,
+    window_end: datetime,
+) -> tuple[list[dict[str, Any]], int, list[int]]:
+    """Messages in send order, how many leading cards they include, and cards per message."""
+
+    def attempt(shown: int) -> tuple[list[dict[str, Any]], list[int]] | None:
+        hidden = len(cards) - shown
+        tail: list[dict[str, Any]] = []
+        if hidden:
+            tail.append(_overflow_embed(hidden))
+        if attention is not None:
+            tail.append(attention)
+        return _try_pack(cards[:shown], tail, content, footer, window_end, MAX_DIGEST_MESSAGES)
+
+    packed = attempt(len(cards))
+    if packed is not None:
+        messages, counts = packed
+        return messages, len(cards), counts
+
+    best_messages: list[dict[str, Any]] | None = None
+    best_counts: list[int] = []
+    best = 0
+    lo = 0
+    hi = max(0, len(cards) - 1)
+    while lo <= hi:
+        mid = (lo + hi) // 2
+        trial = attempt(mid)
+        if trial is not None:
+            best = mid
+            best_messages, best_counts = trial
+            lo = mid + 1
+        else:
+            hi = mid - 1
+    if best_messages is not None:
+        return best_messages, best, best_counts
+
+    # Attention alone was still over the budget. Cut its description and keep the games line.
+    hidden = len(cards)
+    overflow = _overflow_embed(hidden) if hidden else None
+    extra = discord_units((overflow or {}).get("description") or "")
+    title = str((attention or {}).get("title") or "")
+    shrunk = attention
+    if attention is not None:
+        shrunk = _shrink_description(
+            attention, _description_budget(title, content, footer, extra)
+        )
+    tail = [embed for embed in (overflow, shrunk) if embed is not None]
+    fallback = _try_pack([], tail, content, footer, window_end, MAX_DIGEST_MESSAGES)
+    if fallback is not None:
+        messages, counts = fallback
+        return messages, 0, counts
+    if content:
+        return [{"content": _safe_truncate(content, TOTAL_CHAR_TARGET), "embeds": []}], 0, [0]
+    return [{"embeds": []}], 0, [0]
+
+
+def _ordered_games(
+    games: dict[str, _Game],
+    *,
+    include_drops: bool,
+    include_progress: bool,
+    include_campaigns: bool,
+) -> list[_Game]:
+    """Claim and progress games first, in rank order, then campaign-only games."""
+
     def eligible(game: _Game) -> bool:
         if include_drops and game.claims:
             return True
@@ -1170,8 +1206,7 @@ def _assemble(
             game, include_drops=include_drops, include_progress=include_progress
         ),
     )
-    cards = ranked[:card_limit]
-    more_games = ranked[card_limit:] + sorted(
+    fresh = sorted(
         (game for game in games.values() if new_only(game)),
         key=lambda game: (
             _campaign_sort_key(min(game.campaigns, key=_campaign_sort_key))
@@ -1180,53 +1215,51 @@ def _assemble(
             game.name.casefold(),
         ),
     )
-    embeds: list[dict[str, Any]] = []
-    for game in cards:
-        description = _card_description(
-            game,
-            claim_cap=claim_cap,
-            include_drops=include_drops,
-            include_progress=include_progress,
-            include_campaigns=include_campaigns,
-            progress=progress,
-            window_end=window_end,
-        )
-        if not description:
-            continue
-        embed: dict[str, Any] = {
-            "title": _utf16_prefix(escape_discord(game.name or "a game"), MAX_TITLE_CHARS),
-            "description": description,
-            "color": GAME_COLOR,
-        }
-        image = _thumbnail(game, use_claims=include_drops)
-        if image:
-            embed["thumbnail"] = {"url": image}
-        embeds.append(embed)
+    return ranked + fresh
 
-    more_lines = [
-        line
-        for line in (
-            _more_line(
-                game,
-                include_drops=include_drops,
-                include_progress=include_progress,
-                include_campaigns=include_campaigns,
-                window_end=window_end,
-            )
-            for game in more_games
-        )
-        if line
-    ]
-    more_description = _more_description(more_lines, more_cap)
-    if more_description:
-        embeds.append(
-            {
-                "title": "More games",
-                "description": more_description,
-                "color": GAME_COLOR,
-            }
-        )
 
+def _game_card(
+    game: _Game,
+    *,
+    include_drops: bool,
+    include_progress: bool,
+    include_campaigns: bool,
+    progress: dict[str, Any] | None,
+    window_end: datetime,
+) -> dict[str, Any] | None:
+    description = _card_description(
+        game,
+        claim_cap=CLAIM_LINE_CAP,
+        include_drops=include_drops,
+        include_progress=include_progress,
+        include_campaigns=include_campaigns,
+        progress=progress,
+        window_end=window_end,
+    )
+    if not description:
+        return None
+    embed: dict[str, Any] = {
+        "title": _utf16_prefix(escape_discord(game.name or "a game"), MAX_TITLE_CHARS),
+        "description": description,
+        "color": GAME_COLOR,
+    }
+    image = _thumbnail(game, use_claims=include_drops)
+    if image:
+        embed["thumbnail"] = {"url": image}
+    return embed
+
+
+def _attention_embed(
+    events: list[dict[str, Any]],
+    error_groups: list[dict[str, Any]],
+    overflow_types: int,
+    dropped_count: int,
+    *,
+    include_stalled: bool,
+    include_auth: bool,
+    include_unlinked: bool,
+    include_errors: bool,
+) -> dict[str, Any] | None:
     attention = _attention(
         events,
         error_groups,
@@ -1236,22 +1269,62 @@ def _assemble(
         include_auth=include_auth,
         include_unlinked=include_unlinked,
         include_errors=include_errors,
-        log_cap=log_cap,
-        description_budget=attention_budget,
+        log_cap=LOG_GROUP_CAP,
+        description_budget=DESCRIPTION_HARD_MAX,
     )
-    if attention is not None:
-        description, color = attention
-        embeds.append(
-            {
-                "title": "⚠️ Needs attention",
-                "description": _safe_truncate(description, DESCRIPTION_HARD_MAX),
-                "color": color,
-            }
-        )
+    if attention is None:
+        return None
+    description, color = attention
+    return {
+        "title": "⚠️ Needs attention",
+        "description": _safe_truncate(description, DESCRIPTION_HARD_MAX),
+        "color": color,
+    }
 
-    embeds = embeds[:MAX_EMBEDS]
-    _place_footer(embeds, footer, window_end)
-    return {"content": content, "embeds": embeds}
+
+def _attention_seqs(
+    events: list[dict[str, Any]],
+    *,
+    include_stalled: bool,
+    include_auth: bool,
+    include_unlinked: bool,
+) -> list[int]:
+    """Queue seqs that land in Needs attention, which is always the last message."""
+    wanted: set[str] = set()
+    if include_stalled:
+        wanted.add("mining_stalled")
+    if include_auth:
+        wanted.add("auth_attention")
+    if include_unlinked:
+        wanted.add("unlinked_tracked_game")
+    seqs: list[int] = []
+    for event in events:
+        if event.get("type") not in wanted:
+            continue
+        seq = _event_seq(event)
+        if seq is not None:
+            seqs.append(seq)
+    return seqs
+
+
+def _stamp_part_seqs(
+    messages: list[dict[str, Any]],
+    counts: list[int],
+    paired: Sequence[tuple[_Game, dict[str, Any]]],
+    attention_seqs: list[int],
+) -> None:
+    """Remember which queue seqs each message delivered, so a later reset can skip them."""
+    offset = 0
+    last = len(messages) - 1
+    for index, message in enumerate(messages):
+        count = counts[index] if index < len(counts) else 0
+        seqs: list[int] = []
+        for game, _card in paired[offset : offset + count]:
+            seqs.extend(game.event_seqs)
+        offset += count
+        if index == last:
+            seqs.extend(attention_seqs)
+        message["_event_seqs"] = seqs
 
 
 def _count(events: list[dict[str, Any]], kind: str) -> int:
@@ -1293,17 +1366,18 @@ def render_digest(
     include_auth: bool = True,
     version: str,
     preview: bool = False,
-) -> dict[str, Any]:
+) -> list[dict[str, Any]]:
     """
-    Build the one Discord message for this digest window.
+    Build the Discord messages for this digest window, in send order.
 
     Every gate is the caller's settings at render time. A toggle turned off
     after the event was queued still hides that block and its content-line count.
     `events` are serialized NotificationEvent dicts. `error_groups` are the
     aggregated WARNING/ERROR records (`level`, `count`, `latest`, `last_ts`).
-    Counts are the real totals, including claims later trimmed. The drop total
-    sums the same counts the cards show: a ×N line counts as N, and +N more
-    (on a card or in More games) is the claims hidden behind it.
+    The drop total counts every claim in the window, including claims on games
+    the five-message cap leaves off the card list. A ×N line counts as N, and
+    +N more counts the claims hidden inside a card. New campaigns are counted
+    the same way, including campaigns on games that did not get a card.
     """
     # The footer names the period. The embed timestamp is the end of the window.
     window_end = _aware(window_end)
@@ -1314,27 +1388,50 @@ def render_digest(
     overflow_types = error_overflow_types if include_errors else 0
     overflow_count = error_overflow_count if include_errors else 0
 
-    # Built before the content line so the drop total matches the reward lines.
     # Progress rows stay on the buckets so a claim-eligible game still ranks
     # first while it is being mined. Display and eligibility follow the toggle.
     games = _games_from(events, progress)
-    drop_count = _claim_line_total(games) if include_drops else 0
+    ordered = _ordered_games(
+        games,
+        include_drops=include_drops,
+        include_progress=include_progress,
+        include_campaigns=include_campaigns,
+    )
+    paired: list[tuple[_Game, dict[str, Any]]] = []
+    for game in ordered:
+        card = _game_card(
+            game,
+            include_drops=include_drops,
+            include_progress=include_progress,
+            include_campaigns=include_campaigns,
+            progress=progress,
+            window_end=window_end,
+        )
+        if card is not None:
+            paired.append((game, card))
+
     campaign_count = _count(events, "new_campaign") if include_campaigns else 0
     stall_count = _count(events, "mining_stalled") if include_stalled else 0
     auth_count = _count(events, "auth_attention") if include_auth else 0
     unlinked_count = _unlinked_total(events) if include_unlinked else 0
     warning_count = _warning_total(groups, overflow_count) if include_errors else 0
 
-    content = _content_line(
-        preview=preview,
-        interval_minutes=interval_minutes,
-        drop_count=drop_count,
-        campaign_count=campaign_count,
-        stall_count=stall_count,
-        auth_count=auth_count,
-        unlinked_count=unlinked_count,
-        warning_count=warning_count,
-    )
+    def totals(drop_count: int) -> str:
+        return _content_line(
+            preview=preview,
+            interval_minutes=interval_minutes,
+            drop_count=drop_count,
+            campaign_count=campaign_count,
+            stall_count=stall_count,
+            auth_count=auth_count,
+            unlinked_count=unlinked_count,
+            warning_count=warning_count,
+        )
+
+    # The header counts every claim, including games the five-message cap hides.
+    # Pack against that same line so the message that is sent still fits.
+    upper_drops = _claim_line_total(game for game, _card in paired) if include_drops else 0
+    content = totals(upper_drops)
     footer = _footer(
         preview=preview,
         interval_minutes=interval_minutes,
@@ -1342,69 +1439,41 @@ def render_digest(
         window_end=window_end,
         version=version,
     )
-    eligible_count = sum(
-        1
-        for game in games.values()
-        if (include_drops and game.claims) or (include_progress and game.progress)
+    attention = _attention_embed(
+        events,
+        groups,
+        overflow_types,
+        max(0, dropped_count),
+        include_stalled=include_stalled,
+        include_auth=include_auth,
+        include_unlinked=include_unlinked,
+        include_errors=include_errors,
     )
-    claim_cap = CLAIM_LINE_CAP
-    more_cap = MORE_GAMES_CAP
-    log_cap = LOG_GROUP_CAP
-    card_limit = min(CARD_CAP, eligible_count)
+    if attention is not None:
+        extra = discord_units(_overflow_embed(max(len(paired), 1))["description"])
+        budget = _description_budget(str(attention["title"]), content, footer, extra)
+        if discord_units(str(attention.get("description") or "")) > budget:
+            attention = _shrink_description(attention, budget)
 
-    def build(
-        claim: int, more: int, logs: int, cards: int, attention_budget: int = DESCRIPTION_HARD_MAX
-    ) -> dict[str, Any]:
-        return _assemble(
-            games,
+    if not paired and attention is None:
+        return [{"content": content, "embeds": []}]
+
+    messages, _shown, counts = _pack_messages(
+        [card for _game, card in paired],
+        attention,
+        content,
+        footer,
+        window_end,
+    )
+    attention_seqs = (
+        _attention_seqs(
             events,
-            progress=progress,
-            error_groups=groups,
-            overflow_types=overflow_types,
-            dropped_count=max(0, dropped_count),
-            window_end=window_end,
-            footer=footer,
-            content=content,
-            include_drops=include_drops,
-            include_campaigns=include_campaigns,
-            include_progress=include_progress,
-            include_unlinked=include_unlinked,
             include_stalled=include_stalled,
             include_auth=include_auth,
-            include_errors=include_errors,
-            claim_cap=claim,
-            more_cap=more,
-            log_cap=logs,
-            card_limit=cards,
-            attention_budget=attention_budget,
+            include_unlinked=include_unlinked,
         )
-
-    payload = build(claim_cap, more_cap, log_cap, card_limit)
-    while not _within_budget(payload) and more_cap > MORE_GAMES_FLOOR:
-        more_cap -= 1
-        payload = build(claim_cap, more_cap, log_cap, card_limit)
-    if not _within_budget(payload) and claim_cap > CLAIM_LINE_FLOOR:
-        claim_cap = CLAIM_LINE_FLOOR
-        payload = build(claim_cap, more_cap, log_cap, card_limit)
-    if not _within_budget(payload) and log_cap > LOG_GROUP_FLOOR:
-        log_cap = LOG_GROUP_FLOOR
-        payload = build(claim_cap, more_cap, log_cap, card_limit)
-    while not _within_budget(payload) and card_limit > CARD_FLOOR:
-        card_limit -= 1
-        payload = build(claim_cap, more_cap, log_cap, card_limit)
-    # Cards and More games have already been trimmed. Only then shrink urgent
-    # lines so the queue note and the log lines still fit in the 5800 budget.
-    if not _within_budget(payload) and _has_attention(payload):
-        payload = build(
-            claim_cap,
-            more_cap,
-            log_cap,
-            card_limit,
-            attention_budget=_attention_description_budget(payload),
-        )
-    if not _within_budget(payload):
-        payload = _hard_truncate(payload, footer, window_end)
-    # an empty window has no embeds, so it has no footer either
-    if not payload["embeds"]:
-        return {"content": content, "embeds": []}
-    return payload
+        if attention is not None
+        else []
+    )
+    _stamp_part_seqs(messages, counts, paired, attention_seqs)
+    return messages

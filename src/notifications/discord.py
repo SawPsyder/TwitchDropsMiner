@@ -254,24 +254,16 @@ class DiscordProvider(NotificationProvider):
         logger.info("Discord notification sent: %s", event_type)
 
     async def send_digest(self, message: dict[str, Any]) -> None:
-        """Post one digest message. The queue is only cleared by the caller after this returns."""
+        """Post one digest message. The queue is only cleared by the caller after every part returns."""
         if not self.is_configured:
             raise NotificationError("Discord: bot token and channel must be configured")
-        content = str(message.get("content") or "")
-        embeds = message.get("embeds") or []
-        if not isinstance(embeds, list):
-            embeds = []
-        payload: dict[str, Any] = {}
-        if content:
-            payload["content"] = content
-        if embeds:
-            payload["embeds"] = embeds[:10]
+        payload = discord_message_body(message)
         if not payload:
             return
         timeout = aiohttp.ClientTimeout(total=REQUEST_TIMEOUT)
         async with aiohttp.ClientSession(timeout=timeout) as session:
             await self._post_message(session, payload)
-        logger.info("Discord digest sent (%d embeds)", len(embeds))
+        logger.info("Discord digest sent (%d embeds)", len(payload.get("embeds") or ()))
 
     async def _post_message(self, session: aiohttp.ClientSession, payload: dict[str, Any]) -> None:
         """POST a message. One HTTP 400 is retried with every thumbnail removed.
@@ -287,6 +279,20 @@ class DiscordProvider(NotificationProvider):
                 raise
             logger.warning("Discord rejected a thumbnail URL; retrying without images")
             await self._request(session, "POST", path, json=_without_thumbnails(payload))
+
+
+def discord_message_body(message: dict[str, Any]) -> dict[str, Any]:
+    """The JSON body POSTed for one digest message. Empty content is omitted."""
+    content = str(message.get("content") or "")
+    embeds = message.get("embeds") or []
+    if not isinstance(embeds, list):
+        embeds = []
+    payload: dict[str, Any] = {}
+    if content:
+        payload["content"] = content
+    if embeds:
+        payload["embeds"] = list(embeds[:10])
+    return payload
 
 
 def _payload_has_thumbnail(payload: dict[str, Any]) -> bool:

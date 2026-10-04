@@ -39,7 +39,7 @@ from src.notifications.discord import (
 )
 from src.notifications.events import NotificationEvent
 from src.notifications.logging_handler import NOTIFICATIONS_LOGGER, register_service
-from src.notifications.render import drop_thumbnail, render_digest
+from src.notifications.render import RENDER_SCHEMA, drop_thumbnail, render_digest
 from src.notifications.schedule import (
     invalid_timezone_env,
     local_timezone,
@@ -70,6 +70,12 @@ QUEUED_DIGEST_EVENTS = frozenset(
     }
 )
 RETRY_BACKOFF = timedelta(minutes=5)
+# Discord's channel bucket is about 5 messages per 5 seconds. This keeps a
+# five-part digest under that on top of any 429 Retry-After the scheduler waits.
+PART_SEND_DELAY_SECONDS = 1.2
+# A part that keeps getting a non-429 rejection is not retried with the same
+# payload forever. The next flush renders the still-queued events again.
+INFLIGHT_FAILURE_LIMIT = 3
 # coalesce a burst of queue/log writes into one disk save
 STATE_SAVE_DELAY = 2.0
 # shutdown must return inside Docker's 10s stop grace even if Discord hangs
@@ -104,6 +110,7 @@ def _empty_state() -> dict[str, Any]:
         "digest_error_overflow_count": 0,
         "digest_flush_pending": False,
         "digest_seq": 0,
+        "digest_inflight": None,
         "last_digest": None,
     }
 
@@ -172,6 +179,10 @@ def _load_state(path: Path) -> dict[str, Any]:
             ttl=CLAIM_TTL,
             limit=CLAIM_HISTORY_MAX,
         )
+    inflight = _coerce_inflight(raw.get("digest_inflight"))
+    if raw.get("digest_inflight") is not None and inflight is None:
+        logger.warning("Dropped an unreadable in-flight Discord digest")
+    raw["digest_inflight"] = inflight
     if dropped_bad:
         logger.warning("Dropped invalid items from the notifications digest queue")
     return raw
@@ -220,6 +231,96 @@ def _clamp_stored_retry(raw: dict[str, Any]) -> None:
     cap = datetime.now(UTC) + timedelta(seconds=MAX_RETRY_AFTER_SECONDS)
     if stamp > cap:
         last["retry_at"] = cap.isoformat()
+
+
+def _coerce_inflight(raw: object) -> dict[str, Any] | None:
+    """A persisted multi-message send, or None when there is nothing to resume.
+
+    `sent` is how many parts already got a 2xx. The snapshot is the queue those
+    parts were rendered from, so a later retry does not post them again and does
+    not drop events that arrived while the first parts were going out.
+    """
+    if not isinstance(raw, dict):
+        return None
+    parts = raw.get("parts")
+    snapshot = raw.get("snapshot")
+    render_time = raw.get("render_time")
+    if not isinstance(parts, list) or not parts:
+        return None
+    if not all(isinstance(part, dict) for part in parts):
+        return None
+    if not isinstance(snapshot, dict) or not isinstance(render_time, str) or not render_time:
+        return None
+    seqs = snapshot.get("queue_seqs")
+    if not isinstance(seqs, list) or any(isinstance(seq, bool) or not isinstance(seq, int) for seq in seqs):
+        return None
+    sent = raw.get("sent")
+    if isinstance(sent, bool) or not isinstance(sent, int) or sent < 0:
+        sent = 0
+    failures = raw.get("failures")
+    if isinstance(failures, bool) or not isinstance(failures, int) or failures < 0:
+        failures = 0
+    version = raw.get("version")
+    if not isinstance(version, str):
+        version = ""
+    schema = raw.get("schema")
+    if isinstance(schema, bool) or not isinstance(schema, int):
+        schema = -1
+    groups = snapshot.get("groups")
+    if not isinstance(groups, dict):
+        groups = {}
+    return {
+        "parts": parts,
+        "part_seqs": _coerce_part_seqs(raw.get("part_seqs"), len(parts)),
+        "sent": min(sent, len(parts)),
+        "failures": failures,
+        "version": version,
+        "schema": schema,
+        "render_time": render_time,
+        "snapshot": {
+            "queue_seqs": list(seqs),
+            "groups": groups,
+            "dropped": _coerce_count(snapshot.get("dropped")),
+            "overflow_types": _coerce_count(snapshot.get("overflow_types")),
+            "overflow_count": _coerce_count(snapshot.get("overflow_count")),
+        },
+    }
+
+
+def _message_seqs(message: dict[str, Any]) -> list[int]:
+    """Take the queue seqs the renderer attached, and keep them out of the saved part."""
+    raw = message.pop("_event_seqs", [])
+    if not isinstance(raw, list):
+        return []
+    return [
+        seq
+        for seq in raw
+        if isinstance(seq, int) and not isinstance(seq, bool) and seq > 0
+    ]
+
+
+def _coerce_part_seqs(raw: object, part_count: int) -> list[list[int]]:
+    """Seqs delivered by each part. A missing list means those events are unknown."""
+    parsed: list[list[int]] = []
+    if isinstance(raw, list):
+        for item in raw:
+            if not isinstance(item, list):
+                parsed.append([])
+                continue
+            parsed.append(
+                [
+                    seq
+                    for seq in item
+                    if isinstance(seq, int) and not isinstance(seq, bool) and seq > 0
+                ]
+            )
+    if len(parsed) < part_count:
+        parsed.extend([] for _ in range(part_count - len(parsed)))
+    return parsed[:part_count]
+
+
+def _inflight_is_current(inflight: dict[str, Any]) -> bool:
+    return inflight.get("version") == __version__ and inflight.get("schema") == RENDER_SCHEMA
 
 
 def _coerce_count(value: object) -> int:
@@ -300,7 +401,10 @@ class NotificationService:
         self._writer_task: asyncio.Task[None] | None = None
         self._closed = False
         self._loop: asyncio.AbstractEventLoop | None = None
+        self._part_delay = PART_SEND_DELAY_SECONDS
+        self._sleep = asyncio.sleep
         register_service(self)
+        self._discard_stale_inflight()
         bad_zone = invalid_timezone_env()
         if bad_zone:
             logger.warning(
@@ -801,7 +905,7 @@ class NotificationService:
 
     def _render(
         self, *, preview: bool, final: bool = False, now: datetime | None = None
-    ) -> dict[str, Any]:
+    ) -> list[dict[str, Any]]:
         now = now or datetime.now(UTC)
         window_start = self._parse_stamp(self._state.get("digest_window_start")) or now
         # A preview shows the send already on the clock. A digest going out now
@@ -967,12 +1071,14 @@ class NotificationService:
         self._state["digest_error_overflow_count"] = 0
         self._state["digest_window_start"] = now.isoformat()
         self._state["digest_flush_pending"] = False
+        self._state["digest_inflight"] = None
         self._state["digest_next_at"] = self._compute_next(now).isoformat()
 
     async def flush_digest(self, *, final: bool = False) -> bool:
         """
-        Send the queued digest. Only the snapshotted seqs are removed after a 2xx.
+        Send the queued digest. Only the snapshotted seqs are removed after every part got a 2xx.
 
+        A digest can be several messages. Parts already accepted are not posted again.
         `final` is the digest posted when the user leaves digest mode. It does
         not announce a next digest. Shutdown does not call this. An empty window
         is skipped unless digest_send_empty is on.
@@ -989,29 +1095,60 @@ class NotificationService:
         retry_at = self._retry_at()
         if retry_at is not None and retry_at > datetime.now(UTC):
             return False
-        # another sender may have drained the queue while this call waited
-        if not self.has_digest_content() and not self.send_empty:
-            # a flush that lost the race to one that just sent must not record a
-            # skip over that success; the window it left behind is already in the future
-            next_at = self._parse_stamp(self._state.get("digest_next_at"))
-            if next_at is not None and next_at > datetime.now(UTC) + timedelta(seconds=1):
-                return False
-            self._record_digest(ok=True, skipped=True)
-            self._clear_window()
-            self._mark_dirty()
-            await self.flush_pending_state()
-            return False
         provider = self.get_provider("discord")
         if not isinstance(provider, DiscordProvider):
             return False
-        await self.flush_pending_state()
-        render_time = datetime.now(UTC)
-        snapshot = self._window_snapshot()
-        message = self._render(preview=False, final=final, now=render_time)
+        self._discard_stale_inflight()
+        inflight = _coerce_inflight(self._state.get("digest_inflight"))
+        if inflight is None:
+            # another sender may have drained the queue while this call waited
+            if not self.has_digest_content() and not self.send_empty:
+                # a flush that lost the race to one that just sent must not record a
+                # skip over that success; the window it left behind is already in the future
+                next_at = self._parse_stamp(self._state.get("digest_next_at"))
+                if next_at is not None and next_at > datetime.now(UTC) + timedelta(seconds=1):
+                    return False
+                self._record_digest(ok=True, skipped=True)
+                self._clear_window()
+                self._mark_dirty()
+                await self.flush_pending_state()
+                return False
+            await self.flush_pending_state()
+            render_time = datetime.now(UTC)
+            snapshot = self._window_snapshot()
+            messages = self._render(preview=False, final=final, now=render_time)
+            part_seqs = [_message_seqs(message) for message in messages]
+            inflight = {
+                "parts": messages,
+                "part_seqs": part_seqs,
+                "sent": 0,
+                "failures": 0,
+                "version": __version__,
+                "schema": RENDER_SCHEMA,
+                "snapshot": snapshot,
+                "render_time": render_time.isoformat(),
+            }
+            self._state["digest_inflight"] = inflight
+            self._mark_dirty()
+            await self.flush_pending_state()
+        else:
+            parsed = self._parse_stamp(inflight["render_time"])
+            render_time = parsed if parsed is not None else datetime.now(UTC)
+
         self._sending = True
         try:
-            await provider.send_digest(message)
+            if inflight["sent"] < len(inflight["parts"]):
+                await self._post_digest_parts(provider, inflight)
         except NotificationError as exc:
+            # A 429 keeps the saved parts. Any other rejection counts toward
+            # giving up on this payload and rendering the queue again.
+            limited = exc.status == 429 or exc.retry_after is not None
+            if not limited:
+                inflight["failures"] = int(inflight.get("failures") or 0) + 1
+            if not limited and int(inflight.get("failures") or 0) >= INFLIGHT_FAILURE_LIMIT:
+                self._drop_unsent_parts(inflight, reason="3 consecutive failed flushes")
+            else:
+                self._state["digest_inflight"] = inflight
             raw_delay = (
                 exc.retry_after if exc.retry_after is not None else RETRY_BACKOFF.total_seconds()
             )
@@ -1026,18 +1163,85 @@ class NotificationService:
             await self.flush_pending_state()
             return False
         else:
-            self._last_errors.pop(provider.name, None)
-            self._record_digest(ok=True)
-            self._release_snapshot(snapshot, render_time)
-            self._mark_dirty()
-            await self.flush_pending_state()
-            return True
+            return await self._finish_digest(provider, inflight, render_time)
         finally:
             self._sending = False
+
+    def _discard_stale_inflight(self) -> None:
+        """Drop saved parts rendered by another app version or render schema."""
+        inflight = _coerce_inflight(self._state.get("digest_inflight"))
+        if inflight is None or _inflight_is_current(inflight):
+            return
+        self._drop_unsent_parts(inflight, reason="app version or render schema changed")
+
+    def _drop_unsent_parts(self, inflight: dict[str, Any], *, reason: str) -> None:
+        """Forget parts that never got a 2xx. Events from parts that did stay delivered."""
+        logger.warning("Dropped unsent Discord digest parts: %s", reason)
+        delivered: set[int] = set()
+        sent = int(inflight.get("sent") or 0)
+        part_seqs = inflight.get("part_seqs")
+        if isinstance(part_seqs, list):
+            for seqs in part_seqs[:sent]:
+                if not isinstance(seqs, list):
+                    continue
+                for seq in seqs:
+                    if isinstance(seq, int) and not isinstance(seq, bool):
+                        delivered.add(seq)
+        if delivered:
+            with self._state_lock:
+                queue = self._state.get("digest_queue") or []
+                self._state["digest_queue"] = [
+                    item
+                    for item in queue
+                    if not (isinstance(item, dict) and item.get("seq") in delivered)
+                ]
+        self._state["digest_inflight"] = None
+        self._mark_dirty()
+
+    async def _pause_between_parts(self) -> None:
+        """Wait between messages so a multi-part digest stays under the channel bucket."""
+        delay = self._part_delay
+        if isinstance(delay, bool) or not isinstance(delay, int | float) or delay <= 0:
+            return
+        await self._sleep(delay)
+
+    async def _post_digest_parts(
+        self, provider: DiscordProvider, inflight: dict[str, Any]
+    ) -> None:
+        """POST the parts that do not yet have a 2xx. A 429 stops the rest of the digest."""
+        parts: list[dict[str, Any]] = inflight["parts"]
+        first = True
+        while inflight["sent"] < len(parts):
+            if not first:
+                await self._pause_between_parts()
+            first = False
+            await provider.send_digest(parts[inflight["sent"]])
+            inflight["sent"] = int(inflight["sent"]) + 1
+            self._state["digest_inflight"] = inflight
+            self._mark_dirty()
+            await self.flush_pending_state()
+
+    async def _finish_digest(
+        self,
+        provider: DiscordProvider,
+        inflight: dict[str, Any],
+        render_time: datetime,
+    ) -> bool:
+        self._last_errors.pop(provider.name, None)
+        self._record_digest(ok=True)
+        self._release_snapshot(inflight["snapshot"], render_time)
+        self._state["digest_inflight"] = None
+        self._mark_dirty()
+        await self.flush_pending_state()
+        return True
 
     async def send_preview(self) -> None:
         """
         Post the digest the current *saved* queue would produce, without clearing it.
+
+        Uses the same per-message send as a real digest, including the thumbnail
+        retry. A preview does not remember which parts landed, and it does not
+        touch an in-flight digest.
 
         Raises:
             NotificationError: Discord is not configured or rejected the message.
@@ -1046,8 +1250,11 @@ class NotificationService:
             provider = self.get_provider("discord")
             if not isinstance(provider, DiscordProvider) or not provider.is_configured:
                 raise NotificationError("Discord: bot token and channel must be configured")
-            message = self._render(preview=True)
-            await provider.send_digest(message)
+            for index, message in enumerate(self._render(preview=True)):
+                message.pop("_event_seqs", None)
+                if index:
+                    await self._pause_between_parts()
+                await provider.send_digest(message)
 
     def schedule_mode_switch_flush(self) -> None:
         """Queue the final digest after a save that left digest mode with events waiting."""

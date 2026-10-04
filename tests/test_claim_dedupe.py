@@ -137,6 +137,7 @@ class ClaimDedupeServiceTests(unittest.IsolatedAsyncioTestCase):
     def make_service(self, **overrides):
         settings = FakeSettings(digest_notification_settings(**overrides))
         service = NotificationService(settings, state_path=self.state_path)
+        service._part_delay = 0
         provider = service.get_provider("discord")
         assert provider is not None
         provider.send = AsyncMock()
@@ -280,7 +281,7 @@ class ClaimDedupeServiceTests(unittest.IsolatedAsyncioTestCase):
         )
         event = service._state["digest_queue"][-1]
         self.assertEqual(event["data"]["disambiguate"], ["Tee"])
-        payload = render_digest(
+        messages = render_digest(
             events=[event],
             window_start=NOW - timedelta(hours=6),
             window_end=NOW,
@@ -288,8 +289,8 @@ class ClaimDedupeServiceTests(unittest.IsolatedAsyncioTestCase):
             interval_minutes=360,
             version="1.11.1",
         )
-        self.assertEqual(payload["content"], "1 drop claimed")
-        self.assertEqual(payload["embeds"][0]["description"], "✓ Tee · PAS2 Day3")
+        self.assertEqual(messages[0]["content"], "1 drop claimed")
+        self.assertEqual(messages[0]["embeds"][0]["description"], "✓ Tee · PAS2 Day3")
 
     async def test_event_arriving_during_send_is_kept_and_a_replay_is_not(self):
         service, provider = self.make_service()
@@ -454,6 +455,7 @@ class ClaimHistorySeedTests(unittest.IsolatedAsyncioTestCase):
     def make_service(self):
         settings = FakeSettings(digest_notification_settings())
         service = NotificationService(settings, state_path=self.state_path)
+        service._part_delay = 0
         provider = service.get_provider("discord")
         assert provider is not None
         provider.send = AsyncMock()
