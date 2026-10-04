@@ -1,3 +1,24 @@
+# Release Notes - v1.11.3
+
+Every game in the Discord digest now gets its own card. The "More games" catch-all is gone.
+
+### ✨ Improvements
+- **One card per game**: games that only have a new campaign get their own card too,
+  with their `New:` lines and box art when available.
+- **Digest splits across messages**: cards are packed in rank order into up to 5 messages
+  (Discord allows 10 cards and 6000 characters per message). The totals line is on the
+  first message; Needs attention and the window footer are on the last. Only if 5 messages
+  are not enough does the last one end with "…and N more games", and the totals still
+  count every game.
+
+### 🐛 Reliability
+- **Partial-failure-safe delivery**: messages are posted in order, and if one fails only
+  the unsent ones are retried, so nothing is posted twice. The queue clears only after
+  every part is delivered.
+- **Stuck-part escape**: a part Discord keeps rejecting is rebuilt from the queued events
+  after 3 failed attempts, or after an app update, instead of being resent forever.
+- **Pacing**: messages go out about 1.2 seconds apart to stay within Discord's rate limit.
+
 # Release Notes - v1.11.2
 
 A bug-fix release for the Discord digest. The same drop no longer shows up in more than one
