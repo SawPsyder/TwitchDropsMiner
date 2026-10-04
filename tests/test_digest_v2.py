@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import random
@@ -13,9 +14,11 @@ import unittest.mock
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from src.notifications import NotificationService
+from src.notifications import NotificationError, NotificationService
 from src.notifications.digest_style import (
     DESCRIPTION_HARD_MAX,
+    DISCORD_MAX_EMBEDS,
+    MAX_DIGEST_MESSAGES,
     MAX_TITLE_CHARS,
     TOTAL_CHAR_TARGET,
 )
@@ -27,7 +30,7 @@ from src.notifications.render import (
     discord_units,
     drop_thumbnail,
     message_char_count,
-    render_digest,
+    render_digest as _render_digest,
 )
 from tests.test_notifications import (
     FakeCampaign,
@@ -35,6 +38,16 @@ from tests.test_notifications import (
     digest_notification_settings,
     make_notification_settings,
 )
+
+
+def render_digest(**kwargs):
+    """Flatten a multi-message digest so older assertions can read content and embeds."""
+    messages = _render_digest(**kwargs)
+    embeds = [embed for message in messages for embed in message.get("embeds") or []]
+    content = ""
+    if messages:
+        content = str(messages[0].get("content") or "")
+    return {"content": content, "embeds": embeds, "messages": messages}
 
 
 END = datetime(2026, 10, 1, 18, 0, tzinfo=UTC)
@@ -479,7 +492,10 @@ class DigestV2Tests(unittest.TestCase):
             payload["content"],
             "26 drops claimed · 14 new campaigns · 1 unlinked game · 64 warnings",
         )
-        self.assertEqual(len(embeds), 8)
+        messages = payload["messages"]
+        self.assertEqual(len(messages), 2)
+        self.assertEqual([len(message["embeds"]) for message in messages], [10, 7])
+        self.assertNotIn("content", messages[1])
         titles = [embed["title"] for embed in embeds]
         self.assertEqual(
             titles,
@@ -490,11 +506,21 @@ class DigestV2Tests(unittest.TestCase):
                 "Rainbow Six Siege",
                 "PAYDAY 3",
                 "Active Matter",
-                "More games",
+                "Rocket League",
+                "Warframe",
+                "World of Tanks: HEAT",
+                "Black Desert",
+                "Alien: Isolation",
+                "World of Warships",
+                "Dungeons & Dragons",
+                "Madden NFL 27",
+                "Escape from Tarkov",
+                "ELDEN RING",
                 "⚠️ Needs attention",
             ],
         )
-        self.assertTrue(all(embed["color"] == 0x9146FF for embed in embeds[:7]))
+        self.assertNotIn("More games", titles)
+        self.assertTrue(all(embed["color"] == 0x9146FF for embed in embeds[:-1]))
         self.assertEqual(embeds[-1]["color"], 0xF1C40F)
         thumbs = {
             "World of Tanks": PREMIUM,
@@ -504,9 +530,9 @@ class DigestV2Tests(unittest.TestCase):
             "PAYDAY 3": WOLF,
             "Active Matter": CAMO,
         }
-        for embed in embeds[:6]:
-            self.assertEqual(embed["thumbnail"]["url"], thumbs[embed["title"]])
-        self.assertNotIn("thumbnail", embeds[6])
+        for embed in embeds:
+            if embed["title"] in thumbs:
+                self.assertEqual(embed["thumbnail"]["url"], thumbs[embed["title"]])
         by_title = {embed["title"]: embed["description"] for embed in embeds}
         self.assertEqual(
             by_title["World of Tanks"],
@@ -556,22 +582,20 @@ class DigestV2Tests(unittest.TestCase):
         )
         self.assertEqual(by_title["PAYDAY 3"], "✓ Hoxton\n✓ Wolf")
         self.assertEqual(by_title["Active Matter"], "✓ Prime x250\n✓ Camouflage: Wave")
-        more_lines = by_title["More games"].splitlines()
-        self.assertEqual(
-            more_lines,
-            [
-                "**Rocket League** · RLCS 2025 Very Rare, RLCS 2025 Import Drop",
-                "**Warframe** · Built Forma, Beach Kavat Floof",
-                "**World of Tanks: HEAT** · Vehicle XP Booster, Booster Pack",
-                "**Black Desert** · 2 Hour Reward",
-                "**Alien: Isolation** · SEEGSON Synthetics",
-                "**World of Warships** · 15.8 CC Mission \\#4",
-                "**Dungeons & Dragons** · /dnd d20 Badge",
-                "**Madden NFL 27** · `  0%` Madden Twitch Pack",
-                f"**Escape from Tarkov** · new campaign, ends {discord_tag(END + timedelta(hours=7), 'R')}",
-                f"**ELDEN RING** · new campaign, ends {discord_tag(END + timedelta(days=28), 'R')}",
-            ],
+        self.assertIn("✓ RLCS 2025 Very Rare", by_title["Rocket League"])
+        self.assertIn("✓ Built Forma", by_title["Warframe"])
+        self.assertIn("✓ 2 Hour Reward", by_title["Black Desert"])
+        self.assertIn("✓ SEEGSON Synthetics", by_title["Alien: Isolation"])
+        self.assertIn("Madden Twitch Pack", by_title["Madden NFL 27"])
+        self.assertIn(
+            f"New: Slowly 1st · ends {discord_tag(END + timedelta(hours=7), 'R')}",
+            by_title["Escape from Tarkov"],
         )
+        self.assertIn(
+            f"New: Bloody Finger · ends {discord_tag(END + timedelta(days=28), 'R')}",
+            by_title["ELDEN RING"],
+        )
+        self.assertIn("thumbnail", next(embed for embed in embeds if embed["title"] == "Escape from Tarkov"))
         attention = by_title["⚠️ Needs attention"].splitlines()
         self.assertEqual(attention[0], "**Link your account:** Alien: Isolation")
         self.assertTrue(attention[1].startswith("×25 Stream state change"))
@@ -591,7 +615,12 @@ class DigestV2Tests(unittest.TestCase):
             "Last 24 hours · next digest tomorrow, 18:00 · v1.10.1",
         )
         self.assertEqual(embeds[-1]["timestamp"], "2026-10-01T18:00:00+00:00")
-        self.assertLessEqual(message_char_count(embeds, payload["content"]), TOTAL_CHAR_TARGET)
+        for message in messages:
+            self.assertLessEqual(
+                message_char_count(message["embeds"], message.get("content") or ""),
+                TOTAL_CHAR_TARGET,
+            )
+            self.assertLessEqual(len(message["embeds"]), DISCORD_MAX_EMBEDS)
         self.assertLessEqual(len(_screenshot_inputs()["events"]), 80)
 
     def test_screenshot_errors_off_drops_the_warning_block_and_count(self):
@@ -617,26 +646,31 @@ class DigestV2Tests(unittest.TestCase):
             "43 drops claimed · 9 new campaigns · stall alert · 3 warnings",
         )
         self.assertNotIn("1 stall", payload["content"])
-        self.assertEqual(len(embeds), 8)
+        self.assertEqual(len(payload["messages"]), 3)
         self.assertEqual(
             [embed["title"] for embed in embeds[:6]],
             ["Mined", "Bravo", "Charlie", "Echo", "Delta", "Foxtrot"],
         )
-        self.assertTrue(all(embed["color"] == 0x9146FF for embed in embeds[:7]))
+        self.assertNotIn("More games", [embed.get("title") for embed in embeds])
+        self.assertTrue(all(embed["color"] == 0x9146FF for embed in embeds[:-1]))
         self.assertTrue(all("thumbnail" in embed for embed in embeds[:6]))
         self.assertEqual(embeds[-1]["color"], 0xE74C3C)
+        self.assertEqual(embeds[-1]["title"], "⚠️ Needs attention")
         self.assertIn("**Mining stalled** · no progress since", embeds[-1]["description"])
         self.assertIn("×3 Websocket[0] requested reconnect.", embeds[-1]["description"])
-        more = next(embed for embed in embeds if embed["title"] == "More games")["description"]
-        lines = more.splitlines()
-        self.assertEqual(len(lines), 16)
-        self.assertTrue(lines[0].startswith("**Game G** · Reward A, Reward B, Reward C, +1"))
-        self.assertIn("` 40%` Reward X", more)
-        self.assertEqual(lines[-1], "…and 4 more games")
-        for hidden in ("Game W", "Game X", "Game Y", "Game Z"):
-            self.assertNotIn(hidden, more)
-        self.assertLessEqual(message_char_count(embeds, payload["content"]), TOTAL_CHAR_TARGET)
-        self.assertLessEqual(len(embeds), 8)
+        game_g = next(embed for embed in embeds if embed["title"] == "Game G")["description"]
+        self.assertIn("✓ Reward A", game_g)
+        self.assertIn("✓ Reward D", game_g)
+        self.assertIn("Reward X", next(embed for embed in embeds if embed["title"] == "Game U")["description"])
+        for name in ("Game W", "Game X", "Game Y", "Game Z"):
+            card = next(embed for embed in embeds if embed["title"] == name)
+            self.assertIn("New:", card["description"])
+        for message in payload["messages"]:
+            self.assertLessEqual(
+                message_char_count(message["embeds"], message.get("content") or ""),
+                TOTAL_CHAR_TARGET,
+            )
+            self.assertLessEqual(len(message["embeds"]), DISCORD_MAX_EMBEDS)
 
     def test_grouping_puts_one_game_on_one_card(self):
         now = END
@@ -755,11 +789,13 @@ class DigestV2Tests(unittest.TestCase):
             progress=progress,
             version=VERSION,
         )
-        titles = [embed["title"] for embed in payload["embeds"] if embed["title"] != "More games"]
-        self.assertEqual(titles[:6], ["Mined", "Many", "Recent", "Older", "Seventh", "Alpha"])
-        more = next(embed["description"] for embed in payload["embeds"] if embed["title"] == "More games")
-        self.assertTrue(more.splitlines()[0].startswith("**Zebra**"))
-        self.assertIn("**OnlyNew** · new campaign, ends", more)
+        titles = [embed["title"] for embed in payload["embeds"]]
+        self.assertEqual(
+            titles,
+            ["Mined", "Many", "Recent", "Older", "Seventh", "Alpha", "Zebra", "OnlyNew"],
+        )
+        only_new = next(embed for embed in payload["embeds"] if embed["title"] == "OnlyNew")
+        self.assertIn("New: Launch", only_new["description"])
         self.assertIn("*Mining now on live*", payload["embeds"][0]["description"])
 
     def test_thumbnail_fallback_skips_non_https(self):
@@ -1086,24 +1122,27 @@ class DigestV2Tests(unittest.TestCase):
         self.assertIn("*…and 2 more in logs/TDM.log*", text)
         self.assertEqual(payload["embeds"][-1]["color"], 0xF1C40F)
 
-    def test_trim_shrinks_more_games_before_claims_or_logs(self):
+    def test_long_cards_split_messages_without_shrinking_claim_lines(self):
         payload = _heavy_payload()
         embeds = payload["embeds"]
-        self.assertLessEqual(len(embeds), 8)
-        self.assertLessEqual(message_char_count(embeds, payload["content"]), TOTAL_CHAR_TARGET)
+        self.assertGreater(len(embeds), 8)
+        self.assertNotIn("More games", [embed.get("title") for embed in embeds])
+        for message in payload["messages"]:
+            self.assertLessEqual(len(message["embeds"]), DISCORD_MAX_EMBEDS)
+            self.assertLessEqual(
+                message_char_count(message["embeds"], message.get("content") or ""),
+                TOTAL_CHAR_TARGET,
+            )
         cards = [embed for embed in embeds if embed["title"].startswith("Card ")]
-        self.assertGreaterEqual(len(cards), 3)
+        self.assertEqual(len(cards), 6)
         benefit_lines = [
             line
             for line in cards[0]["description"].splitlines()
             if line.startswith("✓ ") and "more" not in line
         ]
         self.assertEqual(len(benefit_lines), 4)
-        more = next(embed for embed in embeds if embed["title"] == "More games")
-        more_lines = more["description"].splitlines()
-        self.assertGreaterEqual(len(more_lines), 5)
-        self.assertLess(len(more_lines), 16)
-        self.assertTrue(more_lines[-1].startswith("…and "))
+        more_cards = [embed for embed in embeds if str(embed.get("title") or "").startswith("More ")]
+        self.assertEqual(len(more_cards), 18)
         attention = next(embed for embed in embeds if embed["title"].startswith("⚠️"))
         log_lines = [line for line in attention["description"].splitlines() if line.startswith("×")]
         self.assertEqual(len(log_lines), 5)
@@ -1121,8 +1160,13 @@ class DigestV2Tests(unittest.TestCase):
             progress={"state": "idle", "campaigns": []},
             version=VERSION,
         )
-        more = next(embed for embed in payload["embeds"] if embed["title"] == "More games")
-        self.assertTrue(more["description"].endswith("…and 1 more game"))
+        titles = [embed["title"] for embed in payload["embeds"]]
+        self.assertEqual(len(titles), 22)
+        self.assertIn("Extra", titles)
+        self.assertNotIn("More games", titles)
+        self.assertFalse(any("…and " in (embed.get("description") or "") and "more game" in (embed.get("description") or "") for embed in payload["embeds"]))
+        extra = next(embed for embed in payload["embeds"] if embed["title"] == "Extra")
+        self.assertIn("New: Launch", extra["description"])
 
     def test_legacy_claim_joins_the_id_card(self):
         now = END
@@ -1412,28 +1456,46 @@ class DigestV2Tests(unittest.TestCase):
         self.assertIn("Queue was full: 3 older events weren't kept.", text)
         self.assertTrue(any(line.startswith("×") for line in text.splitlines()))
         self.assertLess(text.index("more urgent"), text.index("Queue was full"))
-        self.assertLessEqual(message_char_count(payload["embeds"], payload["content"]), TOTAL_CHAR_TARGET)
         self.assertLessEqual(discord_units(text), DESCRIPTION_HARD_MAX)
-        self.assertLessEqual(len(payload["embeds"]), 8)
+        self.assertLessEqual(len(payload["messages"]), MAX_DIGEST_MESSAGES)
+        for message in payload["messages"]:
+            self.assertLessEqual(len(message["embeds"]), DISCORD_MAX_EMBEDS)
+            self.assertLessEqual(
+                message_char_count(message["embeds"], message.get("content") or ""),
+                TOTAL_CHAR_TARGET,
+            )
         self.assertFalse(text.rstrip().endswith("…") and not text.rstrip().endswith("more urgent"))
 
-    def test_limits_fuzz_has_no_truncation_markers(self):
+    def test_limits_fuzz_per_message(self):
         for seed in range(400):
             payload = _fuzz_payload(seed)
-            content = payload["content"]
-            embeds = payload["embeds"]
-            self.assertLessEqual(message_char_count(embeds, content), TOTAL_CHAR_TARGET, seed)
-            self.assertLessEqual(len(embeds), 8, seed)
-            self.assertLessEqual(discord_units(content), 2000, seed)
-            for embed in embeds:
-                self.assertNotIn("fields", embed, seed)
-                self.assertLessEqual(discord_units(embed.get("title") or ""), MAX_TITLE_CHARS, seed)
-                description = embed.get("description") or ""
-                self.assertLessEqual(discord_units(description), DESCRIPTION_HARD_MAX, seed)
-                self.assertFalse(_was_hard_truncated(description), seed)
-            if embeds:
-                footer = (embeds[-1].get("footer") or {}).get("text") or ""
-                self.assertLessEqual(discord_units(footer), 2048, seed)
+            messages = payload["messages"]
+            self.assertLessEqual(len(messages), MAX_DIGEST_MESSAGES, seed)
+            self.assertLessEqual(discord_units(payload["content"]), 2000, seed)
+            footer_seen = False
+            for index, message in enumerate(messages):
+                content = message.get("content") or ""
+                embeds = message.get("embeds") or []
+                if index:
+                    self.assertNotIn("content", message, seed)
+                self.assertLessEqual(message_char_count(embeds, content), TOTAL_CHAR_TARGET, seed)
+                self.assertLessEqual(message_char_count(embeds), 6000, seed)
+                self.assertLessEqual(len(embeds), DISCORD_MAX_EMBEDS, seed)
+                self.assertLessEqual(discord_units(content), 2000, seed)
+                for embed in embeds:
+                    self.assertNotIn("fields", embed, seed)
+                    self.assertLessEqual(discord_units(embed.get("title") or ""), MAX_TITLE_CHARS, seed)
+                    description = embed.get("description") or ""
+                    self.assertLessEqual(discord_units(description), DESCRIPTION_HARD_MAX, seed)
+                    self.assertFalse(_was_hard_truncated(description), seed)
+                    footer = (embed.get("footer") or {}).get("text") or ""
+                    self.assertLessEqual(discord_units(footer), 2048, seed)
+                    if footer:
+                        footer_seen = True
+                        self.assertIs(message, messages[-1], seed)
+                        self.assertIs(embed, embeds[-1], seed)
+            if any(message.get("embeds") for message in messages):
+                self.assertTrue(footer_seen, seed)
 
 
 def _was_hard_truncated(description: str) -> bool:
@@ -1544,9 +1606,30 @@ def _render_events(events: list[dict], **overrides) -> dict:
     return render_digest(**kwargs)
 
 
-def _blob(payload: dict) -> str:
-    return payload["content"] + "\n" + "\n".join(
-        f"{embed.get('title', '')}\n{embed.get('description', '')}" for embed in payload["embeds"]
+def _messages_of(payload) -> list:
+    if isinstance(payload, list):
+        return payload
+    if isinstance(payload, dict) and isinstance(payload.get("messages"), list):
+        return payload["messages"]
+    return [payload]
+
+
+def _content_of(payload) -> str:
+    if isinstance(payload, dict) and "messages" in payload:
+        return str(payload.get("content") or "")
+    messages = _messages_of(payload)
+    if not messages:
+        return ""
+    return str(messages[0].get("content") or "")
+
+
+def _blob(payload) -> str:
+    if isinstance(payload, dict) and "messages" in payload:
+        embeds = payload["embeds"]
+    else:
+        embeds = [embed for message in _messages_of(payload) for embed in message.get("embeds") or []]
+    return _content_of(payload) + "\n" + "\n".join(
+        f"{embed.get('title', '')}\n{embed.get('description', '')}" for embed in embeds
     )
 
 
@@ -1598,9 +1681,9 @@ class DigestV2ServiceTests(unittest.IsolatedAsyncioTestCase):
         await service.notify_mining_stalled("no channels")
         logging.getLogger("TwitchDrops").warning("slow disk on %s", "ssd")
         shown = service._render(preview=False)
-        self.assertIn("stall alert", shown["content"])
-        self.assertIn("1 drop claimed", shown["content"])
-        self.assertIn("warning", shown["content"])
+        self.assertIn("stall alert", _content_of(shown))
+        self.assertIn("1 drop claimed", _content_of(shown))
+        self.assertIn("warning", _content_of(shown))
         self.assertIn("Mining stalled", _blob(shown))
         self.assertIn("slow disk", _blob(shown))
 
@@ -1608,12 +1691,12 @@ class DigestV2ServiceTests(unittest.IsolatedAsyncioTestCase):
         service._settings.notifications["discord"]["events"]["mining_stalled"] = False
         service._settings.notifications["discord"]["events"]["drop_received"] = False
         hidden = service._render(preview=True)
-        self.assertNotIn("stall", hidden["content"])
-        self.assertNotIn("drop", hidden["content"])
-        self.assertNotIn("warning", hidden["content"])
+        self.assertNotIn("stall", _content_of(hidden))
+        self.assertNotIn("drop", _content_of(hidden))
+        self.assertNotIn("warning", _content_of(hidden))
         self.assertNotIn("Mining stalled", _blob(hidden))
         self.assertNotIn("slow disk", _blob(hidden))
-        self.assertTrue(hidden["content"].startswith("Preview so far"))
+        self.assertTrue(_content_of(hidden).startswith("Preview so far"))
         provider.send.assert_awaited()
 
     async def test_immediate_rechecks_the_toggle_and_adds_a_thumbnail(self):
@@ -1657,7 +1740,7 @@ class DigestV2ServiceTests(unittest.IsolatedAsyncioTestCase):
         service._settings.notifications["digest_sections"]["errors"] = False
         hidden = service._render(preview=True)
         self.assertNotIn("slow disk", _blob(hidden))
-        self.assertNotIn("warning", hidden["content"])
+        self.assertNotIn("warning", _content_of(hidden))
         self.assertFalse(service.has_digest_content())
         self.assertEqual(service.queued_count(), 0)
         self.assertTrue(service._state["digest_error_groups"])
@@ -1692,7 +1775,7 @@ class DigestV2ServiceTests(unittest.IsolatedAsyncioTestCase):
             events[key] = False
         hidden = service._render(preview=False)
         blob = _blob(hidden)
-        self.assertEqual(hidden["content"], "Nothing new in the last 24 hours.")
+        self.assertEqual(_content_of(hidden), "Nothing new in the last 24 hours.")
         for needle in ("Badge", "Mining stalled", "Sign-in", "Camp", "Game X"):
             self.assertNotIn(needle, blob)
         self.assertFalse(service.has_digest_content())
@@ -1718,8 +1801,8 @@ class DigestV2ServiceTests(unittest.IsolatedAsyncioTestCase):
         await service.notify_mining_stalled("no channels")
         service._settings.notifications["discord"]["events"]["mining_stalled"] = False
         shown = service._render(preview=False)
-        self.assertIn("1 drop claimed", shown["content"])
-        self.assertNotIn("stall", shown["content"])
+        self.assertIn("1 drop claimed", _content_of(shown))
+        self.assertNotIn("stall", _content_of(shown))
         self.assertIn("Badge", _blob(shown))
         self.assertNotIn("Mining stalled", _blob(shown))
         self.assertTrue(service.has_digest_content())
@@ -1747,24 +1830,105 @@ class DigestV2ServiceTests(unittest.IsolatedAsyncioTestCase):
         provider.send.assert_not_awaited()
         self.assertEqual(len(service._state["digest_queue"]), 1)
         self.assertFalse(service._state["digest_queue"][0]["data"]["alerted"])
-        self.assertIn("stall alert", service._render(preview=False)["content"])
+        self.assertIn("stall alert", _content_of(service._render(preview=False)))
+
+    async def test_partial_failure_resends_only_unsent_parts(self):
+        service, provider = self._service()
+        for index in range(25):
+            await service.notify_drop_received(f"Game {index:02d}", ["Badge"], game_id=index + 1)
+        calls = {"n": 0}
+
+        async def send(_message):
+            calls["n"] += 1
+            if calls["n"] == 2:
+                raise NotificationError("Discord: rate limited (429)", retry_after=30, status=429)
+
+        provider.send_digest.side_effect = send
+        before = datetime.now(UTC)
+        self.assertFalse(await service.flush_digest())
+        self.assertEqual(calls["n"], 2)
+        inflight = service._state["digest_inflight"]
+        self.assertEqual(len(inflight["parts"]), 3)
+        self.assertEqual(inflight["sent"], 1)
+        self.assertEqual(len(service._state["digest_queue"]), 25)
+        retry_at = datetime.fromisoformat(service._state["last_digest"]["retry_at"])
+        self.assertGreater(retry_at, before + timedelta(seconds=20))
+        self.assertFalse(await service.flush_digest())
+        self.assertEqual(calls["n"], 2)
+        parts = inflight["parts"]
+        await service.flush_pending_state()
+
+        resumed, resumed_provider = self._service()
+        sent: list[dict] = []
+
+        async def send_rest(message):
+            sent.append(message)
+
+        resumed_provider.send_digest.side_effect = send_rest
+        resumed._state["last_digest"]["retry_at"] = "2000-01-01T00:00:00+00:00"
+        self.assertTrue(await resumed.flush_digest())
+        self.assertEqual(sent, parts[1:])
+        self.assertNotEqual(sent[0], parts[0])
+        self.assertEqual(resumed._state["digest_queue"], [])
+        self.assertIsNone(resumed._state["digest_inflight"])
+
+    async def test_events_arriving_mid_send_stay_queued(self):
+        service, provider = self._service()
+        for index in range(11):
+            await service.notify_drop_received(f"Game {index:02d}", ["Badge"], game_id=index + 1)
+        started = asyncio.Event()
+        release = asyncio.Event()
+        calls = {"n": 0}
+
+        async def send(message):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                started.set()
+                await release.wait()
+            self.assertNotIn("Late Arrival", str(message))
+
+        provider.send_digest.side_effect = send
+        flushing = asyncio.create_task(service.flush_digest())
+        await started.wait()
+        await service.notify_drop_received("Late Arrival", ["Badge"], game_id=99)
+        release.set()
+        self.assertTrue(await flushing)
+        games = [event["data"]["game"] for event in service._state["digest_queue"]]
+        self.assertEqual(games, ["Late Arrival"])
+        self.assertIsNone(service._state["digest_inflight"])
+        self.assertEqual(calls["n"], 2)
+
+    async def test_preview_posts_every_part_and_keeps_the_queue(self):
+        service, provider = self._service()
+        for index in range(11):
+            await service.notify_drop_received(f"Game {index:02d}", ["Badge"], game_id=index + 1)
+        before = list(service._state["digest_queue"])
+        await service.send_preview()
+        self.assertEqual(provider.send_digest.await_count, 2)
+        first = provider.send_digest.await_args_list[0].args[0]
+        second = provider.send_digest.await_args_list[1].args[0]
+        self.assertTrue(first["content"].startswith("Preview so far"))
+        self.assertNotIn("content", second)
+        self.assertEqual(service._state["digest_queue"], before)
+        self.assertIsNone(service._state.get("digest_inflight"))
 
 
 def _claim_total(text: str) -> int:
-    """Sum the claim counts a card or a More games line actually shows."""
+    """Sum the claim counts the ✓ lines of a card actually show.
+
+    A ×N line counts as N. A trailing "+N more" counts the claims hidden
+    behind the cap. Campaign "New:" lines are not claims.
+    """
     total = 0
     for line in text.splitlines():
-        body = line[2:] if line.startswith("✓ ") else line
+        if not line.startswith("✓ "):
+            continue
+        body = line[2:]
         more = re.search(r"(?:^|, )\+(\d+)(?: more)?$", body)
         if more:
             total += int(more.group(1))
             body = body[: more.start()]
-        if line.startswith("✓ ") and body == "":
-            continue
-        # A More games line counts the rewards after the game name.
-        if not line.startswith("✓ ") and " · " in body:
-            body = body.split(" · ", 1)[1]
-        elif not line.startswith("✓ "):
+        if body == "":
             continue
         for part in body.split(", "):
             if not part:
@@ -1896,8 +2060,9 @@ class ClaimLineCountTests(unittest.TestCase):
             _drop(END - timedelta(hours=2), "PUBG", 1, ["Tee"], campaign="PAS2 Day3")
         )
         payload = _window(events)
-        more = next(embed for embed in payload["embeds"] if embed["title"] == "More games")
-        self.assertIn("**PUBG** · Tee · PAS2 Day2, Tee · PAS2 Day3", more["description"])
+        pubg = next(embed for embed in payload["embeds"] if embed["title"] == "PUBG")
+        self.assertIn("✓ Tee · PAS2 Day2", pubg["description"])
+        self.assertIn("✓ Tee · PAS2 Day3", pubg["description"])
         # Six games × three identical rewards, plus two labelled PUBG lines.
         self.assertEqual(payload["content"], "20 drops claimed")
 
@@ -1939,10 +2104,10 @@ class ClaimLineCountTests(unittest.TestCase):
             )
         )
         payload = _window(events)
-        more = next(embed for embed in payload["embeds"] if embed["title"] == "More games")
-        line = more["description"].splitlines()[0]
-        self.assertIn("**Hidden** · Alpha, Bravo, Charlie, +2", line)
-        self.assertEqual(_claim_total(line), 5)
+        hidden = next(embed for embed in payload["embeds"] if embed["title"] == "Hidden")
+        self.assertIn("✓ Alpha", hidden["description"])
+        self.assertIn("✓ Delta ×2", hidden["description"])
+        self.assertEqual(_claim_total(hidden["description"]), 5)
         self.assertEqual(payload["content"], "17 drops claimed")
 
     def test_jan_screenshot_windows_stay_six_and_four(self):
@@ -2023,3 +2188,209 @@ class ClaimLineCountTests(unittest.TestCase):
         self.assertEqual(second["content"], "4 drops claimed")
         self.assertEqual(sum(_claim_total(embed["description"]) for embed in first["embeds"]), 6)
         self.assertEqual(sum(_claim_total(embed["description"]) for embed in second["embeds"]), 4)
+
+
+def _short_games(count: int, *, benefits: list[str] | None = None) -> list[dict]:
+    reward = benefits or ["Badge"]
+    return [
+        _drop(END - timedelta(minutes=index), f"Game {index:02d}", index + 1, reward)
+        for index in range(count)
+    ]
+
+
+def _game_cards(payload: dict) -> list[dict]:
+    cards = []
+    for message in payload["messages"]:
+        for embed in message.get("embeds") or []:
+            title = str(embed.get("title") or "")
+            if title.startswith("⚠️"):
+                continue
+            if not title and str(embed.get("description") or "").startswith("…and "):
+                continue
+            cards.append(embed)
+    return cards
+
+
+def _overflow_line(payload: dict) -> str | None:
+    for message in payload["messages"]:
+        for embed in message.get("embeds") or []:
+            description = str(embed.get("description") or "")
+            if not embed.get("title") and description.startswith("…and ") and "more game" in description:
+                return description
+    return None
+
+
+class DigestMessageSplitTests(unittest.TestCase):
+    def test_one_eleven_twenty_five_and_sixty_games(self):
+        one = _window(_short_games(1))
+        self.assertEqual(len(one["messages"]), 1)
+        self.assertEqual(len(one["embeds"]), 1)
+        self.assertEqual(one["content"], "1 drop claimed")
+        self.assertIn("footer", one["embeds"][0])
+        self.assertIsNone(_overflow_line(one))
+
+        eleven = _window(_short_games(11))
+        self.assertEqual([len(message["embeds"]) for message in eleven["messages"]], [10, 1])
+        self.assertEqual(eleven["content"], "11 drops claimed")
+        self.assertNotIn("content", eleven["messages"][1])
+        self.assertNotIn("footer", eleven["messages"][0]["embeds"][-1])
+        self.assertIn("footer", eleven["messages"][1]["embeds"][-1])
+        self.assertIsNone(_overflow_line(eleven))
+
+        twenty_five = _window(_short_games(25))
+        self.assertEqual([len(message["embeds"]) for message in twenty_five["messages"]], [10, 10, 5])
+        self.assertEqual(twenty_five["content"], "25 drops claimed")
+        self.assertTrue(twenty_five["messages"][0].get("content"))
+        self.assertNotIn("content", twenty_five["messages"][1])
+        self.assertNotIn("content", twenty_five["messages"][2])
+        self.assertIsNone(_overflow_line(twenty_five))
+
+        sixty = _window(_short_games(60))
+        self.assertEqual(len(sixty["messages"]), MAX_DIGEST_MESSAGES)
+        cards = _game_cards(sixty)
+        hidden = 60 - len(cards)
+        self.assertGreater(hidden, 0)
+        self.assertEqual(_overflow_line(sixty), f"…and {hidden} more games")
+        self.assertEqual(sixty["content"], f"{len(cards)} drops claimed")
+        self.assertEqual(
+            sum(_claim_total(embed["description"]) for embed in cards),
+            len(cards),
+        )
+        last = sixty["messages"][-1]
+        self.assertEqual(last["embeds"][-1]["description"], f"…and {hidden} more games")
+        self.assertIn("footer", last["embeds"][-1])
+
+    def test_totals_footer_and_attention_only_on_the_ends(self):
+        events = _short_games(11)
+        events.append(
+            {
+                "type": "mining_stalled",
+                "ts": END.isoformat(),
+                "data": {"reason": "no channels"},
+            }
+        )
+        payload = _window(events)
+        messages = payload["messages"]
+        self.assertGreater(len(messages), 1)
+        self.assertIn("11 drops claimed", messages[0]["content"])
+        self.assertIn("stall alert", messages[0]["content"])
+        for message in messages[1:]:
+            self.assertNotIn("content", message)
+        attention_embeds = [
+            embed
+            for message in messages
+            for embed in message["embeds"]
+            if str(embed.get("title") or "").startswith("⚠️")
+        ]
+        self.assertEqual(len(attention_embeds), 1)
+        self.assertIs(attention_embeds[0], messages[-1]["embeds"][-1])
+        for message in messages:
+            for embed in message["embeds"]:
+                if embed is messages[-1]["embeds"][-1]:
+                    self.assertIn("footer", embed)
+                    self.assertIn("Last 6 hours", embed["footer"]["text"])
+                else:
+                    self.assertNotIn("footer", embed)
+                    self.assertNotIn("timestamp", embed)
+
+    def test_claim_count_matches_lines_across_messages(self):
+        events = [_drop(END, "Game 00", 1, [f"Reward {index}" for index in range(6)])]
+        events.append(_drop(END - timedelta(minutes=1), "Game 01", 2, ["Badge"]))
+        events.append(_drop(END - timedelta(minutes=2), "Game 01", 2, ["Badge"]))
+        events.extend(
+            _drop(END - timedelta(minutes=3 + index), f"Game {index + 2:02d}", index + 3, ["Badge"])
+            for index in range(10)
+        )
+        payload = _window(events)
+        self.assertGreater(len(payload["messages"]), 1)
+        shown = sum(_claim_total(embed["description"]) for embed in _game_cards(payload))
+        self.assertEqual(int(payload["content"].split()[0]), shown)
+        self.assertEqual(payload["content"].split()[0], "18")
+        descriptions = "\n".join(embed["description"] for embed in payload["embeds"])
+        # Rank is by claim events, so the two Badge events outrank the six-reward drop.
+        self.assertIn("✓ +2 more", descriptions)
+        self.assertIn("✓ Badge ×2", descriptions)
+
+    def test_jan_1514_black_desert_is_its_own_card(self):
+        window = datetime(2026, 10, 4, 13, 14, tzinfo=UTC)
+        nxt = datetime(2026, 10, 4, 19, 14, tzinfo=UTC)
+        silk = "https://img.example/silk.png"
+        events = [
+            _drop(window - timedelta(minutes=10), "NARAKA: BLADEPOINT", 1, ["Tae*200"], ["https://img.example/tae.png"]),
+            _drop(window - timedelta(minutes=5), "NARAKA: BLADEPOINT", 1, ["Spectral Silk*200"], [silk]),
+            _drop(
+                window - timedelta(minutes=20),
+                "Warhammer 40,000: Space Marine II",
+                2,
+                ["100 Accolades"],
+                ["https://img.example/acc.png"],
+            ),
+            _drop(
+                window - timedelta(minutes=15),
+                "Warhammer 40,000: Space Marine II",
+                2,
+                ["Infiltrator Helmet"],
+                ["https://img.example/helm.png"],
+            ),
+            _drop(window - timedelta(minutes=40), "Warhammer 40,000: Darktide", 3, ["PoT - Combat Shotgun"]),
+            _drop(
+                window - timedelta(minutes=30),
+                "Warhammer 40,000: Darktide",
+                3,
+                ["PoT - Maul & Shield"],
+                ["https://img.example/pot.png"],
+            ),
+            _drop(window - timedelta(minutes=50), "Active Matter", 4, ["Beacon"], ["https://img.example/beacon.png"]),
+            _drop(window - timedelta(minutes=55), "THE FINALS", 5, ["Havoc Raker"], ["https://img.example/rake.png"]),
+            _campaign("NARAKA: BLADEPOINT", 1, "NBPL 10.4", window + timedelta(hours=3)),
+            _campaign("Black Desert", 6, "2026 BDO Drops", window + timedelta(days=1)),
+        ]
+        old_tz = os.environ.get("TZ")
+        os.environ["TZ"] = "Europe/Berlin"
+        try:
+            payload = _window(
+                events,
+                window_start=window - timedelta(hours=6),
+                window_end=window,
+                next_at=nxt,
+                interval_minutes=360,
+                version="1.11.1",
+            )
+        finally:
+            if old_tz is None:
+                os.environ.pop("TZ", None)
+            else:
+                os.environ["TZ"] = old_tz
+        self.assertEqual(payload["content"], "8 drops claimed · 2 new campaigns")
+        self.assertEqual(len(payload["messages"]), 1)
+        titles = [embed["title"] for embed in payload["embeds"]]
+        self.assertEqual(
+            titles,
+            [
+                "NARAKA: BLADEPOINT",
+                "Warhammer 40,000: Space Marine II",
+                "Warhammer 40,000: Darktide",
+                "Active Matter",
+                "THE FINALS",
+                "Black Desert",
+            ],
+        )
+        self.assertNotIn("More games", titles)
+        naraka = payload["embeds"][0]["description"]
+        self.assertIn(r"✓ Tae\*200", naraka)
+        self.assertIn(r"✓ Spectral Silk\*200", naraka)
+        self.assertIn(
+            f"New: NBPL 10.4 · ends {discord_tag(window + timedelta(hours=3), 'R')}",
+            naraka,
+        )
+        self.assertEqual(payload["embeds"][0]["thumbnail"]["url"], silk)
+        desert = next(embed for embed in payload["embeds"] if embed["title"] == "Black Desert")
+        self.assertIn("New: 2026 BDO Drops", desert["description"])
+        self.assertIn("ends", desert["description"])
+        self.assertNotIn("✓ ", desert["description"])
+        self.assertEqual(desert["thumbnail"]["url"], "https://img.example/6-144x192.jpg")
+        self.assertEqual(
+            desert["footer"]["text"],
+            "Last 6 hours · next digest today, 21:14 · v1.11.1",
+        )
+        self.assertEqual(sum(_claim_total(embed["description"]) for embed in payload["embeds"]), 8)
