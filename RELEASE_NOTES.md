@@ -1,3 +1,18 @@
+# Release Notes - v1.11.2
+
+A bug-fix release for the Discord digest. The same drop no longer shows up in more than one
+digest, and the digest's header count matches the cards.
+
+### 🐛 Bug Fixes
+- **Each drop claim is notified once**: claims are deduplicated by campaign, drop, and
+  benefit in a persisted 7-day history, so a restart, an inventory refresh, or a websocket
+  report of the same claim no longer repeats it. The history is seeded on upgrade from the
+  existing claim log.
+- **Digest count matches the cards**: the "drops claimed" count in the message text now
+  adds up the claims shown on the cards, including ×N lines and "+N more".
+- **Same reward from different campaigns**: rewards with the same name from two campaigns
+  stay separate lines, each labelled with its campaign.
+
 # Release Notes - v1.11.1
 
 A security release. Three dependencies are updated to fix six published advisories,
