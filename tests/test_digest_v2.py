@@ -58,6 +58,7 @@ def _drop(
     game_id: int,
     benefits: list[str],
     images: list[str | None] | None = None,
+    campaign: str = "Camp",
 ) -> dict:
     return {
         "type": "drop_received",
@@ -65,7 +66,7 @@ def _drop(
         "data": {
             "game": game,
             "game_id": game_id,
-            "campaign": "Camp",
+            "campaign": campaign,
             "drop": benefits[0] if benefits else "",
             "benefits": benefits,
             "benefit_images": list(images) if images is not None else [None] * len(benefits),
@@ -240,7 +241,11 @@ def screenshot_payload(**overrides) -> dict:
 
 
 def _overflow_inputs() -> dict:
-    """19 claim games, 2 progress-only, 4 new-only. 41 claim events, 9 campaigns, one stall."""
+    """19 claim games, 2 progress-only, 4 new-only. 41 claim events, 9 campaigns, one stall.
+
+    Game G's first event lists three rewards, so the content line counts 43
+    reward lines rather than 41 events.
+    """
     base = END - timedelta(hours=12)
     events: list[dict] = []
     # Top 6 by claim-event count, newest activity last so recency doesn't reshuffle them.
@@ -471,7 +476,7 @@ class DigestV2Tests(unittest.TestCase):
         embeds = payload["embeds"]
         self.assertEqual(
             payload["content"],
-            "23 drops claimed · 14 new campaigns · 1 unlinked game · 64 warnings",
+            "24 drops claimed · 14 new campaigns · 1 unlinked game · 64 warnings",
         )
         self.assertEqual(len(embeds), 8)
         titles = [embed["title"] for embed in embeds]
@@ -592,7 +597,7 @@ class DigestV2Tests(unittest.TestCase):
         payload = screenshot_payload(include_errors=False)
         self.assertEqual(
             payload["content"],
-            "23 drops claimed · 14 new campaigns · 1 unlinked game",
+            "24 drops claimed · 14 new campaigns · 1 unlinked game",
         )
         attention = payload["embeds"][-1]
         self.assertEqual(attention["title"], "⚠️ Needs attention")
@@ -608,7 +613,7 @@ class DigestV2Tests(unittest.TestCase):
         embeds = payload["embeds"]
         self.assertEqual(
             payload["content"],
-            "41 drops claimed · 9 new campaigns · stall alert · 3 warnings",
+            "43 drops claimed · 9 new campaigns · stall alert · 3 warnings",
         )
         self.assertNotIn("1 stall", payload["content"])
         self.assertEqual(len(embeds), 8)
@@ -1742,3 +1747,131 @@ class DigestV2ServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(service._state["digest_queue"]), 1)
         self.assertFalse(service._state["digest_queue"][0]["data"]["alerted"])
         self.assertIn("stall alert", service._render(preview=False)["content"])
+
+
+def _window(events: list[dict], **overrides) -> dict:
+    payload = {
+        "events": events,
+        "window_start": END - timedelta(hours=6),
+        "window_end": END,
+        "next_at": END + timedelta(hours=6),
+        "interval_minutes": 360,
+        "progress": {"state": "idle", "campaigns": []},
+        "version": VERSION,
+    }
+    payload.update(overrides)
+    return render_digest(**payload)
+
+
+class ClaimLineCountTests(unittest.TestCase):
+    def test_two_benefits_are_two_lines_and_two_in_the_content(self):
+        payload = _window([_drop(END, "PUBG", 1, ["Battle Hazard Logo Tee", "Fried Chicken"])])
+        text = payload["embeds"][0]["description"]
+        self.assertEqual(payload["content"], "2 drops claimed")
+        self.assertIn("✓ Battle Hazard Logo Tee", text)
+        self.assertIn("✓ Fried Chicken", text)
+        self.assertEqual(text.count("✓ "), 2)
+
+    def test_progress_rows_do_not_add_to_the_drop_count(self):
+        payload = _window(
+            [_drop(END, "PUBG", 1, ["Tee"])],
+            progress={
+                "state": "watching",
+                "channel": "live",
+                "game": "SMITE 2",
+                "game_id": 2,
+                "campaigns": [
+                    {
+                        "game": "SMITE 2",
+                        "game_id": 2,
+                        "drop": "Bundle",
+                        "campaign": "Season",
+                        "percent": 10,
+                        "remaining_minutes": 40,
+                        "mining_now": True,
+                    }
+                ],
+            },
+        )
+        self.assertEqual(payload["content"], "1 drop claimed")
+        titles = [embed["title"] for embed in payload["embeds"]]
+        blob = "\n".join(embed["description"] for embed in payload["embeds"])
+        self.assertIn("PUBG", titles)
+        self.assertIn("SMITE 2", titles)
+        self.assertIn("✓ Tee", blob)
+        self.assertIn("Bundle", blob)
+
+    def test_trimmed_reward_lines_still_count(self):
+        benefits = [f"Reward {index}" for index in range(6)]
+        payload = _window([_drop(END, "PUBG", 1, benefits)])
+        text = payload["embeds"][0]["description"]
+        self.assertEqual(payload["content"], "6 drops claimed")
+        self.assertEqual(text.count("✓ Reward"), 4)
+        self.assertIn("✓ +2 more", text)
+
+    def test_same_benefit_from_two_campaigns_stays_two_lines(self):
+        events = [
+            _drop(END - timedelta(minutes=2), "PUBG", 1, ["Tee", "Spray"], campaign="PAS2 Day2"),
+            _drop(END - timedelta(minutes=1), "PUBG", 1, ["Tee", "Spray"], campaign="PAS2 Day3"),
+        ]
+        payload = _window(events)
+        text = payload["embeds"][0]["description"]
+        self.assertEqual(payload["content"], "4 drops claimed")
+        self.assertIn("✓ Tee · PAS2 Day2", text)
+        self.assertIn("✓ Spray · PAS2 Day2", text)
+        self.assertIn("✓ Tee · PAS2 Day3", text)
+        self.assertIn("✓ Spray · PAS2 Day3", text)
+
+    def test_same_campaign_still_collapses(self):
+        events = [
+            _drop(END - timedelta(minutes=2), "PUBG", 1, ["Tee"], campaign="PAS2 Day2"),
+            _drop(END - timedelta(minutes=1), "PUBG", 1, ["Tee"], campaign="PAS2 Day2"),
+        ]
+        payload = _window(events)
+        text = payload["embeds"][0]["description"]
+        self.assertEqual(payload["content"], "1 drop claimed")
+        self.assertEqual(text, "✓ Tee ×2")
+
+    def test_a_prior_campaign_labels_a_solo_claim(self):
+        event = _drop(END, "PUBG", 1, ["Tee"], campaign="PAS2 Day3")
+        event["data"]["disambiguate"] = ["Tee"]
+        payload = _window([event])
+        self.assertEqual(payload["content"], "1 drop claimed")
+        self.assertEqual(payload["embeds"][0]["description"], "✓ Tee · PAS2 Day3")
+
+    def test_old_event_without_ids_still_renders(self):
+        event = {
+            "type": "drop_received",
+            "ts": END.isoformat(),
+            "data": {"game": "PUBG", "benefits": ["Tee", "Spray"]},
+        }
+        payload = _window([event])
+        text = payload["embeds"][0]["description"]
+        self.assertEqual(payload["content"], "2 drops claimed")
+        self.assertIn("✓ Tee", text)
+        self.assertIn("✓ Spray", text)
+        self.assertNotIn("·", text)
+
+    def test_colliding_names_keep_the_campaign_in_more_games(self):
+        events = []
+        for index, name in enumerate(("Alpha", "Bravo", "Charlie", "Delta", "Echo", "Foxtrot")):
+            for offset in (30, 20, 10):
+                events.append(
+                    _drop(
+                        END - timedelta(minutes=offset + index),
+                        name,
+                        10 + index,
+                        [f"{name} reward"],
+                    )
+                )
+        events.append(
+            _drop(END - timedelta(hours=3), "PUBG", 1, ["Tee"], campaign="PAS2 Day2")
+        )
+        events.append(
+            _drop(END - timedelta(hours=2), "PUBG", 1, ["Tee"], campaign="PAS2 Day3")
+        )
+        payload = _window(events)
+        more = next(embed for embed in payload["embeds"] if embed["title"] == "More games")
+        self.assertIn("**PUBG** · Tee · PAS2 Day2, Tee · PAS2 Day3", more["description"])
+        # Six games collapse three identical rewards each, plus two labelled PUBG lines.
+        self.assertEqual(payload["content"], "8 drops claimed")

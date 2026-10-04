@@ -23,6 +23,14 @@ from typing import TYPE_CHECKING, Any, cast
 
 from src.config import NOTIFICATIONS_STATE_PATH
 from src.notifications.base import NotificationError, NotificationProvider
+from src.notifications.claims import (
+    CLAIM_HISTORY_MAX,
+    CLAIM_TTL,
+    build_claim_records,
+    coerce_claim_history,
+    prune_claim_history,
+    repeating_benefit_names,
+)
 from src.notifications.digest_style import ERROR_GROUP_CAP, QUEUE_CAP
 from src.notifications.discord import (
     MAX_RETRY_AFTER_SECONDS,
@@ -97,6 +105,7 @@ def _empty_state() -> dict[str, Any]:
         "digest_flush_pending": False,
         "digest_seq": 0,
         "last_digest": None,
+        "notified_claims": [],
     }
 
 
@@ -153,6 +162,12 @@ def _load_state(path: Path) -> dict[str, Any]:
         raw[key] = _coerce_count(raw.get(key))
     _ensure_queue_seqs(raw)
     _clamp_stored_retry(raw)
+    raw["notified_claims"] = prune_claim_history(
+        coerce_claim_history(raw.get("notified_claims")),
+        datetime.now(UTC),
+        ttl=CLAIM_TTL,
+        limit=CLAIM_HISTORY_MAX,
+    )
     if dropped_bad:
         logger.warning("Dropped invalid items from the notifications digest queue")
     return raw
@@ -527,7 +542,7 @@ class NotificationService:
         description: str,
         *,
         data: dict[str, Any] | None = None,
-    ) -> None:
+    ) -> bool:
         """
         Deliver a notification to every enabled provider that has this event
         type turned on.
@@ -535,21 +550,22 @@ class NotificationService:
         Immediate mode applies the cooldown and drops repeats. Digest mode
         queues every event (no cooldown loss). Urgent events in digest mode
         are also sent immediately, and that immediate send still respects the
-        cooldown.
+        cooldown. Returns whether the event was queued or at least one
+        provider accepted it.
         """
         if not self.enabled:
-            return
+            return False
         event = NotificationEvent(
             type=event_type,
             ts=datetime.now(UTC),
             data=dict(data) if data is not None else {"title": title, "description": description},
         )
-        await self._dispatch(event, title, description)
+        return await self._dispatch(event, title, description)
 
-    async def _dispatch(self, event: NotificationEvent, title: str, description: str) -> None:
+    async def _dispatch(self, event: NotificationEvent, title: str, description: str) -> bool:
         providers = self._providers_for(event.type)
         if not providers:
-            return
+            return False
         thumbnail = drop_thumbnail(event.data) if event.type == "drop_received" else None
         if self.mode == "digest":
             alerted = False
@@ -557,8 +573,8 @@ class NotificationService:
                 alerted = await self._send_immediate(providers, event.type, title, description)
             event.data["alerted"] = alerted
             self._enqueue(event)
-            return
-        await self._send_immediate(
+            return True
+        return await self._send_immediate(
             providers, event.type, title, description, thumbnail_url=thumbnail
         )
 
@@ -1126,6 +1142,64 @@ class NotificationService:
 
     # convenience wrappers ---------------------------------------------------
 
+    def _take_claim(self, records: list[dict[str, Any]]) -> tuple[bool, list[dict[str, Any]]]:
+        """Reserve a claim and return whether it should be announced.
+
+        The history returned is the one from before this claim, so a repeat of
+        a benefit name can be labelled with its campaign. Expired rows are
+        dropped here, including on the duplicate path.
+        """
+        changed = False
+        with self._state_lock:
+            previous = self._state.get("notified_claims")
+            history = prune_claim_history(
+                coerce_claim_history(previous),
+                datetime.now(UTC),
+                ttl=CLAIM_TTL,
+                limit=CLAIM_HISTORY_MAX,
+            )
+            known = {entry["k"] for entry in history}
+            keys = [entry["k"] for entry in records]
+            duplicate = bool(keys) and all(key in known for key in keys)
+            updated = history
+            if not duplicate and records:
+                merged = {entry["k"]: entry for entry in history}
+                for entry in records:
+                    merged[entry["k"]] = entry
+                updated = prune_claim_history(
+                    list(merged.values()),
+                    datetime.now(UTC),
+                    ttl=CLAIM_TTL,
+                    limit=CLAIM_HISTORY_MAX,
+                )
+            if updated != previous:
+                self._state["notified_claims"] = updated
+                changed = True
+        if changed:
+            self._mark_dirty()
+        return (not duplicate), history
+
+    def _drop_claim_records(self, records: list[dict[str, Any]]) -> None:
+        """Forget keys reserved for a claim that was never queued or delivered."""
+        keys = {entry["k"] for entry in records if isinstance(entry.get("k"), str)}
+        if not keys:
+            return
+        changed = False
+        with self._state_lock:
+            current = self._state.get("notified_claims")
+            if not isinstance(current, list):
+                return
+            kept = [
+                entry
+                for entry in current
+                if not isinstance(entry, dict) or entry.get("k") not in keys
+            ]
+            if len(kept) != len(current):
+                self._state["notified_claims"] = kept
+                changed = True
+        if changed:
+            self._mark_dirty()
+
     async def notify_drop_received(
         self,
         game_name: str,
@@ -1137,24 +1211,83 @@ class NotificationService:
         benefit_images: Iterable[object] | None = None,
         game_id: int | str | None = None,
         game_box_art: object = None,
+        campaign_id: str | None = None,
+        drop_id: str | None = None,
+        claim_id: str | None = None,
+        benefit_ids: Iterable[object] | None = None,
     ) -> None:
         benefit_list = [str(benefit) for benefit in benefits]
         benefit_text = ", ".join(benefit_list) or "a drop"
-        await self.notify(
+        # No id, no dedupe: a claim queued before ids were stored still goes out.
+        # Immediate mode's cooldown can swallow a send; don't record that claim
+        # or the next one after the cooldown would be treated as a duplicate.
+        if not self.enabled or not self._providers_for("drop_received"):
+            return
+        if self.mode != "digest" and self._in_cooldown("discord", "drop_received"):
+            return
+        now = datetime.now(UTC)
+        benefit_id_list = (
+            [str(benefit_id) for benefit_id in benefit_ids if benefit_id]
+            if benefit_ids is not None
+            else None
+        )
+        records = build_claim_records(
+            campaign_id=campaign_id,
+            drop_id=drop_id,
+            claim_id=claim_id,
+            benefit_ids=benefit_id_list,
+            benefit_names=benefit_list,
+            game=game_name,
+            game_id=game_id,
+            campaign=campaign,
+            now=now,
+        )
+        announce, prior = self._take_claim(records)
+        if not announce:
+            logger.info(
+                "Skipping duplicate drop claim for %s (%s)",
+                game_name,
+                benefit_text,
+            )
+            return
+        stored_game_id = _stored_game_id(game_id)
+        data: dict[str, Any] = {
+            "game": game_name,
+            "campaign": campaign,
+            "drop": drop_name,
+            "benefits": benefit_list,
+            "channel": channel or "inventory",
+            "benefit_images": _image_list(benefit_images),
+            "game_id": stored_game_id,
+            "game_box_art": _stored_url(game_box_art),
+        }
+        if campaign_id:
+            data["campaign_id"] = campaign_id
+        if drop_id:
+            data["drop_id"] = drop_id
+        if claim_id:
+            data["claim_id"] = claim_id
+        if benefit_id_list:
+            data["benefit_ids"] = benefit_id_list
+        repeated = repeating_benefit_names(
+            prior,
+            game=game_name,
+            game_id=stored_game_id,
+            campaign=campaign,
+            benefits=benefit_list,
+        )
+        if repeated:
+            data["disambiguate"] = repeated
+        delivered = await self.notify(
             "drop_received",
             "Drop received",
             f"Claimed **{benefit_text}** for *{game_name}*.",
-            data={
-                "game": game_name,
-                "campaign": campaign,
-                "drop": drop_name,
-                "benefits": benefit_list,
-                "channel": channel or "inventory",
-                "benefit_images": _image_list(benefit_images),
-                "game_id": _stored_game_id(game_id),
-                "game_box_art": _stored_url(game_box_art),
-            },
+            data=data,
         )
+        # A failed immediate send must not burn the key. Digest mode has already
+        # queued the event, so that path reports delivery even if Discord is down.
+        if not delivered:
+            self._drop_claim_records(records)
 
     async def notify_unlinked_tracked_game(self, game_name: str, campaign_name: str) -> None:
         await self.notify(

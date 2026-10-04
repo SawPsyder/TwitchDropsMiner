@@ -188,9 +188,15 @@ class BaseDrop:
         return [benefit for benefit in self.benefits if benefit.is_wanted(allowed_benefits)]
 
     async def claim(self, *, source: str | None = None) -> bool:
+        already_claimed = self.is_claimed
         result = await self._claim()
         if result:
             self.is_claimed = result
+            # A websocket replay or a second call on this object is the same
+            # grant. The notification service also ignores the same instance
+            # after a restart; this skips the console line as well.
+            if already_claimed:
+                return True
             if self.is_badge_or_emote:
                 # Twitch won't reliably report this as claimed on the next reload, so
                 # persist the verified completion ourselves (keyed to campaign end).
@@ -228,6 +234,10 @@ class BaseDrop:
                 benefit_images=[benefit.image_url for benefit in self.benefits],
                 game_id=self.campaign.game.id,
                 game_box_art=self.campaign.game.box_art_url,
+                campaign_id=self.campaign.id,
+                drop_id=self.id,
+                claim_id=self.claim_id,
+                benefit_ids=[benefit.id for benefit in self.benefits],
             )
         else:
             logger.error("Drop claim has potentially failed! Drop ID: %s", self.id)

@@ -348,24 +348,63 @@ def _reward_names(data: dict[str, Any]) -> list[str]:
     return ["a drop"]
 
 
+def _campaign_label(data: dict[str, Any]) -> str:
+    return " ".join(str(data.get("campaign") or "").split())
+
+
+def _forced_reward_names(data: dict[str, Any]) -> set[str]:
+    """Benefit names a previous digest already showed for this game under another campaign."""
+    raw = data.get("disambiguate")
+    if isinstance(raw, str):
+        raw = [raw]
+    return {" ".join(str(item).split()).casefold() for item in _as_list(raw) if str(item).strip()}
+
+
 def _collapsed_rewards(claims: list[dict[str, Any]]) -> list[tuple[str, int]]:
-    """Oldest claim first. Identical names collapse, and the line stays where it first appeared."""
+    """Oldest claim first. Identical names collapse, and the line stays where it first appeared.
+
+    The same benefit name from two campaigns stays as two lines, with the
+    campaign on each, so a new daily drop is not mistaken for the previous one.
+    A name flagged on the event is labelled even when it is the only claim in
+    this window.
+    """
     ordered = sorted(
         enumerate(claims),
         key=lambda pair: (_event_stamp(pair[1]), pair[0]),
     )
+    rows: list[tuple[str, str, bool]] = []
+    for _order, event in ordered:
+        data = _as_dict(event.get("data"))
+        campaign = _campaign_label(data)
+        forced = _forced_reward_names(data)
+        for name in _reward_names(data):
+            rows.append((name, campaign, name.casefold() in forced))
+    campaigns_for: dict[str, set[str]] = {}
+    forced_names: set[str] = set()
+    for name, campaign, is_forced in rows:
+        if campaign:
+            campaigns_for.setdefault(name.casefold(), set()).add(campaign.casefold())
+        if is_forced:
+            forced_names.add(name.casefold())
+
+    def label(name: str, campaign: str) -> str:
+        key = name.casefold()
+        distinct = campaigns_for.get(key, set())
+        if campaign and (len(distinct) > 1 or key in forced_names):
+            return f"{name} · {campaign}"
+        return name
+
     index: dict[str, int] = {}
     lines: list[tuple[str, int]] = []
-    for _order, event in ordered:
-        for name in _reward_names(_as_dict(event.get("data"))):
-            key = name.casefold()
-            slot = index.get(key)
-            if slot is None:
-                index[key] = len(lines)
-                lines.append((name, 1))
-            else:
-                current, count = lines[slot]
-                lines[slot] = (current, count + 1)
+    for name, campaign, _forced in rows:
+        shown = label(name, campaign)
+        slot = index.get(shown.casefold())
+        if slot is None:
+            index[shown.casefold()] = len(lines)
+            lines.append((shown, 1))
+        else:
+            current, count = lines[slot]
+            lines[slot] = (current, count + 1)
     return lines
 
 
@@ -473,6 +512,11 @@ class _Game:
         text = " ".join(str(name).split())
         if text and not self.name:
             self.name = text
+
+
+def _claim_line_total(games: dict[str, _Game]) -> int:
+    """Reward lines these claims would show, before a card hides the tail."""
+    return sum(len(_collapsed_rewards(game.claims)) for game in games.values())
 
 
 def _normal_game_name(name: object) -> str:
@@ -1255,7 +1299,9 @@ def render_digest(
     after the event was queued still hides that block and its content-line count.
     `events` are serialized NotificationEvent dicts. `error_groups` are the
     aggregated WARNING/ERROR records (`level`, `count`, `latest`, `last_ts`).
-    Counts are the real totals, including lines later trimmed.
+    Counts are the real totals, including lines later trimmed. The drop total
+    counts reward lines (one per distinct benefit; the same name from two
+    campaigns counts twice), which is the unit on the card and in More games.
     """
     # The footer names the period. The embed timestamp is the end of the window.
     window_end = _aware(window_end)
@@ -1266,7 +1312,11 @@ def render_digest(
     overflow_types = error_overflow_types if include_errors else 0
     overflow_count = error_overflow_count if include_errors else 0
 
-    drop_count = _count(events, "drop_received") if include_drops else 0
+    # Built before the content line so the drop total matches the reward lines.
+    # Progress rows stay on the buckets so a claim-eligible game still ranks
+    # first while it is being mined. Display and eligibility follow the toggle.
+    games = _games_from(events, progress)
+    drop_count = _claim_line_total(games) if include_drops else 0
     campaign_count = _count(events, "new_campaign") if include_campaigns else 0
     stall_count = _count(events, "mining_stalled") if include_stalled else 0
     auth_count = _count(events, "auth_attention") if include_auth else 0
@@ -1290,10 +1340,6 @@ def render_digest(
         window_end=window_end,
         version=version,
     )
-    # Progress rows stay on the buckets so a claim-eligible game still ranks
-    # first while it is being mined. Display and eligibility follow the toggle.
-    games = _games_from(events, progress)
-
     eligible_count = sum(
         1
         for game in games.values()
