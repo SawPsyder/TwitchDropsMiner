@@ -51,6 +51,11 @@ from src.notifications.digest_style import (
 from src.notifications.schedule import local_timezone
 
 
+# Bump when the shape of a saved digest part changes. An in-flight digest
+# rendered with a different schema is discarded and built again from the queue.
+RENDER_SCHEMA = 1
+
+
 _MARKDOWN = re.compile(r"([\\*_~|>#`])")
 _GENERIC_DROP_NAME = re.compile(r"^(drop|reward)?\s*#?\d*$", re.IGNORECASE)
 _WEEKDAYS = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
@@ -499,6 +504,7 @@ class _Game:
     claims: list[dict[str, Any]] = field(default_factory=list)
     campaigns: list[dict[str, Any]] = field(default_factory=list)
     progress: list[dict[str, Any]] = field(default_factory=list)
+    event_seqs: list[int] = field(default_factory=list)
     mining_now: bool = False
 
     def remember_name(self, name: object) -> None:
@@ -548,9 +554,18 @@ def _fold_legacy_buckets(games: dict[str, _Game]) -> dict[str, _Game]:
         target.claims.extend(game.claims)
         target.campaigns.extend(game.campaigns)
         target.progress.extend(game.progress)
+        target.event_seqs.extend(game.event_seqs)
         target.mining_now = target.mining_now or game.mining_now
         target.remember_name(game.name)
     return folded
+
+
+def _event_seq(event: dict[str, Any]) -> int | None:
+    """Queue seq stamped on an event, or None when this render has no queue."""
+    seq = event.get("seq")
+    if isinstance(seq, bool) or not isinstance(seq, int) or seq <= 0:
+        return None
+    return seq
 
 
 def _games_from(
@@ -580,6 +595,9 @@ def _games_from(
         if not name and not game_id:
             continue
         game = bucket(game_id, name)
+        seq = _event_seq(event)
+        if seq is not None:
+            game.event_seqs.append(seq)
         if kind == "drop_received":
             game.claims.append(event)
         else:
@@ -1073,10 +1091,14 @@ def _try_pack(
     footer: str,
     window_end: datetime,
     max_messages: int,
-) -> list[dict[str, Any]] | None:
-    """Pack greedily. `tail` (the overflow line, then Needs attention) stays on the last message."""
+) -> tuple[list[dict[str, Any]], list[int]] | None:
+    """Pack greedily. `tail` (the overflow line, then Needs attention) stays on the last message.
+
+    The second list is how many game cards each message holds. Tail embeds are not cards.
+    """
     remaining = list(cards)
     messages: list[dict[str, Any]] = []
+    counts: list[int] = []
     while True:
         if len(messages) >= max_messages:
             return None
@@ -1089,13 +1111,15 @@ def _try_pack(
                 messages.append({"content": msg_content, "embeds": []})
             else:
                 messages.append({"embeds": []})
-            return messages
+            counts.append(len(remaining))
+            return messages, counts
         if len(messages) == max_messages - 1:
             return None
         take = _max_prefix(remaining, msg_content, window_end)
         if take <= 0:
             return None
         messages.append(_finish_message(remaining[:take], msg_content, None, window_end))
+        counts.append(take)
         remaining = remaining[take:]
 
 
@@ -1105,14 +1129,10 @@ def _pack_messages(
     content: str,
     footer: str,
     window_end: datetime,
-) -> tuple[list[dict[str, Any]], int]:
-    """Messages in send order, and how many leading cards they include.
+) -> tuple[list[dict[str, Any]], int, list[int]]:
+    """Messages in send order, how many leading cards they include, and cards per message."""
 
-    The content string passed in is the longest totals line this digest might
-    use. Callers replace it with the line for the cards that were actually shown.
-    """
-
-    def attempt(shown: int) -> list[dict[str, Any]] | None:
+    def attempt(shown: int) -> tuple[list[dict[str, Any]], list[int]] | None:
         hidden = len(cards) - shown
         tail: list[dict[str, Any]] = []
         if hidden:
@@ -1123,9 +1143,11 @@ def _pack_messages(
 
     packed = attempt(len(cards))
     if packed is not None:
-        return packed, len(cards)
+        messages, counts = packed
+        return messages, len(cards), counts
 
     best_messages: list[dict[str, Any]] | None = None
+    best_counts: list[int] = []
     best = 0
     lo = 0
     hi = max(0, len(cards) - 1)
@@ -1134,12 +1156,12 @@ def _pack_messages(
         trial = attempt(mid)
         if trial is not None:
             best = mid
-            best_messages = trial
+            best_messages, best_counts = trial
             lo = mid + 1
         else:
             hi = mid - 1
     if best_messages is not None:
-        return best_messages, best
+        return best_messages, best, best_counts
 
     # Attention alone was still over the budget. Cut its description and keep the games line.
     hidden = len(cards)
@@ -1154,10 +1176,11 @@ def _pack_messages(
     tail = [embed for embed in (overflow, shrunk) if embed is not None]
     fallback = _try_pack([], tail, content, footer, window_end, MAX_DIGEST_MESSAGES)
     if fallback is not None:
-        return fallback, 0
+        messages, counts = fallback
+        return messages, 0, counts
     if content:
-        return [{"content": _safe_truncate(content, TOTAL_CHAR_TARGET), "embeds": []}], 0
-    return [{"embeds": []}], 0
+        return [{"content": _safe_truncate(content, TOTAL_CHAR_TARGET), "embeds": []}], 0, [0]
+    return [{"embeds": []}], 0, [0]
 
 
 def _ordered_games(
@@ -1259,6 +1282,51 @@ def _attention_embed(
     }
 
 
+def _attention_seqs(
+    events: list[dict[str, Any]],
+    *,
+    include_stalled: bool,
+    include_auth: bool,
+    include_unlinked: bool,
+) -> list[int]:
+    """Queue seqs that land in Needs attention, which is always the last message."""
+    wanted: set[str] = set()
+    if include_stalled:
+        wanted.add("mining_stalled")
+    if include_auth:
+        wanted.add("auth_attention")
+    if include_unlinked:
+        wanted.add("unlinked_tracked_game")
+    seqs: list[int] = []
+    for event in events:
+        if event.get("type") not in wanted:
+            continue
+        seq = _event_seq(event)
+        if seq is not None:
+            seqs.append(seq)
+    return seqs
+
+
+def _stamp_part_seqs(
+    messages: list[dict[str, Any]],
+    counts: list[int],
+    paired: Sequence[tuple[_Game, dict[str, Any]]],
+    attention_seqs: list[int],
+) -> None:
+    """Remember which queue seqs each message delivered, so a later reset can skip them."""
+    offset = 0
+    last = len(messages) - 1
+    for index, message in enumerate(messages):
+        count = counts[index] if index < len(counts) else 0
+        seqs: list[int] = []
+        for game, _card in paired[offset : offset + count]:
+            seqs.extend(game.event_seqs)
+        offset += count
+        if index == last:
+            seqs.extend(attention_seqs)
+        message["_event_seqs"] = seqs
+
+
 def _count(events: list[dict[str, Any]], kind: str) -> int:
     return sum(1 for event in events if event.get("type") == kind)
 
@@ -1306,9 +1374,10 @@ def render_digest(
     after the event was queued still hides that block and its content-line count.
     `events` are serialized NotificationEvent dicts. `error_groups` are the
     aggregated WARNING/ERROR records (`level`, `count`, `latest`, `last_ts`).
-    The drop total sums the same counts the cards show, across every message:
-    a ×N line counts as N, and +N more is the claims hidden behind that line.
-    Games left off by the five-message cap are not part of that total.
+    The drop total counts every claim in the window, including claims on games
+    the five-message cap leaves off the card list. A ×N line counts as N, and
+    +N more counts the claims hidden inside a card. New campaigns are counted
+    the same way, including campaigns on games that did not get a card.
     """
     # The footer names the period. The embed timestamp is the end of the window.
     window_end = _aware(window_end)
@@ -1359,8 +1428,8 @@ def render_digest(
             warning_count=warning_count,
         )
 
-    # Pack against the longer totals line (every card's claims). The line that
-    # is actually sent counts only the cards that fit, which is never longer.
+    # The header counts every claim, including games the five-message cap hides.
+    # Pack against that same line so the message that is sent still fits.
     upper_drops = _claim_line_total(game for game, _card in paired) if include_drops else 0
     content = totals(upper_drops)
     footer = _footer(
@@ -1389,20 +1458,22 @@ def render_digest(
     if not paired and attention is None:
         return [{"content": content, "embeds": []}]
 
-    messages, shown = _pack_messages(
+    messages, _shown, counts = _pack_messages(
         [card for _game, card in paired],
         attention,
         content,
         footer,
         window_end,
     )
-    exact_drops = (
-        _claim_line_total(game for game, _card in paired[:shown]) if include_drops else 0
+    attention_seqs = (
+        _attention_seqs(
+            events,
+            include_stalled=include_stalled,
+            include_auth=include_auth,
+            include_unlinked=include_unlinked,
+        )
+        if attention is not None
+        else []
     )
-    exact = totals(exact_drops)
-    if messages:
-        if exact:
-            messages[0]["content"] = exact
-        else:
-            messages[0].pop("content", None)
+    _stamp_part_seqs(messages, counts, paired, attention_seqs)
     return messages

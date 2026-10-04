@@ -22,16 +22,21 @@ from src.notifications.digest_style import (
     MAX_TITLE_CHARS,
     TOTAL_CHAR_TARGET,
 )
+from src.notifications.discord import DiscordProvider
 from src.notifications.events import NotificationEvent
 from src.notifications.render import (
+    RENDER_SCHEMA,
     _campaign_sort_key,
     _valid_https_url,
     discord_tag,
     discord_units,
     drop_thumbnail,
     message_char_count,
+)
+from src.notifications.render import (
     render_digest as _render_digest,
 )
+from src.version import __version__
 from tests.test_notifications import (
     FakeCampaign,
     FakeSettings,
@@ -1642,6 +1647,7 @@ class DigestV2ServiceTests(unittest.IsolatedAsyncioTestCase):
     def _service(self, **overrides):
         settings = FakeSettings(digest_notification_settings(**overrides))
         service = NotificationService(settings, state_path=self.state_path)
+        service._part_delay = 0
         provider = service.get_provider("discord")
         provider.send = unittest.mock.AsyncMock()
         provider.send_digest = unittest.mock.AsyncMock()
@@ -1911,6 +1917,122 @@ class DigestV2ServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("content", second)
         self.assertEqual(service._state["digest_queue"], before)
         self.assertIsNone(service._state.get("digest_inflight"))
+
+    async def test_part_delay_runs_between_parts_and_not_before_the_first(self):
+        service, provider = self._service()
+        service._part_delay = 1.2
+        order: list[object] = []
+
+        async def send(_message):
+            order.append("send")
+
+        async def sleep(seconds):
+            order.append(seconds)
+
+        provider.send_digest.side_effect = send
+        service._sleep = sleep
+        for index in range(11):
+            await service.notify_drop_received(
+                f"Game {index:02d}", ["Badge"], game_id=index + 1
+            )
+        self.assertTrue(await service.flush_digest())
+        self.assertEqual(order, ["send", 1.2, "send"])
+
+    async def test_persistent_400_rerenders_after_three_failures(self):
+        service, provider = self._service()
+        provider.send_digest = DiscordProvider.send_digest.__get__(provider, DiscordProvider)
+        posts: list[dict] = []
+        stuck: dict[str, object] = {"titles": None, "hits": 0}
+
+        async def fake_request(_session, _method, _path, *, json=None):
+            body = json or {}
+            posts.append(body)
+            titles = tuple(
+                embed.get("title")
+                for embed in body.get("embeds") or []
+                if isinstance(embed, dict)
+            )
+            if not body.get("content"):
+                if stuck["titles"] is None:
+                    stuck["titles"] = titles
+                if titles == stuck["titles"]:
+                    stuck["hits"] = int(stuck["hits"]) + 1
+                    raise NotificationError("Discord: request failed (400)", status=400)
+            return {"id": "ok"}
+
+        provider._request = fake_request
+        for index in range(35):
+            await service.notify_drop_received(
+                f"Game {index:02d}",
+                ["Badge"],
+                game_id=index + 1,
+                benefit_images=["https://img.example/badge.png"],
+            )
+        with self.assertLogs("TwitchDrops.notifications", level="WARNING") as caught:
+            self.assertFalse(await service.flush_digest())
+            for extra in range(9):
+                await service.notify_drop_received(
+                    f"Extra {extra:02d}",
+                    ["Badge"],
+                    game_id=100 + extra,
+                    benefit_images=["https://img.example/extra.png"],
+                )
+                service._state["last_digest"]["retry_at"] = "2000-01-01T00:00:00+00:00"
+                await service.flush_digest()
+        self.assertEqual(stuck["hits"], 6)
+        self.assertLess(len(posts), 21)
+        self.assertTrue(any("Dropped unsent Discord digest parts" in line for line in caught.output))
+        self.assertEqual(service._state["digest_queue"], [])
+        self.assertIsNone(service._state["digest_inflight"])
+        delivered = {
+            embed.get("title")
+            for embed in posts[0].get("embeds") or []
+            if isinstance(embed, dict)
+        }
+        for body in posts[7:]:
+            for embed in body.get("embeds") or []:
+                self.assertNotIn(embed.get("title"), delivered)
+
+    async def test_version_or_schema_mismatch_discards_unsent_parts(self):
+        cases = (
+            {"version": "0.0.0", "schema": RENDER_SCHEMA},
+            {"version": __version__, "schema": RENDER_SCHEMA + 1},
+        )
+        for planted in cases:
+            service, _provider = self._service()
+            for index in range(11):
+                await service.notify_drop_received(
+                    f"Game {index:02d}", ["Badge"], game_id=index + 1
+                )
+            messages = service._render(preview=False)
+            part_seqs = [list(message.pop("_event_seqs")) for message in messages]
+            self.assertEqual(len(part_seqs[0]), 10)
+            service._state["digest_inflight"] = {
+                "parts": messages,
+                "part_seqs": part_seqs,
+                "sent": 1,
+                "failures": 1,
+                "version": planted["version"],
+                "schema": planted["schema"],
+                "snapshot": service._window_snapshot(),
+                "render_time": datetime.now(UTC).isoformat(),
+            }
+            service._mark_dirty()
+            await service.flush_pending_state()
+            with self.assertLogs("TwitchDrops.notifications", level="WARNING") as caught:
+                reloaded, provider = self._service()
+            self.assertTrue(
+                any("Dropped unsent Discord digest parts" in line for line in caught.output)
+            )
+            self.assertIsNone(reloaded._state["digest_inflight"])
+            queued = [event["data"]["game"] for event in reloaded._state["digest_queue"]]
+            self.assertEqual(queued, ["Game 00"])
+            self.assertTrue(await reloaded.flush_digest())
+            sent = provider.send_digest.await_args.args[0]
+            blob = str(sent)
+            self.assertIn("Game 00", blob)
+            self.assertNotIn("Game 10", blob)
+            self.assertNotIn("Game 01", blob)
 
 
 def _claim_total(text: str) -> int:
@@ -2245,13 +2367,19 @@ class DigestMessageSplitTests(unittest.TestCase):
         self.assertNotIn("content", twenty_five["messages"][2])
         self.assertIsNone(_overflow_line(twenty_five))
 
-        sixty = _window(_short_games(60))
+        events = _short_games(60)
+        events.append(_campaign("Only Campaign", 500, "Launch", END + timedelta(days=1)))
+        sixty = _window(events)
         self.assertEqual(len(sixty["messages"]), MAX_DIGEST_MESSAGES)
         cards = _game_cards(sixty)
-        hidden = 60 - len(cards)
+        hidden = 61 - len(cards)
         self.assertGreater(hidden, 0)
         self.assertEqual(_overflow_line(sixty), f"…and {hidden} more games")
-        self.assertEqual(sixty["content"], f"{len(cards)} drops claimed")
+        # The header counts every claim and every new campaign, including games
+        # left off the card list. Shown lines are only the cards that fit.
+        self.assertEqual(sixty["content"], "60 drops claimed · 1 new campaign")
+        self.assertGreater(60, len(cards))
+        self.assertNotIn("Only Campaign", [card["title"] for card in cards])
         self.assertEqual(
             sum(_claim_total(embed["description"]) for embed in cards),
             len(cards),

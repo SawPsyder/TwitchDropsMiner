@@ -137,6 +137,7 @@ class ClaimDedupeServiceTests(unittest.IsolatedAsyncioTestCase):
     def make_service(self, **overrides):
         settings = FakeSettings(digest_notification_settings(**overrides))
         service = NotificationService(settings, state_path=self.state_path)
+        service._part_delay = 0
         provider = service.get_provider("discord")
         assert provider is not None
         provider.send = AsyncMock()
@@ -454,6 +455,7 @@ class ClaimHistorySeedTests(unittest.IsolatedAsyncioTestCase):
     def make_service(self):
         settings = FakeSettings(digest_notification_settings())
         service = NotificationService(settings, state_path=self.state_path)
+        service._part_delay = 0
         provider = service.get_provider("discord")
         assert provider is not None
         provider.send = AsyncMock()

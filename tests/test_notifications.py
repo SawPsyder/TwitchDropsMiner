@@ -273,6 +273,7 @@ class TestNotificationService(unittest.IsolatedAsyncioTestCase):
 
     def make_service(self, settings=None):
         service = NotificationService(settings or FakeSettings(), state_path=self.state_path)
+        service._part_delay = 0
         provider = service.get_provider("discord")
         provider.send = AsyncMock()
         provider.send_digest = AsyncMock()
@@ -408,6 +409,7 @@ class TestDigestQueue(unittest.IsolatedAsyncioTestCase):
     def make_service(self, **overrides):
         settings = FakeSettings(digest_notification_settings(**overrides))
         service = NotificationService(settings, state_path=self.state_path)
+        service._part_delay = 0
         provider = service.get_provider("discord")
         provider.send = AsyncMock()
         provider.send_digest = AsyncMock()
