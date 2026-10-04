@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import tempfile
 import unittest
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
+from src.models.campaign import DropsCampaign
 from src.notifications import NotificationError, NotificationService
 from src.notifications.claims import (
     claim_keys,
@@ -288,4 +290,214 @@ class ClaimDedupeServiceTests(unittest.IsolatedAsyncioTestCase):
         service._settings.notifications["enabled"] = False
         await self.claim(service)
         self.assertEqual(service._state["digest_queue"], [])
+        self.assertNotIn("notified_claims", service._state)
+
+
+def _v111_state() -> dict:
+    """Top-level shape of a v1.11.1 notifications_state.json. No claim history."""
+    return {
+        "seen_unlinked": ["RuneScape: Dragonwilds::a8665ce5-5621-4bcc-aaef-f3771cd2740e"],
+        "unlinked_seeded": True,
+        "seen_campaigns": ["03b87dc1-4caf-4090-a1d5-85e7b77e34ec"],
+        "campaigns_seeded": True,
+        "last_sent": {"discord:drop_received": "2026-09-25T20:25:30.477372+00:00"},
+        "digest_queue": [],
+        "digest_window_start": "2026-10-04T07:14:10.405458+00:00",
+        "digest_next_at": "2026-10-04T13:14:10.405458+00:00",
+        "digest_dropped": 0,
+        "digest_error_groups": {},
+        "digest_error_overflow_types": 0,
+        "digest_error_overflow_count": 0,
+        "digest_flush_pending": False,
+        "digest_seq": 211,
+        "last_digest": {
+            "at": "2026-10-04T07:14:10.798318+00:00",
+            "ok": True,
+            "error": None,
+            "retry_at": None,
+            "skipped": False,
+            "sent_at": "2026-10-04T07:14:10.798318+00:00",
+        },
+    }
+
+
+def _benefit(benefit_id: str, name: str) -> dict:
+    return {
+        "benefit": {
+            "id": benefit_id,
+            "name": name,
+            "distributionType": "DIRECT_ENTITLEMENT",
+            "imageAssetURL": "https://example.test/benefit.png",
+        }
+    }
+
+
+def _inventory_campaign(
+    campaign_id: str,
+    name: str,
+    drop_id: str,
+    benefits: list[tuple[str, str]],
+    *,
+    claimed: bool,
+    claimed_benefits: dict | None = None,
+) -> DropsCampaign:
+    now = datetime.now(UTC)
+    twitch = MagicMock()
+    twitch.claimed_drops.is_completed.return_value = False
+    twitch.owned_badge_titles = set()
+    drop: dict = {
+        "id": drop_id,
+        "name": name,
+        "benefitEdges": [_benefit(benefit_id, benefit_name) for benefit_id, benefit_name in benefits],
+        "startAt": (now - timedelta(hours=2)).isoformat(),
+        "endAt": (now + timedelta(hours=24)).isoformat(),
+        "preconditionDrops": [],
+        "requiredMinutesWatched": 120,
+    }
+    if claimed and claimed_benefits is None:
+        drop["self"] = {
+            "dropInstanceID": f"user#{campaign_id}#{drop_id}",
+            "isClaimed": True,
+            "currentMinutesWatched": 120,
+        }
+    data = {
+        "id": campaign_id,
+        "name": name,
+        "game": {
+            "id": "493057",
+            "name": "PUBG: BATTLEGROUNDS",
+            "displayName": "PUBG: BATTLEGROUNDS",
+        },
+        "self": {"isAccountConnected": True},
+        "accountLinkURL": "https://example.test/link",
+        "startAt": (now - timedelta(hours=2)).isoformat(),
+        "endAt": (now + timedelta(hours=24)).isoformat(),
+        "status": "ACTIVE",
+        "allow": {"channels": [], "isEnabled": True},
+        "timeBasedDrops": [drop],
+    }
+    return DropsCampaign(twitch, data, claimed_benefits or {})
+
+
+class ClaimHistorySeedTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.state_path = Path(self._tmp.name) / "notifications_state.json"
+
+    def write_state(self, payload: dict) -> None:
+        self.state_path.write_text(json.dumps(payload), encoding="utf8")
+
+    def make_service(self):
+        settings = FakeSettings(digest_notification_settings())
+        service = NotificationService(settings, state_path=self.state_path)
+        provider = service.get_provider("discord")
+        assert provider is not None
+        provider.send = AsyncMock()
+        provider.send_digest = AsyncMock()
+        return service, provider
+
+    async def test_v111_inventory_seeds_claimed_drops_and_skips_the_re_report(self):
+        self.write_state(_v111_state())
+        service, provider = self.make_service()
+        self.assertNotIn("notified_claims", service._state)
+
+        claimed = _inventory_campaign(
+            "camp-day2",
+            "PAS2 Finals 2_Day2",
+            "drop-tee",
+            [("tee", "Battle Hazard Logo Tee"), ("spray", "Fried Chicken")],
+            claimed=True,
+        )
+        via_benefits = _inventory_campaign(
+            "camp-benefits",
+            "Older Campaign",
+            "drop-badge",
+            [("badge", "Old Badge")],
+            claimed=False,
+            claimed_benefits={"badge": datetime.now(UTC) - timedelta(minutes=30)},
+        )
+        unclaimed = _inventory_campaign(
+            "camp-fresh",
+            "PAS2 Finals 2_Day3",
+            "drop-fresh",
+            [("fresh", "New Pin")],
+            claimed=False,
+        )
+        self.assertTrue(next(iter(via_benefits.drops)).is_claimed)
+
+        service.seed_claimed_drops([claimed, via_benefits, unclaimed])
+        provider.send.assert_not_awaited()
+        provider.send_digest.assert_not_awaited()
+        self.assertEqual(service._state["digest_queue"], [])
+        self.assertEqual(service._state["digest_seq"], 211)
+        seeded_ids = {entry["k"].split(FIELD)[1] for entry in service._state["notified_claims"]}
+        self.assertEqual(seeded_ids, {"drop-tee", "drop-badge"})
+
+        await service.flush_pending_state()
+        restarted, restarted_provider = self.make_service()
+        self.assertIn("notified_claims", restarted._state)
+        before = list(restarted._state["notified_claims"])
+        restarted.seed_claimed_drops(
+            [
+                claimed,
+                via_benefits,
+                _inventory_campaign(
+                    "camp-later",
+                    "Later",
+                    "drop-later",
+                    [("later", "Later Reward")],
+                    claimed=True,
+                ),
+            ]
+        )
+        self.assertEqual(restarted._state["notified_claims"], before)
+        restarted_provider.send_digest.assert_not_awaited()
+
+        await restarted.notify_drop_received(
+            "PUBG: BATTLEGROUNDS",
+            ["Battle Hazard Logo Tee", "Fried Chicken"],
+            campaign="PAS2 Finals 2_Day2",
+            campaign_id="camp-day2",
+            drop_id="drop-tee",
+            claim_id="user#camp-day2#drop-tee",
+            benefit_ids=["tee", "spray"],
+        )
+        self.assertEqual(restarted._state["digest_queue"], [])
+
+        await restarted.notify_drop_received(
+            "PUBG: BATTLEGROUNDS",
+            ["New Pin"],
+            campaign="PAS2 Finals 2_Day3",
+            campaign_id="camp-fresh",
+            drop_id="drop-fresh",
+            claim_id="user#camp-fresh#drop-fresh",
+            benefit_ids=["fresh"],
+        )
+        self.assertEqual(len(restarted._state["digest_queue"]), 1)
+        self.assertEqual(restarted._state["digest_queue"][0]["data"]["drop_id"], "drop-fresh")
+
+    async def test_present_empty_history_is_not_seeded_again(self):
+        payload = _v111_state()
+        payload["notified_claims"] = []
+        self.write_state(payload)
+        service, provider = self.make_service()
+        claimed = _inventory_campaign(
+            "camp-day2",
+            "PAS2 Finals 2_Day2",
+            "drop-tee",
+            [("tee", "Battle Hazard Logo Tee")],
+            claimed=True,
+        )
+        service.seed_claimed_drops([claimed])
         self.assertEqual(service._state["notified_claims"], [])
+        provider.send_digest.assert_not_awaited()
+        await service.notify_drop_received(
+            "PUBG: BATTLEGROUNDS",
+            ["Battle Hazard Logo Tee"],
+            campaign="PAS2 Finals 2_Day2",
+            campaign_id="camp-day2",
+            drop_id="drop-tee",
+            benefit_ids=["tee"],
+        )
+        self.assertEqual(len(service._state["digest_queue"]), 1)

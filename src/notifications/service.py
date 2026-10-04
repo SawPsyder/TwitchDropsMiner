@@ -105,7 +105,6 @@ def _empty_state() -> dict[str, Any]:
         "digest_flush_pending": False,
         "digest_seq": 0,
         "last_digest": None,
-        "notified_claims": [],
     }
 
 
@@ -131,6 +130,7 @@ def _load_state(path: Path) -> dict[str, Any]:
         except OSError:
             logger.warning("Could not back up corrupt notifications state %s", path)
         return empty
+    claims_present = "notified_claims" in raw
     for key, value in empty.items():
         raw.setdefault(key, value)
     if not isinstance(raw.get("digest_queue"), list):
@@ -162,12 +162,16 @@ def _load_state(path: Path) -> dict[str, Any]:
         raw[key] = _coerce_count(raw.get(key))
     _ensure_queue_seqs(raw)
     _clamp_stored_retry(raw)
-    raw["notified_claims"] = prune_claim_history(
-        coerce_claim_history(raw.get("notified_claims")),
-        datetime.now(UTC),
-        ttl=CLAIM_TTL,
-        limit=CLAIM_HISTORY_MAX,
-    )
+    # A file from before claim history has no key. Leave it absent so the first
+    # inventory can seed drops Twitch already shows as claimed. An empty list
+    # is a finished seed and must stay empty.
+    if claims_present:
+        raw["notified_claims"] = prune_claim_history(
+            coerce_claim_history(raw.get("notified_claims")),
+            datetime.now(UTC),
+            ttl=CLAIM_TTL,
+            limit=CLAIM_HISTORY_MAX,
+        )
     if dropped_bad:
         logger.warning("Dropped invalid items from the notifications digest queue")
     return raw
@@ -1178,6 +1182,57 @@ class NotificationService:
         if changed:
             self._mark_dirty()
         return (not duplicate), history
+
+    def seed_claimed_drops(self, campaigns: Iterable[DropsCampaign]) -> None:
+        """Record drops this inventory already shows as claimed, without notifying.
+
+        Runs only while ``notified_claims`` is absent. A v1.11.1 state file has
+        no such key, so the first inventory after the upgrade fills it from
+        drops that are already claimed (the self edge, claimed benefits, owned
+        badges, or the local badge store — all of those set ``is_claimed``).
+        An empty list is written when nothing is claimed, and that list counts
+        as present: later inventories do not seed again.
+        """
+        if "notified_claims" in self._state:
+            return
+        now = datetime.now(UTC)
+        records: list[dict[str, Any]] = []
+        drop_count = 0
+        for campaign in campaigns:
+            game = campaign.game
+            for drop in campaign.drops:
+                if not drop.is_claimed:
+                    continue
+                built = build_claim_records(
+                    campaign_id=campaign.id,
+                    drop_id=drop.id,
+                    claim_id=drop.claim_id,
+                    benefit_ids=[benefit.id for benefit in drop.benefits],
+                    benefit_names=[benefit.name for benefit in drop.benefits],
+                    game=game.name,
+                    game_id=getattr(game, "id", None),
+                    campaign=campaign.name,
+                    now=now,
+                )
+                if not built:
+                    continue
+                drop_count += 1
+                records.extend(built)
+        seeded = prune_claim_history(
+            list({entry["k"]: entry for entry in records}.values()),
+            now,
+            ttl=CLAIM_TTL,
+            limit=CLAIM_HISTORY_MAX,
+        )
+        with self._state_lock:
+            if "notified_claims" in self._state:
+                return
+            self._state["notified_claims"] = seeded
+        self._mark_dirty()
+        logger.info(
+            "Seeded notification history from %d drop(s) the inventory already shows as claimed",
+            drop_count,
+        )
 
     def _drop_claim_records(self, records: list[dict[str, Any]]) -> None:
         """Forget keys reserved for a claim that was never queued or delivered."""

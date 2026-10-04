@@ -210,6 +210,10 @@ class InventoryService:
             if campaign.can_earn_within(next_hour):
                 switch_triggers.update(campaign.time_triggers)
 
+        # Still before the next await, so a websocket drop-claim cannot announce
+        # a drop this fetch already shows as claimed. A later call is a no-op.
+        self._twitch.notification_service.seed_claimed_drops(campaigns)
+
         # concurrently add the campaigns into the GUI
         # NOTE: this fetches pictures from the CDN, so might be slow without a cache
         status_update(
