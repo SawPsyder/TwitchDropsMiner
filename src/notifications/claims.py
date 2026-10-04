@@ -1,13 +1,12 @@
 """Identity of a drop claim that has already been announced.
 
-A notification is one claim of one drop instance. The key is the campaign id,
-the drop id, and each benefit id. Twitch's usual ``dropInstanceID`` is
-``userId#campaignId#dropId`` (see ``BaseDrop.generate_claim``), so it does not
-name a second grant of the same drop. A claim id in any other shape is a new
-instance and is part of the key, which lets a drop that re-arms under a fresh
-instance id notify again. A repeatable drop that keeps the same campaign, drop,
-benefit, and synthetic instance id cannot be told apart from a second report
-of the first grant, so it stays quiet until the record expires.
+A notification is one claim of one drop. The key is the campaign id, the drop
+id, and each benefit id. Twitch's ``dropInstanceID`` — the inventory
+``self.dropInstanceID`` and the websocket ``drop_instance_id`` — is
+``userId#campaignId#dropId`` (see ``BaseDrop.generate_claim``). That string
+repeats the campaign and the drop, so it is not an extra segment. A claim id
+in any other shape is ignored. Keeping it would let the websocket path and the
+inventory path notify twice for the same claim.
 """
 
 from __future__ import annotations
@@ -31,13 +30,17 @@ def _norm(value: object) -> str:
     return " ".join(_text(value).split()).casefold()
 
 
-def is_synthetic_claim_id(claim_id: str, campaign_id: str, drop_id: str) -> bool:
-    """True when ``claim_id`` is only ``userId#campaignId#dropId``."""
+def is_twitch_claim_id(claim_id: str, campaign_id: str, drop_id: str) -> bool:
+    """True when ``claim_id`` is Twitch's ``userId#campaignId#dropId``."""
     suffix = f"#{campaign_id}#{drop_id}"
     if not claim_id.endswith(suffix):
         return False
     prefix = claim_id[: -len(suffix)]
     return bool(prefix) and "#" not in prefix
+
+
+# The old name. Callers and tests still say "synthetic" for this shape.
+is_synthetic_claim_id = is_twitch_claim_id
 
 
 def claim_keys(
@@ -55,10 +58,19 @@ def claim_keys(
     drop = _text(drop_id)
     if not campaign or not drop:
         return []
+    # Inventory stores ``self.dropInstanceID`` (``drop.py``). The websocket
+    # copies ``drop_instance_id`` onto the drop before ``claim()``
+    # (``message_handlers.py``). When Twitch minted the claim both are
+    # ``userId#campaignId#dropId``, which repeats the campaign and the drop,
+    # so a matching id is not its own segment. Any other id is dropped too
+    # (``is_twitch_claim_id``): appending it would make that websocket report
+    # a different key from the inventory report of the same claim.
     claim = _text(claim_id)
-    instance = ""
-    if claim and not is_synthetic_claim_id(claim, campaign, drop):
-        instance = claim
+    if (claim and not is_twitch_claim_id(claim, campaign, drop)) or is_twitch_claim_id(
+        claim, campaign, drop
+    ):
+        claim = ""
+    instance = claim
     benefits = benefit_ids or [""]
     keys: list[str] = []
     seen: set[str] = set()
@@ -124,6 +136,14 @@ def coerce_claim_history(raw: object) -> list[dict[str, Any]]:
     return clean
 
 
+def _claim_group(key: str) -> str:
+    """Campaign, drop, and instance. Benefit keys of one claim share this."""
+    parts = key.split(_FIELD)
+    if len(parts) >= 4:
+        return _FIELD.join((parts[0], parts[1], parts[3]))
+    return key
+
+
 def prune_claim_history(
     entries: list[dict[str, Any]],
     now: datetime,
@@ -131,19 +151,31 @@ def prune_claim_history(
     ttl: timedelta = CLAIM_TTL,
     limit: int = CLAIM_HISTORY_MAX,
 ) -> list[dict[str, Any]]:
-    """Drop expired records, then the oldest ones past ``limit``. Newest last."""
+    """Drop expired records, then the oldest claims past ``limit``.
+
+    A claim is every benefit key that shares a campaign, drop, and instance.
+    Those rows leave together. The newest claim is kept whole even when it
+    alone is wider than ``limit``. Newest last.
+    """
     if now.tzinfo is None:
         now = now.replace(tzinfo=UTC)
     cutoff = now - ttl
-    kept: list[tuple[datetime, dict[str, Any]]] = []
+    groups: dict[str, list[tuple[datetime, dict[str, Any]]]] = {}
     for entry in entries:
         stamp = _stamp(entry.get("at"))
         if stamp is None or stamp <= cutoff:
             continue
-        kept.append((stamp, entry))
+        group = _claim_group(str(entry.get("k") or ""))
+        groups.setdefault(group, []).append((stamp, entry))
+    ordered = sorted(groups, key=lambda group: min(stamp for stamp, _entry in groups[group]))
+    sizes = {group: len(groups[group]) for group in ordered}
+    total = sum(sizes.values())
+    start = 0
+    while start < len(ordered) - 1 and total > limit:
+        total -= sizes[ordered[start]]
+        start += 1
+    kept = [pair for group in ordered[start:] for pair in groups[group]]
     kept.sort(key=lambda pair: pair[0])
-    if len(kept) > limit:
-        kept = kept[-limit:]
     return [entry for _stamp_value, entry in kept]
 
 

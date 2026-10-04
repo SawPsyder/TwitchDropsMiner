@@ -50,11 +50,16 @@ class ClaimKeyTests(unittest.TestCase):
         self.assertEqual(synthetic, missing)
         self.assertEqual(synthetic, [f"camp{FIELD}drop{FIELD}b1{FIELD}"])
 
-    def test_a_fresh_instance_id_changes_the_key(self):
-        first = claim_keys("camp", "drop", "user#camp#drop", ["b1"])
-        second = claim_keys("camp", "drop", "instance-9", ["b1"])
-        self.assertNotEqual(first, second)
-        self.assertTrue(second[0].endswith(f"{FIELD}instance-9"))
+    def test_a_non_twitch_claim_id_does_not_change_the_key(self):
+        # Inventory's self.dropInstanceID and the websocket's drop_instance_id
+        # are both userId#campaignId#dropId when Twitch minted the claim.
+        # A token in any other shape must not split that key.
+        twitch = claim_keys("camp", "drop", "user#camp#drop", ["b1"])
+        foreign = claim_keys("camp", "drop", "instance-9", ["b1"])
+        missing = claim_keys("camp", "drop", None, ["b1"])
+        self.assertEqual(twitch, foreign)
+        self.assertEqual(twitch, missing)
+        self.assertFalse(foreign[0].endswith(f"{FIELD}instance-9"))
 
     def test_missing_campaign_or_drop_cannot_be_deduped(self):
         self.assertEqual(claim_keys("", "drop", "x", ["b"]), [])
@@ -70,6 +75,32 @@ class ClaimKeyTests(unittest.TestCase):
         newest = _record("newest", NOW - timedelta(hours=1))
         kept = prune_claim_history([old, newest, middle], NOW, ttl=timedelta(days=7), limit=2)
         self.assertEqual([entry["k"] for entry in kept], ["middle", "newest"])
+
+    def test_prune_evicts_every_benefit_of_a_claim_together(self):
+        older = NOW - timedelta(hours=3)
+        newer = NOW - timedelta(hours=1)
+        tee = _record(f"camp{FIELD}drop{FIELD}tee{FIELD}", older, benefit="Tee")
+        spray = _record(
+            f"camp{FIELD}drop{FIELD}spray{FIELD}",
+            older + timedelta(seconds=1),
+            benefit="Spray",
+        )
+        pin = _record(f"camp{FIELD}other{FIELD}pin{FIELD}", newer, benefit="Pin")
+        badge = _record(f"camp2{FIELD}drop2{FIELD}badge{FIELD}", NOW, benefit="Badge")
+        kept = prune_claim_history([spray, tee, badge, pin], NOW, limit=3)
+        self.assertEqual([entry["benefit"] for entry in kept], ["Pin", "Badge"])
+
+    def test_prune_keeps_the_newest_claim_whole_past_the_cap(self):
+        older = NOW - timedelta(hours=2)
+        old = _record(f"c{FIELD}d{FIELD}old{FIELD}", older, benefit="Old")
+        tee = _record(f"c{FIELD}d2{FIELD}tee{FIELD}", NOW, benefit="Tee")
+        spray = _record(
+            f"c{FIELD}d2{FIELD}spray{FIELD}",
+            NOW + timedelta(seconds=1),
+            benefit="Spray",
+        )
+        kept = prune_claim_history([old, spray, tee], NOW, limit=1)
+        self.assertEqual([entry["benefit"] for entry in kept], ["Tee", "Spray"])
 
     def test_coerce_drops_rows_without_a_key_or_a_stamp(self):
         raw = [
@@ -176,7 +207,23 @@ class ClaimDedupeServiceTests(unittest.IsolatedAsyncioTestCase):
         games = [event["data"]["drop_id"] for event in service._state["digest_queue"]]
         self.assertEqual(games, ["d1", "d2", "d3", "d1"])
 
-    async def test_a_new_campaign_or_instance_still_notifies(self):
+    async def test_history_cap_drops_a_multi_benefit_claim_whole(self):
+        service, _provider = self.make_service()
+        with patch("src.notifications.service.CLAIM_HISTORY_MAX", 3):
+            await self.claim(
+                service,
+                benefits=["Tee", "Spray"],
+                benefit_ids=["tee", "spray"],
+                drop_id="d1",
+            )
+            await self.claim(service, benefits=["Pin"], benefit_ids=["pin"], drop_id="d2")
+            await self.claim(service, benefits=["Badge"], benefit_ids=["badge"], drop_id="d3")
+            self.assertEqual(
+                [entry["benefit"] for entry in service._state["notified_claims"]],
+                ["Pin", "Badge"],
+            )
+
+    async def test_a_new_campaign_still_notifies_and_a_foreign_id_does_not(self):
         service, _provider = self.make_service()
         await self.claim(service)
         await self.claim(
@@ -187,7 +234,23 @@ class ClaimDedupeServiceTests(unittest.IsolatedAsyncioTestCase):
             claim_id="user#camp-day3#drop-day3",
         )
         await self.claim(service, claim_id="fresh-instance")
-        self.assertEqual(len(service._state["digest_queue"]), 3)
+        self.assertEqual(len(service._state["digest_queue"]), 2)
+
+    async def test_websocket_and_inventory_reports_dedupe_to_one(self):
+        # Websocket: message_handlers copies drop_instance_id, normally
+        # userId#campaignId#dropId. Inventory: the rebuilt drop's
+        # self.dropInstanceID, the same shape. A UUID-style websocket token
+        # used to get its own key and notify again on the inventory path.
+        service, _provider = self.make_service()
+        await self.claim(service, claim_id="user#camp-day2#drop-day2", channel="live")
+        await self.claim(service, claim_id="user#camp-day2#drop-day2", channel="inventory")
+        await self.claim(
+            service,
+            claim_id="f4c2e1a0-9b7d-4e6a-8c1f-2d3e4f506172",
+            channel="live",
+        )
+        self.assertEqual(len(service._state["digest_queue"]), 1)
+        self.assertEqual(service._state["digest_seq"], 1)
 
     async def test_a_new_benefit_on_the_same_drop_still_notifies(self):
         service, _provider = self.make_service()

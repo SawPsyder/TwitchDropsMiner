@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import os
 import random
+import re
 import tempfile
 import unicodedata
 import unittest
@@ -476,7 +477,7 @@ class DigestV2Tests(unittest.TestCase):
         embeds = payload["embeds"]
         self.assertEqual(
             payload["content"],
-            "24 drops claimed · 14 new campaigns · 1 unlinked game · 64 warnings",
+            "26 drops claimed · 14 new campaigns · 1 unlinked game · 64 warnings",
         )
         self.assertEqual(len(embeds), 8)
         titles = [embed["title"] for embed in embeds]
@@ -597,7 +598,7 @@ class DigestV2Tests(unittest.TestCase):
         payload = screenshot_payload(include_errors=False)
         self.assertEqual(
             payload["content"],
-            "24 drops claimed · 14 new campaigns · 1 unlinked game",
+            "26 drops claimed · 14 new campaigns · 1 unlinked game",
         )
         attention = payload["embeds"][-1]
         self.assertEqual(attention["title"], "⚠️ Needs attention")
@@ -1749,6 +1750,30 @@ class DigestV2ServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("stall alert", service._render(preview=False)["content"])
 
 
+def _claim_total(text: str) -> int:
+    """Sum the claim counts a card or a More games line actually shows."""
+    total = 0
+    for line in text.splitlines():
+        body = line[2:] if line.startswith("✓ ") else line
+        more = re.search(r"(?:^|, )\+(\d+)(?: more)?$", body)
+        if more:
+            total += int(more.group(1))
+            body = body[: more.start()]
+        if line.startswith("✓ ") and body == "":
+            continue
+        # A More games line counts the rewards after the game name.
+        if not line.startswith("✓ ") and " · " in body:
+            body = body.split(" · ", 1)[1]
+        elif not line.startswith("✓ "):
+            continue
+        for part in body.split(", "):
+            if not part:
+                continue
+            times = re.search(r" ×(\d+)$", part)
+            total += int(times.group(1)) if times else 1
+    return total
+
+
 def _window(events: list[dict], **overrides) -> dict:
     payload = {
         "events": events,
@@ -1829,7 +1854,7 @@ class ClaimLineCountTests(unittest.TestCase):
         ]
         payload = _window(events)
         text = payload["embeds"][0]["description"]
-        self.assertEqual(payload["content"], "1 drop claimed")
+        self.assertEqual(payload["content"], "2 drops claimed")
         self.assertEqual(text, "✓ Tee ×2")
 
     def test_a_prior_campaign_labels_a_solo_claim(self):
@@ -1873,5 +1898,128 @@ class ClaimLineCountTests(unittest.TestCase):
         payload = _window(events)
         more = next(embed for embed in payload["embeds"] if embed["title"] == "More games")
         self.assertIn("**PUBG** · Tee · PAS2 Day2, Tee · PAS2 Day3", more["description"])
-        # Six games collapse three identical rewards each, plus two labelled PUBG lines.
+        # Six games × three identical rewards, plus two labelled PUBG lines.
+        self.assertEqual(payload["content"], "20 drops claimed")
+
+    def test_repeated_name_counts_as_n_on_the_header_and_the_card(self):
+        # 8 claims, one name twice. Collapsed lines are 7; the card shows
+        # ×2, three single lines, and +3 more, which adds up to 8.
+        names = ["1x Mailand Crewmember", "1x Mailand Crewmember"]
+        names.extend(f"Reward {index}" for index in range(3, 9))
+        events = [
+            _drop(END - timedelta(minutes=8 - index), "PUBG", 1, [name], campaign="Day2")
+            for index, name in enumerate(names)
+        ]
+        payload = _window(events)
+        text = payload["embeds"][0]["description"]
         self.assertEqual(payload["content"], "8 drops claimed")
+        self.assertIn("✓ 1x Mailand Crewmember ×2", text)
+        self.assertIn("✓ +3 more", text)
+        self.assertEqual(_claim_total(text), 8)
+        self.assertEqual(int(payload["content"].split()[0]), _claim_total(text))
+
+    def test_more_games_overflow_counts_hidden_claims(self):
+        events = []
+        for index in range(6):
+            for offset in (2, 1):
+                events.append(
+                    _drop(
+                        END - timedelta(minutes=30 - index * 3 - offset),
+                        f"Card {index}",
+                        10 + index,
+                        [f"Card {index} {offset}"],
+                    )
+                )
+        events.append(
+            _drop(
+                END - timedelta(hours=5),
+                "Hidden",
+                99,
+                ["Alpha", "Bravo", "Charlie", "Delta", "Delta"],
+            )
+        )
+        payload = _window(events)
+        more = next(embed for embed in payload["embeds"] if embed["title"] == "More games")
+        line = more["description"].splitlines()[0]
+        self.assertIn("**Hidden** · Alpha, Bravo, Charlie, +2", line)
+        self.assertEqual(_claim_total(line), 5)
+        self.assertEqual(payload["content"], "17 drops claimed")
+
+    def test_jan_screenshot_windows_stay_six_and_four(self):
+        # 4 Oct digests, CEST. No reward name repeats inside a window, so the
+        # header matches the lines: 03:14 is five events (PUBG's two rewards
+        # are one claim) and 09:14 is three events.
+        morning = [
+            _drop(
+                datetime(2026, 10, 3, 19, 16, tzinfo=UTC),
+                "PUBG: BATTLEGROUNDS",
+                1,
+                ["Battle Hazard Logo Tee", "Fried Chicken"],
+                campaign="PAS2 Finals",
+            ),
+            _drop(
+                datetime(2026, 10, 3, 20, 46, tzinfo=UTC),
+                "Warframe",
+                2,
+                ["Noggle"],
+                campaign="PMCFQ - GreatBardini",
+            ),
+            _drop(
+                datetime(2026, 10, 3, 21, 10, tzinfo=UTC),
+                "World of Warships",
+                3,
+                ["15.8 CC Mission"],
+                campaign="Worth Their Salt",
+            ),
+            _drop(
+                datetime(2026, 10, 3, 22, 0, tzinfo=UTC),
+                "Black Desert",
+                4,
+                ["1 Hour Reward"],
+                campaign="2026 BDO Drops",
+            ),
+            _drop(
+                datetime(2026, 10, 3, 22, 30, tzinfo=UTC),
+                "Black Desert",
+                4,
+                ["2 Hour Reward"],
+                campaign="2026 BDO Drops",
+            ),
+        ]
+        later = [
+            _drop(
+                datetime(2026, 10, 4, 4, 1, tzinfo=UTC),
+                "PUBG: BATTLEGROUNDS",
+                1,
+                ["Battle Hazard Logo Tee", "Fried Chicken"],
+                campaign="PAS2 Finals 2_Day2",
+            ),
+            _drop(
+                datetime(2026, 10, 4, 5, 0, tzinfo=UTC),
+                "SMITE 2",
+                5,
+                ["Twitch Drop Bundle 1"],
+                campaign="SMITE 2 Drops",
+            ),
+            _drop(
+                datetime(2026, 10, 4, 5, 20, tzinfo=UTC),
+                "SMITE 2",
+                5,
+                ["Twitch Drop Bundle 2"],
+                campaign="SMITE 2 Drops",
+            ),
+        ]
+        first = _window(
+            morning,
+            window_start=datetime(2026, 10, 3, 19, 14, tzinfo=UTC),
+            window_end=datetime(2026, 10, 4, 1, 14, tzinfo=UTC),
+        )
+        second = _window(
+            later,
+            window_start=datetime(2026, 10, 4, 1, 14, tzinfo=UTC),
+            window_end=datetime(2026, 10, 4, 7, 14, tzinfo=UTC),
+        )
+        self.assertEqual(first["content"], "6 drops claimed")
+        self.assertEqual(second["content"], "4 drops claimed")
+        self.assertEqual(sum(_claim_total(embed["description"]) for embed in first["embeds"]), 6)
+        self.assertEqual(sum(_claim_total(embed["description"]) for embed in second["embeds"]), 4)

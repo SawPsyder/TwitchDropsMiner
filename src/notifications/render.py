@@ -515,8 +515,10 @@ class _Game:
 
 
 def _claim_line_total(games: dict[str, _Game]) -> int:
-    """Reward lines these claims would show, before a card hides the tail."""
-    return sum(len(_collapsed_rewards(game.claims)) for game in games.values())
+    """Claims these cards account for. A ×N line counts as N, including +N more."""
+    return sum(
+        sum(count for _name, count in _collapsed_rewards(game.claims)) for game in games.values()
+    )
 
 
 def _normal_game_name(name: object) -> str:
@@ -1299,9 +1301,9 @@ def render_digest(
     after the event was queued still hides that block and its content-line count.
     `events` are serialized NotificationEvent dicts. `error_groups` are the
     aggregated WARNING/ERROR records (`level`, `count`, `latest`, `last_ts`).
-    Counts are the real totals, including lines later trimmed. The drop total
-    counts reward lines (one per distinct benefit; the same name from two
-    campaigns counts twice), which is the unit on the card and in More games.
+    Counts are the real totals, including claims later trimmed. The drop total
+    sums the same counts the cards show: a ×N line counts as N, and +N more
+    (on a card or in More games) is the claims hidden behind it.
     """
     # The footer names the period. The embed timestamp is the end of the window.
     window_end = _aware(window_end)
