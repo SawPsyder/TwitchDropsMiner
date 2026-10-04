@@ -275,6 +275,26 @@ class TestClaimedDropsPersistenceIntegration(unittest.TestCase):
         recorded_id = drop._twitch.claimed_drops.mark_completed.call_args.args[0]
         self.assertEqual(recorded_id, drop.id)
 
+    def test_claim_notifies_once_and_passes_ids(self):
+        drop = _make_drop(["BADGE"], required=10, claim_id="user#campaign-1#drop-1")
+        drop.real_current_minutes = 10
+        self.assertTrue(asyncio.run(drop.claim()))
+        self.assertTrue(asyncio.run(drop.claim()))
+        notify = drop._twitch.notification_service.notify_drop_received
+        self.assertEqual(notify.await_count, 1)
+        self.assertEqual(notify.await_args.kwargs["campaign_id"], "campaign-1")
+        self.assertEqual(notify.await_args.kwargs["drop_id"], drop.id)
+        self.assertEqual(notify.await_args.kwargs["claim_id"], "user#campaign-1#drop-1")
+        self.assertEqual(notify.await_args.kwargs["benefit_ids"], ["b0"])
+
+    def test_already_claimed_object_does_not_notify_again(self):
+        drop = _make_drop(["BADGE"], required=10)
+        drop.real_current_minutes = 10
+        drop.is_claimed = True
+        self.assertTrue(asyncio.run(drop.claim()))
+        drop._twitch.notification_service.notify_drop_received.assert_not_awaited()
+        drop._twitch.print.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()
