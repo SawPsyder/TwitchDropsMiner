@@ -13,7 +13,7 @@ from yarl import URL
 
 from src.config.constants import CALL, ONLINE_DELAY, GQLOperation, GQLQuery, JsonType, URLType
 from src.config.operations import GQL_OPERATIONS
-from src.exceptions import MinerException, RequestException
+from src.exceptions import GQLException, MinerException, RequestException
 from src.models.game import Game
 from src.utils.json_utils import isonow, json_minify
 
@@ -74,7 +74,7 @@ class Stream:
         return {"data": (b64encode(json_minify(self._watch_payload).encode("utf8"))).decode("utf8")}
 
     # NOTE: This is currently unused - Twitch silently stopped counting watch time sent
-    # through the sendSpadeEvents GQL mutation (~July 2026); the Spade POST endpoint works.
+    # through the sendSpadeEvents GQL mutation (~July 2026).
     @property
     def _gql_payload(self) -> GQLQuery:
         return GQLQuery(
@@ -454,8 +454,7 @@ class Channel:
         if needs_display:
             self.display()
 
-    # NOTE: This is currently unused.
-    async def _send_watch_playlist(self) -> bool:
+    async def send_watch(self) -> bool:
         """
         This performs a HEAD request on the stream's current playlist,
         to simulate watching the stream.
@@ -463,20 +462,30 @@ class Channel:
         """
         if self._stream is None:
             return False
-        # get the stream url
-        stream_url = await self._stream.get_stream_url()
+        # get the stream url. A GQL failure or a null playback token must not kill the watch loop.
+        try:
+            stream_url = await self._stream.get_stream_url()
+        except (GQLException, TypeError, aiohttp.ClientError, TimeoutError) as exc:
+            logger.warning("Stream URL fetch failed for %s: %s", self.name, exc)
+            return False
         if stream_url is None:
             return False
         # fetch a list of chunks available to download for the stream
         # NOTE: the CDN is configured to forcibly disconnect shortly after serving the list,
         # if we don't do it yourselves. Lets help it by actually doing it ourselves instead.
-        async with self._twitch.request(
-            "GET", stream_url, headers={"Connection": "close"}
-        ) as chunks_response:
-            if chunks_response.status >= 400:
-                # if the stream goes OFFLINE, trying to get a list of chunks returns a 404
-                return False
-            available_chunks: str = await chunks_response.text()
+        try:
+            async with self._twitch.request(
+                "GET", stream_url, headers={"Connection": "close"}
+            ) as chunks_response:
+                if chunks_response.status >= 400:
+                    # 404 when offline, 403 when the cached playback URL has expired.
+                    # Drop it so the next interval fetches a new PlaybackAccessToken.
+                    self._stream._stream_url = None
+                    return False
+                available_chunks: str = await chunks_response.text()
+        except (aiohttp.ClientError, TimeoutError):
+            self._stream._stream_url = None
+            return False
         # the response may contain some invalid JSON with duplicate double quotes
         # in the value strings: we need to get rid of them by removing the "url" key entirely
         # if no JSON can be found within the response, this is a NOOP
@@ -494,20 +503,23 @@ class Channel:
             if "error" in available_json:
                 logger.error('Send watch error: "%s"', available_json["error"])
             return False
-        # the list contains ~10-13 chunks of the stream at 2s intervals,
-        # pick the last chunk URL available. Ensure it's not the end-of-stream tag,
-        # otherwise use the 2nd to last line.
-        chunks_list: list[str] = available_chunks.strip().split("\n")
-        selected_chunk: str = chunks_list[-1]
-        if selected_chunk == "#EXT-X-ENDLIST":
-            selected_chunk = chunks_list[-2]
-        stream_chunk_url: URLType = URLType(selected_chunk)
-        # sending a HEAD request is enough to advance the drops,
-        # without downloading the actual stream data
-        async with self._twitch.request("HEAD", stream_chunk_url) as head_response:
-            return head_response.status == 200
+        # the list contains ~15 chunks of the stream at ~2s intervals
+        chunks_list: list[URLType] = [
+            URLType(chunk)
+            for chunk in available_chunks.strip().split("\n")
+            if chunk.startswith("http")
+        ]
+        for stream_chunk_url in chunks_list:
+            # sending a HEAD request is enough to advance the drops,
+            # without downloading the actual stream data
+            async with self._twitch.request("HEAD", stream_chunk_url) as head_response:
+                if head_response.status != 200:
+                    return False
+        return True
 
-    async def send_watch(self) -> bool:
+    # NOTE: This is currently unused. Twitch stopped crediting minute-watched POSTs
+    # to the Spade/beacon endpoint (~October 2026); send_watch HEADs playlist chunks.
+    async def _send_watch_spade(self) -> bool:
         """
         Send a "minute-watched" event by POSTing it to the Spade tracking endpoint.
 

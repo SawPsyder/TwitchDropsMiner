@@ -17,10 +17,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Project Overview
 
 Twitch Drops Miner (TDM) automatically mines timed Twitch drops without downloading stream video/audio.
-It simulates "watching" via periodic POSTs of minute-watched events to the Spade tracking endpoint
-(beacon.twitch.tv preferred - spade.twitch.tv is ad-block DNS listed) and tracks progress over a
-websocket connection. Python 3.12+, fully async (asyncio), with a FastAPI + Socket.IO web GUI (no
-tkinter/desktop GUI - that was removed in favor of a browser-based interface).
+It simulates "watching" by HEAD-requesting the stream playlist's HLS chunk URLs (about every 20s)
+and tracks progress over a websocket connection. Python 3.12+, fully async (asyncio), with a
+FastAPI + Socket.IO web GUI (no tkinter/desktop GUI - that was removed in favor of a browser-based
+interface).
 
 ## Development Commands
 
@@ -106,7 +106,8 @@ Persisted operations live in `src/config/operations.py` as `GQL_OPERATIONS` (Inv
 CampaignDetails, GameDirectory, GetStreamInfo, CurrentDrop, ClaimDrop, AvailableDrops,
 NotificationsDelete). Raw/non-persisted payloads use `GQLQuery` directly instead (the
 `sendSpadeEvents` watch-minute mutation is unused since ~July 2026 - Twitch stopped counting it;
-watch events are POSTed to the Spade endpoint instead).
+the Spade/beacon minute-watched POST stopped being credited ~October 2026, so watch progress is
+advanced by HEADing the stream playlist's chunk URLs instead).
 
 ### Library sync (`library_sync/`)
 
