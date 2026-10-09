@@ -13,7 +13,7 @@ from yarl import URL
 
 from src.config.constants import CALL, ONLINE_DELAY, GQLOperation, GQLQuery, JsonType, URLType
 from src.config.operations import GQL_OPERATIONS
-from src.exceptions import MinerException, RequestException
+from src.exceptions import GQLException, MinerException, RequestException
 from src.models.game import Game
 from src.utils.json_utils import isonow, json_minify
 
@@ -462,20 +462,30 @@ class Channel:
         """
         if self._stream is None:
             return False
-        # get the stream url
-        stream_url = await self._stream.get_stream_url()
+        # get the stream url. A GQL failure or a null playback token must not kill the watch loop.
+        try:
+            stream_url = await self._stream.get_stream_url()
+        except (GQLException, TypeError, aiohttp.ClientError, TimeoutError) as exc:
+            logger.warning("Stream URL fetch failed for %s: %s", self.name, exc)
+            return False
         if stream_url is None:
             return False
         # fetch a list of chunks available to download for the stream
         # NOTE: the CDN is configured to forcibly disconnect shortly after serving the list,
         # if we don't do it yourselves. Lets help it by actually doing it ourselves instead.
-        async with self._twitch.request(
-            "GET", stream_url, headers={"Connection": "close"}
-        ) as chunks_response:
-            if chunks_response.status >= 400:
-                # if the stream goes OFFLINE, trying to get a list of chunks returns a 404
-                return False
-            available_chunks: str = await chunks_response.text()
+        try:
+            async with self._twitch.request(
+                "GET", stream_url, headers={"Connection": "close"}
+            ) as chunks_response:
+                if chunks_response.status >= 400:
+                    # 404 when offline, 403 when the cached playback URL has expired.
+                    # Drop it so the next interval fetches a new PlaybackAccessToken.
+                    self._stream._stream_url = None
+                    return False
+                available_chunks: str = await chunks_response.text()
+        except (aiohttp.ClientError, TimeoutError):
+            self._stream._stream_url = None
+            return False
         # the response may contain some invalid JSON with duplicate double quotes
         # in the value strings: we need to get rid of them by removing the "url" key entirely
         # if no JSON can be found within the response, this is a NOOP

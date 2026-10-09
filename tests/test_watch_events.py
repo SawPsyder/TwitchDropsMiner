@@ -4,8 +4,10 @@ import json
 import unittest
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import aiohttp
+
 from src.config.constants import WATCH_INTERVAL
-from src.exceptions import RequestException
+from src.exceptions import GQLException, RequestException
 from src.models.channel import Channel, Stream
 from src.services.watch_service import WatchService
 
@@ -226,6 +228,53 @@ class TestPlaylistWatch(unittest.IsolatedAsyncioTestCase):
                 self.assertFalse(result)
                 self.assertEqual(head_urls, [])
                 self.assertIn('Send watch error: "expired"', "\n".join(logs.output))
+
+    async def test_send_watch_returns_false_when_stream_url_raises_gql(self):
+        _twitch, channel = _channel_with_stream()
+        assert channel._stream is not None
+        channel._stream.get_stream_url = AsyncMock(side_effect=GQLException("playback token failed"))
+
+        with self.assertLogs("TwitchDrops", level="WARNING") as logs:
+            result = await channel.send_watch()
+
+        self.assertFalse(result)
+        self.assertIn("Stream URL fetch failed", "\n".join(logs.output))
+
+    async def test_send_watch_returns_false_when_playback_token_is_null(self):
+        twitch, channel = _channel_with_stream()
+        assert channel._stream is not None
+        self.assertIsNone(channel._stream._stream_url)
+        twitch.gql_request = AsyncMock(return_value={"data": {"streamPlaybackAccessToken": None}})
+
+        with self.assertLogs("TwitchDrops", level="WARNING") as logs:
+            result = await channel.send_watch()
+
+        self.assertFalse(result)
+        logged = "\n".join(logs.output)
+        self.assertIn("Stream URL fetch failed", logged)
+        self.assertIn("NoneType", logged)
+        twitch.request.assert_not_called()
+
+    async def test_failed_playlist_get_drops_cached_stream_url(self):
+        cases = (
+            ("status", 403, None),
+            ("error", None, aiohttp.ClientConnectionError()),
+        )
+        for label, status, error in cases:
+            with self.subTest(label=label):
+                twitch, channel = _channel_with_stream()
+                assert channel._stream is not None
+                channel._stream._stream_url = STREAM_PLAYLIST_URL
+                if error is not None:
+                    twitch.request = MagicMock(side_effect=error)
+                else:
+                    request, head_urls, _methods = self._route(status or 0, "", [])
+                    twitch.request = MagicMock(side_effect=request)
+
+                self.assertFalse(await channel.send_watch())
+                self.assertIsNone(channel._stream._stream_url)
+                if error is None:
+                    self.assertEqual(head_urls, [])
 
 
 class TestWatchLoopTiming(unittest.IsolatedAsyncioTestCase):
