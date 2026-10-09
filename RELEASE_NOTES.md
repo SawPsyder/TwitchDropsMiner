@@ -1,3 +1,22 @@
+# Release Notes - v1.11.4
+
+An urgent fix: drops are being mined again. Since 2026-10-07 Twitch no longer credits the
+minute-watched event the miner used to send, so drop progress silently stopped moving.
+
+### 🐛 Bug Fixes
+- **Mining via playlist HEAD requests**: watching is now simulated by sending HEAD requests
+  for the stream playlist's video chunks, which Twitch credits again. The watch interval is
+  20 seconds, with a ~15-second wait after each send.
+- **Watch loop stays alive**: a failed stream URL or playback token fetch logs a warning
+  and is retried on the next interval instead of stopping the loop. An expired playlist URL
+  is refreshed automatically.
+
+### 🙏 Credit
+Ported from upstream [DevilXD/TwitchDropsMiner@f693b0c](https://github.com/DevilXD/TwitchDropsMiner/commit/f693b0ca41301ac2282f3978713479efebe0490e)
+("Change the mining method to playlist HEAD requests"); see
+[#1183](https://github.com/DevilXD/TwitchDropsMiner/issues/1183) and
+[#1184](https://github.com/DevilXD/TwitchDropsMiner/issues/1184).
+
 # Release Notes - v1.11.3
 
 Every game in the Discord digest now gets its own card. The "More games" catch-all is gone.
