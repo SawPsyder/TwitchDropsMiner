@@ -74,7 +74,7 @@ class Stream:
         return {"data": (b64encode(json_minify(self._watch_payload).encode("utf8"))).decode("utf8")}
 
     # NOTE: This is currently unused - Twitch silently stopped counting watch time sent
-    # through the sendSpadeEvents GQL mutation (~July 2026); the Spade POST endpoint works.
+    # through the sendSpadeEvents GQL mutation (~July 2026).
     @property
     def _gql_payload(self) -> GQLQuery:
         return GQLQuery(
@@ -454,8 +454,7 @@ class Channel:
         if needs_display:
             self.display()
 
-    # NOTE: This is currently unused.
-    async def _send_watch_playlist(self) -> bool:
+    async def send_watch(self) -> bool:
         """
         This performs a HEAD request on the stream's current playlist,
         to simulate watching the stream.
@@ -494,20 +493,23 @@ class Channel:
             if "error" in available_json:
                 logger.error('Send watch error: "%s"', available_json["error"])
             return False
-        # the list contains ~10-13 chunks of the stream at 2s intervals,
-        # pick the last chunk URL available. Ensure it's not the end-of-stream tag,
-        # otherwise use the 2nd to last line.
-        chunks_list: list[str] = available_chunks.strip().split("\n")
-        selected_chunk: str = chunks_list[-1]
-        if selected_chunk == "#EXT-X-ENDLIST":
-            selected_chunk = chunks_list[-2]
-        stream_chunk_url: URLType = URLType(selected_chunk)
-        # sending a HEAD request is enough to advance the drops,
-        # without downloading the actual stream data
-        async with self._twitch.request("HEAD", stream_chunk_url) as head_response:
-            return head_response.status == 200
+        # the list contains ~15 chunks of the stream at ~2s intervals
+        chunks_list: list[URLType] = [
+            URLType(chunk)
+            for chunk in available_chunks.strip().split("\n")
+            if chunk.startswith("http")
+        ]
+        for stream_chunk_url in chunks_list:
+            # sending a HEAD request is enough to advance the drops,
+            # without downloading the actual stream data
+            async with self._twitch.request("HEAD", stream_chunk_url) as head_response:
+                if head_response.status != 200:
+                    return False
+        return True
 
-    async def send_watch(self) -> bool:
+    # NOTE: This is currently unused. Twitch stopped crediting minute-watched POSTs
+    # to the Spade/beacon endpoint (~October 2026); send_watch HEADs playlist chunks.
+    async def _send_watch_spade(self) -> bool:
         """
         Send a "minute-watched" event by POSTing it to the Spade tracking endpoint.
 

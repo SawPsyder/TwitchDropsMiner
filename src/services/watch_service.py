@@ -174,7 +174,7 @@ class WatchService:
         This loop:
         1. Waits for a channel to watch
         2. Sends watch payload to the channel
-        3. Waits ~20 seconds for websocket progress update
+        3. Waits ~15 seconds for websocket progress update
         4. If no update received, queries drop progress via GQL or estimates it
         5. Sleeps until next watch interval (~20 seconds)
         6. Repeats
@@ -193,14 +193,14 @@ class WatchService:
                 continue
 
             # logger.log(CALL, f"Sending watch payload to: {channel.name}")
-            succeeded: bool = await channel.send_watch()
             last_sent: float = time()
+            succeeded: bool = await channel.send_watch()
 
             if not succeeded:
                 logger.log(CALL, f"Watch requested failed for channel: {channel.name}")
 
-            # wait ~20 seconds for a progress update
-            await asyncio.sleep(20)
+            # wait ~15 seconds for a progress update
+            await asyncio.sleep(15 - min(time() - last_sent, 15))
 
             if self._twitch.gui.progress.minute_almost_done():
                 # If the previous update was more than ~60s ago, and the progress tracker
